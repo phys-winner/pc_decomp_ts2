@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Ruota</string>
+  <string name="place">Posiziona</string>
+  <string name="cancel">Annulla</string>
+  <string name="loading">Caricamento di The Sims 2…</string>
+  <string name="scale_busy">Il gioco è occupato. La scala non è cambiata; selezionala di nuovo.</string>
+  <string name="interface_settings">Interfaccia di gioco</string>
+  <string name="close">Chiudi</string>
+  <string name="field_too_long">Questo campo supera 128 caratteri. Modificalo con i comandi originali del gioco.</string>
+  <string name="edit_text">Testo di gioco</string>
+  <string name="done">Fine</string>
+  <string name="invalid_text">Testo troppo lungo o carattere non valido</string>
+  <string name="field_changed">Il campo è cambiato. Copia la bozza prima di chiudere e riaprire il campo.</string>
+  <string name="text_cancelled">Inserimento annullato prima dell\'applicazione. Copia la bozza prima di chiudere l\'editor.</string>
+  <string name="text_busy">Il gioco è occupato. Il testo resta nell\'editor.</string>
+  <string name="text_unknown">Risultato non confermato. Controlla il campo nel gioco; nessun nuovo tentativo automatico.</string>
+  <string name="fill_armed">Riempimento pronto. Rilascia per applicare; un secondo dito o Indietro annulla.</string>
+  <string name="fill_rejected">Riempimento non applicato. Scegli un pavimento o una carta da parati e ripeti il gesto.</string>
+  <string name="fill_cancelled">Riempimento annullato prima dell\'esecuzione.</string>
+  <string name="fill_busy">Il gioco è occupato. Il riempimento non è iniziato.</string>
+  <string name="fill_unknown">Risultato del riempimento non confermato. Controlla l\'area; nessun nuovo tentativo automatico.</string>
+  <string name="rotate_rejected">Rotazione non applicata. Seleziona un oggetto e mantienine la posizione.</string>
+  <string name="rotate_cancelled">Rotazione annullata prima dell\'esecuzione.</string>
+  <string name="rotate_busy">Il gioco è occupato. La rotazione non è iniziata.</string>
+  <string name="rotate_unknown">Risultato della rotazione non confermato. Controlla l\'oggetto; nessun nuovo tentativo automatico.</string>
+  <string name="wait_command">Attendi il completamento del comando.</string>
+  <string name="fill_disarmed">Riempimento preparato annullato.</string>
+  <string name="place_hint">Scegli la posizione dell\'oggetto, poi premi Posiziona.</string>
+  <string name="choose_tool">Seleziona uno strumento supportato nell\'interfaccia di gioco.</string>
+  <string name="fill_changed">Riempimento preparato annullato: lo strumento o la finestra è cambiato.</string>
+  <string name="gestures_help">Città e lotti: scorri per spostare la visuale, pizzica per lo zoom e ruota due dita per girare. Scorri gli elenchi. Scegli la posizione di un oggetto, poi Ruota, Posiziona o Annulla. Tieni premuta l\'icona selezionata nel catalogo per la descrizione; trascinala sul lotto per l\'anteprima. Tieni ferma la posizione con un dito e ruota il secondo per girare l\'oggetto. Un breve tocco simultaneo con due dita annulla l\'oggetto o qualsiasi strumento di costruzione, inclusi i muri. Muovere due dita controlla la visuale; poi scegli di nuovo la posizione. Pavimenti/carta da parati: tieni premuto e rilascia per riempire un\'area. All\'aperto, il pavimento può coprire l\'area esterna del lotto. Un secondo dito o Indietro annulla la preparazione. La costruzione si applica al rilascio; un\'interruzione può lasciare un risultato parziale. Tieni premuto un comando per il clic destro, ad esempio per bloccare un desiderio. Scorri con due dita in verticale per inclinare la visuale. Scala interfaccia nelle opzioni grafiche. Select mostra i comandi del controller. L\'ingrandimento effettivo dell\'interfaccia viene limitato quando serve per far rientrare le finestre nello schermo.</string>
+  <string name="selected_object">%1$s l\'oggetto selezionato</string>
+  <string name="scale_status">Scala interfaccia scelta: %1$d%% (impostazione del gioco: %2$d%%)</string>
+  <string name="scale_value">Scala interfaccia: %1$d%%</string>
+  <string name="scale_pending">La modifica a %1$d%% non è ancora confermata. Scala applicata: %2$d%%.</string>
+  <string name="image_mismatch">File di gioco mancanti o non supportati. Ripristina Sims2EP9.exe e ijl15.dll di Legacy Collection 2025.</string>
+  <string name="gamepad_help">Stick sinistro: puntatore; A: seleziona, poi posiziona; B: annulla/Indietro; X: clic destro; Y: pausa. Stick destro: visuale; premuto: inclinazione. Grilletti: zoom; dorsali: ruota visuale o oggetto. Croce: scorri l\'elenco sotto il puntatore. Start: interfaccia; Select: guida. Stick sinistro premuto: puntatore preciso.</string>
+  <string name="upscale_fallback">FSR 3 non disponibile (codice %1$d). Uso di FSR 1.</string>
+  <string name="ui_swipe_controls">Controlli interfaccia con scorrimento</string>
+  <string name="time_controls">Controllo del tempo</string>
+  <string name="time_swipe_hint">Scorri sopra l’orologio o i pulsanti della velocità: a destra per accelerare, a sinistra per rallentare fino alla pausa. La scala al centro mostra la velocità scelta.</string>
+</resources>

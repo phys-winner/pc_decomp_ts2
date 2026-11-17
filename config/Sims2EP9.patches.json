@@ -1,0 +1,18 @@
+[
+  {"va": "0xA0B6F4D5", "old": "00050000", "new": "20030000", "why": "Display mode check: minimum width 1280 -> 800. The port's UI scale divides the screen (2780x1264 at 200% is 1390x632); the original game ran from 800x600, and its 800x600 UI layouts are still in ui.package."},
+  {"va": "0xA0B6F4E4", "old": "d0020000", "new": "58020000", "why": "Display mode check: minimum height 720 -> 600."},
+  {"va": "0xA0B6F513", "old": "00050000", "new": "20030000", "why": "Monitor-size fallback: minimum width 1280 -> 800."},
+  {"va": "0xA0B6F51F", "old": "d0020000", "new": "58020000", "why": "Monitor-size fallback: minimum height 720 -> 600."},
+  {"va": "0xA0B6EEDD", "old": "00050000", "new": "20030000", "why": "IsValidDisplayMode (0xA0B6EE60): minimum width 1280 -> 800, so the UI-scaled mode is in the list the game picks from."},
+  {"va": "0xA0B6EEEC", "old": "d0020000", "new": "58020000", "why": "IsValidDisplayMode: minimum height 720 -> 600."},
+  {"va": "0xA0C3FC86", "old": "d0020000", "new": "58020000", "why": "The main window's minimum size (0xA0C3FBF2, vtable +0x4C): height 720 -> 600."},
+  {"va": "0xA0C3FC8B", "old": "00050000", "new": "20030000", "why": "The main window's minimum size: width 1280 -> 800."},
+  {"va": "0xa064b03b", "old": "a1", "new": "b1", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA1 is 0xB1 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064b05b", "old": "a2", "new": "b2", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA2 is 0xB2 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064cd50", "old": "a2", "new": "b2", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA2 is 0xB2 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064cd5d", "old": "a1", "new": "b1", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA1 is 0xB1 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064cdcc", "old": "a1", "new": "b1", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA1 is 0xB1 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064cddd", "old": "a2", "new": "b2", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA2 is 0xB2 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064d2ba", "old": "a1", "new": "b1", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA1 is 0xB1 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."},
+  {"va": "0xa064d2c6", "old": "a2", "new": "b2", "why": "Graphics/Performance Options controller: the Object Hiding button 0xA2 is 0xB2 in the port's panel (tools/build_overlay.py), so the panel's radio bindings, which run from ID 0xA0 up, reach the port's groups."}
+]

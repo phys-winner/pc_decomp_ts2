@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Forgatás</string>
+  <string name="place">Elhelyezés</string>
+  <string name="cancel">Mégse</string>
+  <string name="loading">A The Sims 2 betöltése…</string>
+  <string name="scale_busy">A játék foglalt. A méret nem változott; válaszd ki újra.</string>
+  <string name="interface_settings">Játékfelület</string>
+  <string name="close">Bezárás</string>
+  <string name="field_too_long">Ez a mező több mint 128 karaktert tartalmaz. A játék eredeti vezérlőivel szerkeszd.</string>
+  <string name="edit_text">Játékszöveg</string>
+  <string name="done">Kész</string>
+  <string name="invalid_text">Túl hosszú szöveg vagy érvénytelen karakter</string>
+  <string name="field_changed">A mező megváltozott. Másold ki a piszkozatot a mező bezárása és újbóli megnyitása előtt.</string>
+  <string name="text_cancelled">A bevitel alkalmazás előtt megszakadt. Másold ki a piszkozatot a szerkesztő bezárása előtt.</string>
+  <string name="text_busy">A játék foglalt. A szöveg a szerkesztőben marad.</string>
+  <string name="text_unknown">Az eredmény nincs megerősítve. Ellenőrizd a mezőt a játékban; nincs automatikus újrapróbálás.</string>
+  <string name="fill_armed">A kitöltés kész. Engedd fel az alkalmazáshoz; második ujjal vagy a Vissza gombbal megszakítható.</string>
+  <string name="fill_rejected">A kitöltés nem történt meg. Válassz padlót vagy tapétát, és ismételd meg a mozdulatot.</string>
+  <string name="fill_cancelled">A kitöltés végrehajtás előtt megszakadt.</string>
+  <string name="fill_busy">A játék foglalt. A kitöltés nem indult el.</string>
+  <string name="fill_unknown">A kitöltés eredménye nincs megerősítve. Ellenőrizd a területet; nincs automatikus újrapróbálás.</string>
+  <string name="rotate_rejected">A forgatás nem történt meg. Válassz tárgyat, és tartsd a helyén.</string>
+  <string name="rotate_cancelled">A forgatás végrehajtás előtt megszakadt.</string>
+  <string name="rotate_busy">A játék foglalt. A forgatás nem indult el.</string>
+  <string name="rotate_unknown">A forgatás eredménye nincs megerősítve. Ellenőrizd a tárgyat; nincs automatikus újrapróbálás.</string>
+  <string name="wait_command">Várd meg a parancs befejezését.</string>
+  <string name="fill_disarmed">Az előkészített kitöltés megszakítva.</string>
+  <string name="place_hint">Válaszd ki a tárgy helyét, majd nyomd meg az Elhelyezés gombot.</string>
+  <string name="choose_tool">Válassz támogatott eszközt a játék felületén.</string>
+  <string name="fill_changed">Az előkészített kitöltés megszakadt: az eszköz vagy az ablak megváltozott.</string>
+  <string name="gestures_help">Város és telkek: húzással mozgasd a kamerát, csippentéssel nagyíts, két ujj elforgatásával forgass. A listákat húzással görgesd. Válaszd ki a tárgy helyét, majd Forgatás, Elhelyezés vagy Mégse. A kijelölt katalógusikon nyomva tartása leírást mutat; húzd a telekre az előnézethez. Egy ujjal tartsd a helyét, a másikkal forgasd a tárgyat. Két ujj rövid, egyidejű koppintása megszakítja a tárgy vagy bármely építőeszköz, köztük a falak használatát. Két ujj mozgatása a kamerát vezérli; utána válaszd ki újra a helyet. Padló/tapéta: tartsd nyomva, majd engedd fel a terület kitöltéséhez. Kint a padló a telek kültéri részét is kitöltheti. Második ujj vagy Vissza megszakítja az előkészítést. Az építés felengedéskor történik; megszakítás után részleges eredmény maradhat. A vezérlőelem nyomva tartása jobb kattintás, például egy vágy rögzítése. Két ujj együttes függőleges húzása dönti a kamerát. A felület mérete a grafikai beállításokban van. Select: a kontroller súgója. A felület tényleges nagyítása szükség esetén korlátozott, hogy az ablakok elférjenek a képernyőn.</string>
+  <string name="selected_object">Kijelölt tárgy: %1$s</string>
+  <string name="scale_status">Választott felületméret: %1$d%% (játékbeállítás: %2$d%%)</string>
+  <string name="scale_value">Felület mérete: %1$d%%</string>
+  <string name="scale_pending">A %1$d%% értékre váltás még nincs megerősítve. Alkalmazva: %2$d%%.</string>
+  <string name="image_mismatch">A játékfájlok hiányoznak vagy nem támogatottak. Állítsd vissza a Legacy Collection 2025 Sims2EP9.exe és ijl15.dll fájljait.</string>
+  <string name="gamepad_help">Bal kar: mutató; A: kijelölés, majd elhelyezés; B: mégse/Vissza; X: jobb kattintás; Y: szünet. Jobb kar: kamera; lenyomva: döntés. Ravaszok: nagyítás; vállgombok: kamera vagy tárgy forgatása. Iránygombok: lista görgetése a mutatónál. Start: felület; Select: súgó. Bal kar lenyomva: pontos mutató.</string>
+  <string name="upscale_fallback">Az FSR 3 nem érhető el (kód: %1$d). FSR 1 használata.</string>
+  <string name="ui_swipe_controls">Felület vezérlése csúsztatással</string>
+  <string name="time_controls">Idővezérlés</string>
+  <string name="time_swipe_hint">Húzd az ujjad az órán vagy a sebességgombokon: jobbra a gyorsításhoz, balra a lassításhoz és szüneteltetéshez. A középső skála mutatja a kiválasztott sebességet.</string>
+</resources>

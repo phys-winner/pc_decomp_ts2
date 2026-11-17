@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Drej</string>
+  <string name="place">Placér</string>
+  <string name="cancel">Annuller</string>
+  <string name="loading">Indlæser The Sims 2…</string>
+  <string name="scale_busy">Spillet er optaget. Skaleringen blev ikke ændret; vælg den igen.</string>
+  <string name="interface_settings">Spillets brugerflade</string>
+  <string name="close">Luk</string>
+  <string name="field_too_long">Feltet indeholder mere end 128 tegn. Rediger det med spillets oprindelige kontroller.</string>
+  <string name="edit_text">Spiltekst</string>
+  <string name="done">Færdig</string>
+  <string name="invalid_text">Teksten er for lang eller indeholder et ugyldigt tegn</string>
+  <string name="field_changed">Feltet er ændret. Kopiér kladden, før du lukker og åbner feltet igen.</string>
+  <string name="text_cancelled">Indtastningen blev annulleret før anvendelse. Kopiér kladden, før du lukker editoren.</string>
+  <string name="text_busy">Spillet er optaget. Teksten bliver i editoren.</string>
+  <string name="text_unknown">Resultatet er ikke bekræftet. Kontrollér feltet i spillet; der forsøges ikke automatisk igen.</string>
+  <string name="fill_armed">Udfyldning klar. Slip for at anvende; en anden finger eller Tilbage annullerer.</string>
+  <string name="fill_rejected">Udfyldningen blev ikke anvendt. Vælg gulv eller tapet, og gentag bevægelsen.</string>
+  <string name="fill_cancelled">Udfyldningen blev annulleret før udførelse.</string>
+  <string name="fill_busy">Spillet er optaget. Udfyldningen startede ikke.</string>
+  <string name="fill_unknown">Udfyldningens resultat er ikke bekræftet. Kontrollér området; der forsøges ikke automatisk igen.</string>
+  <string name="rotate_rejected">Drejningen blev ikke anvendt. Vælg en genstand, og hold dens position.</string>
+  <string name="rotate_cancelled">Drejningen blev annulleret før udførelse.</string>
+  <string name="rotate_busy">Spillet er optaget. Drejningen startede ikke.</string>
+  <string name="rotate_unknown">Drejningens resultat er ikke bekræftet. Kontrollér genstanden; der forsøges ikke automatisk igen.</string>
+  <string name="wait_command">Vent, til kommandoen er færdig.</string>
+  <string name="fill_disarmed">Forberedt udfyldning annulleret.</string>
+  <string name="place_hint">Vælg genstandens position, og tryk på Placér.</string>
+  <string name="choose_tool">Vælg et understøttet værktøj i spillets brugerflade.</string>
+  <string name="fill_changed">Forberedt udfyldning annulleret: værktøjet eller vinduet er ændret.</string>
+  <string name="gestures_help">By og grunde: stryg for at flytte kameraet, knib for at zoome, og drej to fingre for at rotere. Stryg i lister for at rulle. Vælg en genstands position, og brug Drej, Placér eller Annuller. Hold på et valgt katalogikon for beskrivelsen; træk det til grunden for en forhåndsvisning. Hold positionen med én finger, og drej den anden for at rotere genstanden. Et kort samtidigt tryk med to fingre annullerer genstanden eller ethvert byggeværktøj, også vægge. Bevægelse med to fingre styrer kameraet; vælg positionen igen bagefter. Gulv/tapet: hold og slip for at udfylde et område. Udenfor kan gulv dække grundens udendørsområde. En anden finger eller Tilbage annullerer forberedelsen. Bygning anvendes, når du slipper; afbrydelser kan efterlade et delvist resultat. Hold på en kontrol for højreklik, f.eks. for at låse et ønske. Stryg to fingre lodret sammen for at vippe kameraet. Skalering af brugerfladen findes under grafikindstillinger. Select viser controllerens betjening. Den faktiske forstørrelse af brugerfladen begrænses efter behov, så vinduerne kan være på skærmen.</string>
+  <string name="selected_object">Valgt genstand: %1$s</string>
+  <string name="scale_status">Valgt brugerfladeskala: %1$d%% (spilindstilling: %2$d%%)</string>
+  <string name="scale_value">Brugerfladens skalering: %1$d%%</string>
+  <string name="scale_pending">Ændringen til %1$d%% er ikke bekræftet endnu. Anvendt skalering: %2$d%%.</string>
+  <string name="image_mismatch">Spilfiler mangler eller understøttes ikke. Gendan Sims2EP9.exe og ijl15.dll fra Legacy Collection 2025.</string>
+  <string name="gamepad_help">Venstre pind: markør; A: vælg, derefter placér; B: annuller/Tilbage; X: højreklik; Y: pause. Højre pind: kamera; trykket ned: hældning. Aftrækkere: zoom; skulderknapper: drej kamera eller genstand. Retningsknapper: rul listen under markøren. Start: brugerflade; Select: hjælp. Venstre pind trykket ned: præcis markør.</string>
+  <string name="upscale_fallback">FSR 3 er ikke tilgængelig (kode %1$d). Bruger FSR 1.</string>
+  <string name="ui_swipe_controls">Stryg på brugerfladens kontroller</string>
+  <string name="time_controls">Tidsstyring</string>
+  <string name="time_swipe_hint">Stryg over uret eller hastighedsknapperne: mod højre for at øge hastigheden, mod venstre for at sænke den og sætte på pause. Skalaen i midten viser den valgte hastighed.</string>
+</resources>

@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Girar</string>
+  <string name="place">Colocar</string>
+  <string name="cancel">Cancelar</string>
+  <string name="loading">Cargando Los Sims 2…</string>
+  <string name="scale_busy">El juego está ocupado. La escala no ha cambiado; selecciónala de nuevo.</string>
+  <string name="interface_settings">Interfaz del juego</string>
+  <string name="close">Cerrar</string>
+  <string name="field_too_long">Este campo supera los 128 caracteres. Edítalo con los controles originales del juego.</string>
+  <string name="edit_text">Texto del juego</string>
+  <string name="done">Listo</string>
+  <string name="invalid_text">Texto demasiado largo o carácter no válido</string>
+  <string name="field_changed">El campo ha cambiado. Copia el borrador antes de cerrar y volver a abrir el campo.</string>
+  <string name="text_cancelled">Entrada cancelada antes de aplicarse. Copia el borrador antes de cerrar el editor.</string>
+  <string name="text_busy">El juego está ocupado. El texto permanece en el editor.</string>
+  <string name="text_unknown">Resultado sin confirmar. Comprueba el campo en el juego; no se reintentará automáticamente.</string>
+  <string name="fill_armed">Relleno preparado. Suelta para aplicar; un segundo dedo o Atrás cancela.</string>
+  <string name="fill_rejected">Relleno no aplicado. Elige un suelo o papel de pared y repite el gesto.</string>
+  <string name="fill_cancelled">Relleno cancelado antes de ejecutarse.</string>
+  <string name="fill_busy">El juego está ocupado. El relleno no ha comenzado.</string>
+  <string name="fill_unknown">Resultado del relleno sin confirmar. Comprueba la zona; no se reintentará automáticamente.</string>
+  <string name="rotate_rejected">Giro no aplicado. Selecciona un objeto y mantén su posición.</string>
+  <string name="rotate_cancelled">Giro cancelado antes de ejecutarse.</string>
+  <string name="rotate_busy">El juego está ocupado. El giro no ha comenzado.</string>
+  <string name="rotate_unknown">Resultado del giro sin confirmar. Comprueba el objeto; no se reintentará automáticamente.</string>
+  <string name="wait_command">Espera a que termine el comando.</string>
+  <string name="fill_disarmed">Relleno preparado cancelado.</string>
+  <string name="place_hint">Elige la posición del objeto y pulsa Colocar.</string>
+  <string name="choose_tool">Selecciona una herramienta compatible en la interfaz del juego.</string>
+  <string name="fill_changed">Relleno preparado cancelado: ha cambiado la herramienta o la ventana.</string>
+  <string name="gestures_help">Ciudad y solares: desliza para mover la cámara; pellizca para ampliar y gira dos dedos para rotar. Desliza las listas para desplazarte. Elige la posición de un objeto y usa Girar, Colocar o Cancelar. Mantén pulsado un icono seleccionado del catálogo para ver su descripción; arrástralo al solar para una vista previa. Mantén la posición con un dedo y gira el segundo para rotar el objeto. Un toque breve y simultáneo con dos dedos cancela el objeto o cualquier herramienta de construcción, incluidas las paredes. Mover dos dedos controla la cámara; después elige de nuevo la posición. Suelos/papel de pared: mantén y suelta para rellenar una zona. Fuera, el suelo puede cubrir la zona exterior del solar. Un segundo dedo o Atrás cancela la preparación. La construcción se aplica al soltar; interrumpirla puede dejar un resultado parcial. Mantén un control para hacer clic derecho, por ejemplo para fijar un deseo. Desliza dos dedos juntos en vertical para inclinar la cámara. Escala de interfaz en las opciones gráficas. Select muestra los controles del mando. La ampliación real de la interfaz se limita cuando es necesario para que las ventanas quepan en la pantalla.</string>
+  <string name="selected_object">%1$s el objeto seleccionado</string>
+  <string name="scale_status">Escala de interfaz elegida: %1$d%% (ajuste del juego: %2$d%%)</string>
+  <string name="scale_value">Escala de interfaz: %1$d%%</string>
+  <string name="scale_pending">El cambio a %1$d%% aún no está confirmado. Escala aplicada: %2$d%%.</string>
+  <string name="image_mismatch">Faltan archivos del juego o no son compatibles. Restaura Sims2EP9.exe e ijl15.dll de Legacy Collection 2025.</string>
+  <string name="gamepad_help">Stick izquierdo: puntero; A: seleccionar y colocar; B: cancelar/Atrás; X: clic derecho; Y: pausa. Stick derecho: cámara; pulsado: inclinar. Gatillos: zoom; botones superiores: girar cámara u objeto. Cruceta: desplazar lista bajo el puntero. Start: interfaz; Select: ayuda. Stick izquierdo pulsado: puntero preciso.</string>
+  <string name="upscale_fallback">FSR 3 no disponible (código %1$d). Se usa FSR 1.</string>
+  <string name="ui_swipe_controls">Controlar la interfaz deslizando</string>
+  <string name="time_controls">Control del tiempo</string>
+  <string name="time_swipe_hint">Desliza el dedo sobre el reloj o los botones de velocidad: a la derecha para acelerar y a la izquierda para reducir la velocidad y pausar. La escala central muestra la velocidad elegida.</string>
+</resources>

@@ -1,0 +1,38 @@
+diff --git a/profiles/mojoshader_profile_glsl.c b/profiles/mojoshader_profile_glsl.c
+index 319e3cb..d44e295 100644
+--- a/profiles/mojoshader_profile_glsl.c
++++ b/profiles/mojoshader_profile_glsl.c
+@@ -1801,7 +1801,32 @@ void emit_GLSL_DEFI(Context *ctx)
+     pop_output(ctx);
+ } // emit_GLSL_DEFI
+ 
+-EMIT_GLSL_OPCODE_UNIMPLEMENTED_FUNC(TEXCRD)
++void emit_GLSL_TEXCRD(Context *ctx)
++{
++    /* ps_1_1..1_3 TEXCOORD reads the original interpolator, clamps XYZ,
++     * and sets W to one. ps_1_4 TEXCRD has different, unsupported semantics.
++     * https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/texcoord---ps */
++    if (shader_version_atleast(ctx, 1, 4))
++    {
++        fail(ctx, "TEXCRD unimplemented in glsl profile");
++        return;
++    }
++    const DestArgInfo *dst = &ctx->dest_arg;
++    if (dst->regtype != REG_TYPE_TEXTURE || dst->regnum >= 4 ||
++        !writemask_xyzw(dst->writemask) || dst->result_mod || dst->result_shift)
++    {
++        fail(ctx, "Invalid ps_1_x TEXCOORD destination");
++        return;
++    }
++    char target[64], coord[64];
++    get_GLSL_destarg_varname(ctx, target, sizeof (target));
++    snprintf(coord, sizeof (coord), "gl_TexCoord[%d]", dst->regnum);
++#if SUPPORT_PROFILE_GLSLES
++    if (support_glsles(ctx))
++        snprintf(coord, sizeof (coord), "io_%d_%d", MOJOSHADER_USAGE_TEXCOORD, dst->regnum);
++#endif
++    output_line(ctx, "%s = vec4(clamp(%s.xyz, vec3(0.0), vec3(1.0)), 1.0);", target, coord);
++} // emit_GLSL_TEXCRD
+ 
+ void emit_GLSL_TEXKILL(Context *ctx)
+ {

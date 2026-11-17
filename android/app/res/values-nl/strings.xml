@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Draaien</string>
+  <string name="place">Plaatsen</string>
+  <string name="cancel">Annuleren</string>
+  <string name="loading">The Sims 2 laden…</string>
+  <string name="scale_busy">Het spel is bezig. De schaal is niet gewijzigd; kies deze opnieuw.</string>
+  <string name="interface_settings">Spelinterface</string>
+  <string name="close">Sluiten</string>
+  <string name="field_too_long">Dit veld bevat meer dan 128 tekens. Bewerk het met de oorspronkelijke spelbesturing.</string>
+  <string name="edit_text">Speltekst</string>
+  <string name="done">Gereed</string>
+  <string name="invalid_text">Tekst te lang of ongeldig teken</string>
+  <string name="field_changed">Het veld is veranderd. Kopieer je concept voordat je het veld sluit en opnieuw opent.</string>
+  <string name="text_cancelled">Invoer geannuleerd vóór toepassing. Kopieer je concept voordat je de editor sluit.</string>
+  <string name="text_busy">Het spel is bezig. Je tekst blijft in de editor staan.</string>
+  <string name="text_unknown">Resultaat niet bevestigd. Controleer het veld in het spel; er volgt geen automatische nieuwe poging.</string>
+  <string name="fill_armed">Vullen staat klaar. Laat los om toe te passen; een tweede vinger of Terug annuleert.</string>
+  <string name="fill_rejected">Vullen niet toegepast. Kies een vloer of behang en herhaal het gebaar.</string>
+  <string name="fill_cancelled">Vullen geannuleerd vóór uitvoering.</string>
+  <string name="fill_busy">Het spel is bezig. Vullen is niet gestart.</string>
+  <string name="fill_unknown">Vulresultaat niet bevestigd. Controleer het gebied; er volgt geen automatische nieuwe poging.</string>
+  <string name="rotate_rejected">Draaien niet toegepast. Selecteer een voorwerp en houd de positie vast.</string>
+  <string name="rotate_cancelled">Draaien geannuleerd vóór uitvoering.</string>
+  <string name="rotate_busy">Het spel is bezig. Draaien is niet gestart.</string>
+  <string name="rotate_unknown">Draairesultaat niet bevestigd. Controleer het voorwerp; er volgt geen automatische nieuwe poging.</string>
+  <string name="wait_command">Wacht tot de opdracht is voltooid.</string>
+  <string name="fill_disarmed">Voorbereid vullen geannuleerd.</string>
+  <string name="place_hint">Kies een positie voor het voorwerp en tik op Plaatsen.</string>
+  <string name="choose_tool">Selecteer een ondersteund gereedschap in de spelinterface.</string>
+  <string name="fill_changed">Voorbereid vullen geannuleerd: het gereedschap of venster is veranderd.</string>
+  <string name="gestures_help">Stad en kavels: veeg om de camera te verplaatsen, knijp om te zoomen en draai twee vingers om te draaien. Veeg door lijsten om te scrollen. Kies een voorwerppositie en gebruik Draaien, Plaatsen of Annuleren. Houd een geselecteerd cataloguspictogram vast voor de beschrijving; sleep het naar de kavel voor een voorbeeld. Houd de positie met één vinger vast en draai de tweede om het voorwerp te draaien. Kort gelijktijdig tikken met twee vingers annuleert het voorwerp of elk bouwgereedschap, ook muren. Twee vingers bewegen bestuurt de camera; kies daarna opnieuw de positie. Vloer/behang: vasthouden en loslaten vult een gebied. Buiten kan de vloer het buitengebied van de kavel vullen. Een tweede vinger of Terug annuleert de voorbereiding. Bouwen gebeurt bij loslaten; onderbreken kan een gedeeltelijk resultaat achterlaten. Houd een bedieningselement vast voor rechtsklikken, bijvoorbeeld om een wens vast te zetten. Veeg twee vingers samen verticaal om de camera te kantelen. Interfaceschaal staat bij de grafische opties. Select toont de controllerbesturing. De werkelijke interfacevergroting wordt zo nodig beperkt, zodat vensters op het scherm passen.</string>
+  <string name="selected_object">Geselecteerd voorwerp: %1$s</string>
+  <string name="scale_status">Gekozen interfaceschaal: %1$d%% (spelinstelling: %2$d%%)</string>
+  <string name="scale_value">Interfaceschaal: %1$d%%</string>
+  <string name="scale_pending">Wijziging naar %1$d%% nog niet bevestigd. Toegepaste schaal: %2$d%%.</string>
+  <string name="image_mismatch">Spelbestanden ontbreken of worden niet ondersteund. Herstel Sims2EP9.exe en ijl15.dll van Legacy Collection 2025.</string>
+  <string name="gamepad_help">Linkerstick: aanwijzer; A: selecteren, dan plaatsen; B: annuleren/Terug; X: rechtsklikken; Y: pauze. Rechterstick: camera; ingedrukt: kantelen. Triggers: zoom; schouderknoppen: camera of voorwerp draaien. Richtingsknoppen: lijst onder aanwijzer scrollen. Start: interface; Select: hulp. Linkerstick ingedrukt: nauwkeurige aanwijzer.</string>
+  <string name="upscale_fallback">FSR 3 niet beschikbaar (code %1$d). FSR 1 wordt gebruikt.</string>
+  <string name="ui_swipe_controls">Interface bedienen met vegen</string>
+  <string name="time_controls">Tijd bedienen</string>
+  <string name="time_swipe_hint">Veeg over de klok of de snelheidsknoppen: naar rechts om te versnellen, naar links om te vertragen en te pauzeren. De schaal in het midden toont de gekozen snelheid.</string>
+</resources>

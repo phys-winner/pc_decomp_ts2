@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">回転</string>
+  <string name="place">配置</string>
+  <string name="cancel">キャンセル</string>
+  <string name="loading">The Sims 2 を読み込み中…</string>
+  <string name="scale_busy">ゲームは処理中です。倍率は変更されていません。もう一度選択してください。</string>
+  <string name="interface_settings">ゲームのインターフェース</string>
+  <string name="close">閉じる</string>
+  <string name="field_too_long">この欄は128文字を超えています。ゲーム本来の操作で編集してください。</string>
+  <string name="edit_text">ゲーム内のテキスト</string>
+  <string name="done">完了</string>
+  <string name="invalid_text">テキストが長すぎるか、無効な文字が含まれています</string>
+  <string name="field_changed">入力欄が変わりました。閉じて開き直す前に、下書きをコピーしてください。</string>
+  <string name="text_cancelled">適用前に入力がキャンセルされました。編集画面を閉じる前に下書きをコピーしてください。</string>
+  <string name="text_busy">ゲームは処理中です。テキストは編集画面に残っています。</string>
+  <string name="text_unknown">結果を確認できません。ゲーム内の入力欄を確認してください。自動で再試行はしません。</string>
+  <string name="fill_armed">範囲の塗りつぶしを準備しました。指を離すと適用します。2本目の指か「戻る」でキャンセルします。</string>
+  <string name="fill_rejected">塗りつぶしは適用されませんでした。床または壁紙を選んで操作を繰り返してください。</string>
+  <string name="fill_cancelled">実行前に塗りつぶしをキャンセルしました。</string>
+  <string name="fill_busy">ゲームは処理中です。塗りつぶしは開始していません。</string>
+  <string name="fill_unknown">塗りつぶしの結果を確認できません。範囲を確認してください。自動で再試行はしません。</string>
+  <string name="rotate_rejected">回転は適用されませんでした。オブジェクトを選択して位置を保持してください。</string>
+  <string name="rotate_cancelled">実行前に回転をキャンセルしました。</string>
+  <string name="rotate_busy">ゲームは処理中です。回転は開始していません。</string>
+  <string name="rotate_unknown">回転の結果を確認できません。オブジェクトを確認してください。自動で再試行はしません。</string>
+  <string name="wait_command">コマンドの完了をお待ちください。</string>
+  <string name="fill_disarmed">塗りつぶしの準備をキャンセルしました。</string>
+  <string name="place_hint">オブジェクトの位置を選んでから「配置」を押してください。</string>
+  <string name="choose_tool">ゲーム画面で対応するツールを選択してください。</string>
+  <string name="fill_changed">ツールまたはウィンドウが変わったため、塗りつぶしの準備をキャンセルしました。</string>
+  <string name="gestures_help">街と区画：スワイプでカメラ移動、ピンチでズーム、2本指をひねると回転します。リストはスワイプでスクロールします。オブジェクトの位置を選び、「回転」「配置」「キャンセル」を使います。選択したカタログアイコンを長押しすると説明が出ます。区画へドラッグするとプレビューします。1本指で位置を保持し、2本目を回してオブジェクトを回転できます。2本指で短く同時にタップすると、オブジェクトや壁を含むすべての建築ツールをキャンセルします。2本指の移動はカメラ操作です。その後は位置を選び直してください。床・壁紙：長押しして離すと範囲を塗りつぶします。屋外では区画の屋外範囲が床で埋まる場合があります。2本目の指か「戻る」で準備をキャンセルします。建築は指を離すと適用され、中断時は一部が残る場合があります。操作部を長押しすると右クリックになり、願望の固定などに使えます。2本指をそろえて上下にスワイプするとカメラを傾けます。UI倍率はグラフィック設定で変更できます。ゲームパッドのSelectで操作説明を表示します。 ウィンドウが画面に収まるよう、実際のUI拡大率は必要に応じて制限されます。</string>
+  <string name="selected_object">選択中のオブジェクト：%1$s</string>
+  <string name="scale_status">選択したUI倍率：%1$d%%（ゲームの設定：%2$d%%）</string>
+  <string name="scale_value">UI倍率：%1$d%%</string>
+  <string name="scale_pending">%1$d%%への変更はまだ確認できません。適用済み：%2$d%%。</string>
+  <string name="image_mismatch">ゲームファイルがないか非対応です。Legacy Collection 2025 の Sims2EP9.exe と ijl15.dll を復元してください。</string>
+  <string name="gamepad_help">左スティック：ポインター、A：選択して配置、B：キャンセル／戻る、X：右クリック、Y：一時停止。右スティック：カメラ移動、押し込みながら：傾き。トリガー：ズーム、ショルダー：カメラまたはオブジェクトの回転。十字キー：ポインター下のリストをスクロール。Start：UI設定、Select：操作説明。左スティック押し込み：精密なポインター移動。</string>
+  <string name="upscale_fallback">FSR 3 は使用できません（コード %1$d）。FSR 1 を使用します。</string>
+  <string name="ui_swipe_controls">スワイプで UI を操作</string>
+  <string name="time_controls">時間の操作</string>
+  <string name="time_swipe_hint">時計または速度ボタンの上をスワイプすると、右で加速、左で減速して一時停止できます。中央の目盛りに選択した速度が表示されます。</string>
+</resources>

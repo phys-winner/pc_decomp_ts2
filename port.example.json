@@ -1,0 +1,27 @@
+{
+  "game_directory": "C:/Games/The Sims 2 Legacy",
+  "modules": [
+    {
+      "name": "Sims2EP9",
+      "prefix": "sims2",
+      "file": "original/Sims2EP9.exe",
+      "source": "EP9/TSBin/Sims2EP9.exe",
+      "sha256": "7b65c2e8cb3100368d3e10db422768d99ef07169a7cee3aa30e6908aefd0ea88",
+      "base": "0xA0000000",
+      "ida_catalog": "research/ida/Sims2EP9.ida.json",
+      "ida_switches": "research/ida/Sims2EP9.switches.json"
+    },
+    {
+      "name": "ijl15",
+      "prefix": "ijl15",
+      "file": "original/ijl15.dll",
+      "source": "EP9/TSBin/ijl15.dll",
+      "sha256": "41d37bfb0a39017497e0aa373dc01f71ac9c5046c75f7cd269bee52112a5f3a1",
+      "base": "0x60000000",
+      "ida_catalog": "research/ida/ijl15.ida.json"
+    }
+  ],
+  "host_only": {
+    "steam_api.dll": "8d36de57cc6436f4e82ee672023f17a7f83a7a55af558582c2c139f83fb33ed0"
+  }
+}

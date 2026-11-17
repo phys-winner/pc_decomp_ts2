@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="PortDialog" parent="android:style/Theme.Material.Light.Dialog.Alert">
+    <item name="android:forceDarkAllowed">false</item>
+    <item name="android:textColorPrimary">#FF111111</item>
+    <item name="android:textColorSecondary">#FF333333</item>
+    <item name="android:colorBackground">#FFF7F7F7</item>
+  </style>
+</resources>

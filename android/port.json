@@ -1,0 +1,434 @@
+{
+  "schema": 1,
+  "app": {
+    "label": "The Sims 2",
+    "title": "The Sims 2 Legacy",
+    "subtitle": {
+      "en": "PC game for ARM64 Android",
+      "ru": "ПК-версия для ARM64 Android"
+    },
+    "javaPackage": "org.sims2.port.launcher",
+    "logTag": "Sims2",
+    "storage": "Sims2",
+    "github": "phys-winner/pc_decomp_ts2",
+    "languages": [
+      "en",
+      "ru",
+      "de",
+      "pl"
+    ],
+    "allFilesAccess": true,
+    "autoLaunch": false,
+    "hooks": "org.sims2.port.GamePreferences"
+  },
+  "theme": {
+    "background": [
+      "#102544",
+      "#07172E"
+    ],
+    "accent": "#74D84F",
+    "accentDark": "#327F29",
+    "primaryFill": "#173923",
+    "playGlow": "#74D84F",
+    "playParticles": "#74D84F",
+    "playParticleStyle": "plumbob",
+    "titleFont": "sans-serif-medium"
+  },
+  "distributions": [
+    {
+      "id": "legacy",
+      "title": "The Sims 2 Legacy",
+      "version": "2025",
+      "activity": "org.sims2.port.GameActivity",
+      "renderers": [
+        "dxvk",
+        "turnip",
+        "gles"
+      ],
+      "intro": {
+        "default": false
+      },
+      "parts": [
+        {
+          "id": "game",
+          "mount": true,
+          "title": {
+            "en": "Installed game",
+            "ru": "Установленная игра"
+          },
+          "folder": "{storage}/game",
+          "marker": "EP9/TSData/Res/Config/globalProps.xml",
+          "required": [
+            "Base/TSData/",
+            "EP9/TSData/",
+            "EP9/TSBin/Sims2EP9.exe",
+            "EP9/TSBin/ijl15.dll"
+          ]
+        }
+      ]
+    }
+  ],
+  "renderers": {
+    "default": "dxvk",
+    "modes": [
+      {
+        "id": "gles",
+        "kind": "gles",
+        "title": "OpenGL ES",
+        "description": {
+          "en": "The port's OpenGL ES renderer",
+          "ru": "Рендерер OpenGL ES порта"
+        }
+      },
+      {
+        "id": "dxvk",
+        "kind": "vulkan",
+        "title": "DXVK (Vulkan)",
+        "description": {
+          "en": "DXVK on the system Vulkan driver",
+          "ru": "DXVK с системным драйвером Vulkan"
+        },
+        "vulkan": "1.3",
+        "minSdk": 30,
+        "libraries": [
+          "libs2dxvk.so",
+          "libdxvk_d3d9.so",
+          "libc++_shared.so"
+        ]
+      },
+      {
+        "id": "turnip",
+        "kind": "turnip",
+        "title": "DXVK (Turnip)",
+        "description": {
+          "en": "DXVK with Mesa Turnip on Adreno 6xx/7xx",
+          "ru": "DXVK с Mesa Turnip для Adreno 6xx/7xx"
+        },
+        "vulkan": "1.3",
+        "minSdk": 30,
+        "adreno": [
+          600,
+          799
+        ],
+        "driver": "libs2turnip.so",
+        "libraries": [
+          "libs2dxvk.so",
+          "libdxvk_d3d9.so",
+          "libadrenotools.so",
+          "libs2turnip.so",
+          "libc++_shared.so"
+        ]
+      }
+    ]
+  },
+  "textures": {
+    "backend": "org.sims2.port.TextureCache"
+  },
+  "hints": {
+    "gameFiles": {
+      "en": "Choose the installed Legacy Collection folder with Base, EP1...EP9 and SP folders, or its ZIP archive. Stored ZIPs can be played without unpacking.",
+      "ru": "Выберите папку установленной Legacy Collection с Base, EP1...EP9 и SP либо ZIP-архив этой папки. ZIP без сжатия можно открыть без распаковки."
+    },
+    "options": {
+      "en": "Choose the game language before starting. Interface scale is also available in the game graphics settings.",
+      "ru": "Язык применяется при запуске. Масштаб интерфейса также доступен в настройках графики игры."
+    }
+  },
+  "options": [
+    {
+      "key": "game_language",
+      "type": "choice",
+      "title": {
+        "en": "Game language",
+        "ru": "Язык игры"
+      },
+      "default": "system",
+      "choices": [
+        {
+          "value": "system",
+          "title": {
+            "en": "System language (English fallback)",
+            "ru": "Язык системы (резервный — английский)"
+          }
+        },
+        {
+          "value": "english",
+          "title": "English"
+        },
+        {
+          "value": "french",
+          "title": "Français"
+        },
+        {
+          "value": "german",
+          "title": "Deutsch"
+        },
+        {
+          "value": "italian",
+          "title": "Italiano"
+        },
+        {
+          "value": "spanish",
+          "title": "Español"
+        },
+        {
+          "value": "swedish",
+          "title": "Svenska"
+        },
+        {
+          "value": "finnish",
+          "title": "Suomi"
+        },
+        {
+          "value": "dutch",
+          "title": "Nederlands"
+        },
+        {
+          "value": "danish",
+          "title": "Dansk"
+        },
+        {
+          "value": "brazilian",
+          "title": "Português (Brasil)"
+        },
+        {
+          "value": "czech",
+          "title": "Čeština"
+        },
+        {
+          "value": "japanese",
+          "title": "日本語"
+        },
+        {
+          "value": "koreana",
+          "title": "한국어"
+        },
+        {
+          "value": "russian",
+          "title": "Русский"
+        },
+        {
+          "value": "schinese",
+          "title": "简体中文"
+        },
+        {
+          "value": "tchinese",
+          "title": "繁體中文"
+        },
+        {
+          "value": "polish",
+          "title": "Polski"
+        },
+        {
+          "value": "thai",
+          "title": "ไทย"
+        },
+        {
+          "value": "norwegian",
+          "title": "Norsk"
+        },
+        {
+          "value": "portuguese",
+          "title": "Português"
+        },
+        {
+          "value": "hungarian",
+          "title": "Magyar"
+        }
+      ]
+    },
+    {
+      "key": "adaptive_ui",
+      "type": "bool",
+      "title": {
+        "en": "Adaptive interface (next launch)",
+        "ru": "Адаптивный интерфейс (после перезапуска)",
+        "de": "Adaptive Oberfläche (nächster Start)",
+        "pl": "Interfejs adaptacyjny (po ponownym uruchomieniu)"
+      },
+      "default": "1"
+    },
+    {
+      "key": "screen_resolution",
+      "type": "choice",
+      "title": {
+        "en": "Game resolution (% of device screen)",
+        "ru": "Разрешение игры (% от экрана устройства)"
+      },
+      "default": "100",
+      "choices": [
+        {
+          "value": "0",
+          "title": {
+            "en": "Use in-game render scale",
+            "ru": "Масштаб рендера из настроек игры"
+          }
+        },
+        {
+          "value": "33",
+          "title": "33%"
+        },
+        {
+          "value": "40",
+          "title": "40%"
+        },
+        {
+          "value": "50",
+          "title": "50%"
+        },
+        {
+          "value": "67",
+          "title": "67%"
+        },
+        {
+          "value": "75",
+          "title": "75%"
+        },
+        {
+          "value": "100",
+          "title": "100%"
+        }
+      ]
+    },
+    {
+      "key": "frame_rate_limit",
+      "type": "choice",
+      "title": {
+        "en": "Frame rate limit",
+        "ru": "Ограничение частоты кадров"
+      },
+      "default": "game",
+      "choices": [
+        {
+          "value": "game",
+          "title": {
+            "en": "Use game setting",
+            "ru": "Из настроек игры"
+          }
+        },
+        {
+          "value": "0",
+          "title": {
+            "en": "Unlimited",
+            "ru": "Без ограничения"
+          }
+        },
+        {
+          "value": "30",
+          "title": "30 FPS"
+        },
+        {
+          "value": "60",
+          "title": "60 FPS"
+        },
+        {
+          "value": "90",
+          "title": "90 FPS"
+        },
+        {
+          "value": "120",
+          "title": "120 FPS"
+        }
+      ]
+    },
+    {
+      "key": "ui_fsr",
+      "type": "choice",
+      "title": {
+        "en": "FSR 1 for interface textures (OpenGL ES)",
+        "ru": "FSR 1 для текстур интерфейса (OpenGL ES)"
+      },
+      "default": "0",
+      "choices": [
+        {
+          "value": "0",
+          "title": {
+            "en": "Off",
+            "ru": "Выключено"
+          }
+        },
+        {
+          "value": "1",
+          "title": {
+            "en": "On",
+            "ru": "Включено"
+          }
+        }
+      ]
+    },
+    {
+      "key": "render_aa",
+      "type": "choice",
+      "title": {
+        "en": "Render antialiasing (OpenGL ES)",
+        "ru": "Сглаживание рендера (OpenGL ES)"
+      },
+      "default": "0",
+      "choices": [
+        {
+          "value": "0",
+          "title": {
+            "en": "Off",
+            "ru": "Выключено"
+          }
+        },
+        {
+          "value": "1",
+          "title": "FXAA"
+        }
+      ]
+    },
+    {
+      "key": "render_msaa",
+      "type": "choice",
+      "title": {
+        "en": "MSAA (OpenGL ES)",
+        "ru": "MSAA (OpenGL ES)"
+      },
+      "default": "0",
+      "choices": [
+        {
+          "value": "0",
+          "title": {
+            "en": "Off",
+            "ru": "Выключено"
+          }
+        },
+        {
+          "value": "2",
+          "title": "2×"
+        },
+        {
+          "value": "4",
+          "title": "4×"
+        }
+      ]
+    },
+    {
+      "key": "render_upscaler",
+      "type": "choice",
+      "title": {
+        "en": "Render upscaling (OpenGL ES)",
+        "ru": "Апскейлинг рендера (OpenGL ES)"
+      },
+      "default": "0",
+      "choices": [
+        {
+          "value": "0",
+          "title": {
+            "en": "Bilinear",
+            "ru": "Билинейный"
+          }
+        },
+        {
+          "value": "1",
+          "title": "FSR 1"
+        },
+        {
+          "value": "3",
+          "title": "FSR 3.1"
+        }
+      ]
+    }
+  ]
+}

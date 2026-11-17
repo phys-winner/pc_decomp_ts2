@@ -1,0 +1,857 @@
+{
+  "source": "original/Sims2EP9.exe",
+  "source_sha256": "7b65c2e8cb3100368d3e10db422768d99ef07169a7cee3aa30e6908aefd0ea88",
+  "scope": "IDA original RTTI tables with fixed-name getter at slot 0x14. Dormant implementations and duplicate property getters are included; this is a superset, not a runtime command count.",
+  "commands": [
+    {
+      "name": "autoPatch",
+      "vtable": "0xa0da5068",
+      "name_method": "0xa01d0b2d"
+    },
+    {
+      "name": "eh",
+      "vtable": "0xa0da7ddc",
+      "name_method": "0xa020feb3"
+    },
+    {
+      "name": "aev",
+      "vtable": "0xa0da7e10",
+      "name_method": "0xa020fead"
+    },
+    {
+      "name": "displayAnimList",
+      "vtable": "0xa0dbcb68",
+      "name_method": "0xa03a1860"
+    },
+    {
+      "name": "stretchSkeleton",
+      "vtable": "0xa0dbcc34",
+      "name_method": "0xa03a18a0"
+    },
+    {
+      "name": "displayAnimBillboard",
+      "vtable": "0xa0dbcd04",
+      "name_method": "0xa03a1850"
+    },
+    {
+      "name": "slowMotion",
+      "vtable": "0xa0dbce18",
+      "name_method": "0xa03a1890"
+    },
+    {
+      "name": "setSimOutfitOverride",
+      "vtable": "0xa0dbce8c",
+      "name_method": "0xa03a1880"
+    },
+    {
+      "name": "money",
+      "vtable": "0xa0dc30fc",
+      "name_method": "0xa0419f40"
+    },
+    {
+      "name": "familyFunds",
+      "vtable": "0xa0dc3200",
+      "name_method": "0xa0419ef0"
+    },
+    {
+      "name": "setHour",
+      "vtable": "0xa0dc32d8",
+      "name_method": "0xa0419f70"
+    },
+    {
+      "name": "modifyNeighborhoodTerrain",
+      "vtable": "0xa0dc3334",
+      "name_method": "0xa0419f30"
+    },
+    {
+      "name": "allMenus",
+      "vtable": "0xa0dc3420",
+      "name_method": "0xa0419ea0"
+    },
+    {
+      "name": "debugSocial",
+      "vtable": "0xa0dc34b4",
+      "name_method": "0xa0419eb0"
+    },
+    {
+      "name": "dumpHappy",
+      "vtable": "0xa0dc3550",
+      "name_method": "0xa0419ec0"
+    },
+    {
+      "name": "simCheckTreeFullLogging",
+      "vtable": "0xa0dc35fc",
+      "name_method": "0xa0419f80"
+    },
+    {
+      "name": "DumpLotState",
+      "vtable": "0xa0dc3648",
+      "name_method": "0xa0419ed0"
+    },
+    {
+      "name": "maxMotives",
+      "vtable": "0xa0dc3750",
+      "name_method": "0xa0419f20"
+    },
+    {
+      "name": "motiveDecay",
+      "vtable": "0xa0dc37c8",
+      "name_method": "0xa0419f50"
+    },
+    {
+      "name": "lockAspiration",
+      "vtable": "0xa0dc3858",
+      "name_method": "0xa0419f10"
+    },
+    {
+      "name": "dumpObjectInstances",
+      "vtable": "0xa0dc38ec",
+      "name_method": "0xa0419ee0"
+    },
+    {
+      "name": "aspiration",
+      "vtable": "0xa0dcb348",
+      "name_method": "0xa0491a60"
+    },
+    {
+      "name": "aspirationPoints",
+      "vtable": "0xa0dcb3bc",
+      "name_method": "0xa0491a80"
+    },
+    {
+      "name": "aspirationLevel",
+      "vtable": "0xa0dcb448",
+      "name_method": "0xa0491a70"
+    },
+    {
+      "name": "terrainType",
+      "vtable": "0xa0dcc280",
+      "name_method": "0xa04b0490"
+    },
+    {
+      "name": "FBA",
+      "vtable": "0xa0dcf828",
+      "name_method": "0xa051c520"
+    },
+    {
+      "name": "AgeSimsCheat",
+      "vtable": "0xa0dcf8e0",
+      "name_method": "0xa051c510"
+    },
+    {
+      "name": "createNeighborhood",
+      "vtable": "0xa0df9b2c",
+      "name_method": "0xa0771fd0"
+    },
+    {
+      "name": "deleteNeighborhood",
+      "vtable": "0xa0df9dac",
+      "name_method": "0xa0771fdc"
+    },
+    {
+      "name": "installNeighborhood",
+      "vtable": "0xa0df9ed0",
+      "name_method": "0xa0771ffa"
+    },
+    {
+      "name": "changeNeighborhoodType",
+      "vtable": "0xa0df9ff4",
+      "name_method": "0xa0771fc4"
+    },
+    {
+      "name": "changeLotClassification",
+      "vtable": "0xa0dfa14c",
+      "name_method": "0xa0771fb8"
+    },
+    {
+      "name": "printLotClass",
+      "vtable": "0xa0dfa1f8",
+      "name_method": "0xa0772012"
+    },
+    {
+      "name": "clearLotClassValue",
+      "vtable": "0xa0dfa294",
+      "name_method": "0xa0771fca"
+    },
+    {
+      "name": "changeLotZoning",
+      "vtable": "0xa0dfa308",
+      "name_method": "0xa0771fbe"
+    },
+    {
+      "name": "loadLot",
+      "vtable": "0xa0dfa4d0",
+      "name_method": "0xa077200c"
+    },
+    {
+      "name": "quit",
+      "vtable": "0xa0dfa598",
+      "name_method": "0xa0772018"
+    },
+    {
+      "name": "showHeadlines",
+      "vtable": "0xa0dfa648",
+      "name_method": "0xa077201e"
+    },
+    {
+      "name": "unlockCareerRewards",
+      "vtable": "0xa0dfa6cc",
+      "name_method": "0xa077203c"
+    },
+    {
+      "name": "aging",
+      "vtable": "0xa0dfa74c",
+      "name_method": "0xa0771fa6"
+    },
+    {
+      "name": "disablePuppyKittenAging",
+      "vtable": "0xa0dfa7ac",
+      "name_method": "0xa0771fe2"
+    },
+    {
+      "name": "deleteAllCharacters",
+      "vtable": "0xa0dfa838",
+      "name_method": "0xa0771fd6"
+    },
+    {
+      "name": "simDNA",
+      "vtable": "0xa0dfa8f4",
+      "name_method": "0xa0772024"
+    },
+    {
+      "name": "simOutfit",
+      "vtable": "0xa0dfa9dc",
+      "name_method": "0xa077202a"
+    },
+    {
+      "name": "bloom",
+      "vtable": "0xa0dfadd4",
+      "name_method": "0xa0771fac"
+    },
+    {
+      "name": "vignette",
+      "vtable": "0xa0dfaea8",
+      "name_method": "0xa0772042"
+    },
+    {
+      "name": "filmGrain",
+      "vtable": "0xa0dfafa8",
+      "name_method": "0xa0771fee"
+    },
+    {
+      "name": "letterBox",
+      "vtable": "0xa0dfb048",
+      "name_method": "0xa0772006"
+    },
+    {
+      "name": "integrationVersion",
+      "vtable": "0xa0dfb124",
+      "name_method": "0xa0772000"
+    },
+    {
+      "name": "textDebugging",
+      "vtable": "0xa0dfb204",
+      "name_method": "0xa0772030"
+    },
+    {
+      "name": "bugJarTimeDecay",
+      "vtable": "0xa0dfb274",
+      "name_method": "0xa0771fb2"
+    },
+    {
+      "name": "installAllVacationNeighborhoods",
+      "vtable": "0xa0dfb2f4",
+      "name_method": "0xa0771ff4"
+    },
+    {
+      "name": "dumpNPCCount",
+      "vtable": "0xa0dfb3b4",
+      "name_method": "0xa0771fe8"
+    },
+    {
+      "name": "moveObjects",
+      "vtable": "0xa0dfb4b8",
+      "name_method": "0xa07744d4"
+    },
+    {
+      "name": "deleteAllWalls",
+      "vtable": "0xa0dfb540",
+      "name_method": "0xa07744c8"
+    },
+    {
+      "name": "deleteAllFences",
+      "vtable": "0xa0dfb5ac",
+      "name_method": "0xa07744b6"
+    },
+    {
+      "name": "deleteAllHalfwalls",
+      "vtable": "0xa0dfb604",
+      "name_method": "0xa07744bc"
+    },
+    {
+      "name": "deleteAllAwnings",
+      "vtable": "0xa0dfb678",
+      "name_method": "0xa07744b0"
+    },
+    {
+      "name": "deleteAllObjects",
+      "vtable": "0xa0dfb6d4",
+      "name_method": "0xa07744c2"
+    },
+    {
+      "name": "individualRoofSlopeAngle",
+      "vtable": "0xa0dfb750",
+      "name_method": "0xa07744ce"
+    },
+    {
+      "name": "effect",
+      "vtable": "0xa0e8cf38",
+      "name_method": "0xa0bc9a90"
+    },
+    {
+      "name": "effectsManager",
+      "vtable": "0xa0e8d3e0",
+      "name_method": "0xa0bc9aa0"
+    },
+    {
+      "name": "overlay",
+      "vtable": "0xa0e8e748",
+      "name_method": "0xa0bdb320"
+    },
+    {
+      "name": "clear",
+      "vtable": "0xa0eb5c60",
+      "name_method": "0xa0cab9d0"
+    },
+    {
+      "name": "hide",
+      "vtable": "0xa0eb5cbc",
+      "name_method": "0xa0cab9f0"
+    },
+    {
+      "name": "expand",
+      "vtable": "0xa0eb5d0c",
+      "name_method": "0xa0cab9e0"
+    },
+    {
+      "name": "history",
+      "vtable": "0xa0eb5d88",
+      "name_method": "0xa0caba00"
+    },
+    {
+      "name": "assertResponse",
+      "vtable": "0xa0eb5ee0",
+      "name_method": "0xa0caf360"
+    },
+    {
+      "name": "run",
+      "vtable": "0xa0eb5f54",
+      "name_method": "0xa0caf550"
+    },
+    {
+      "name": "help",
+      "vtable": "0xa0eb5fd0",
+      "name_method": "0xa0caf390"
+    },
+    {
+      "name": "gameVersion",
+      "vtable": "0xa0eb6164",
+      "name_method": "0xa0caf380"
+    },
+    {
+      "name": "perfWin",
+      "vtable": "0xa0eb6278",
+      "name_method": "0xa0caf540"
+    },
+    {
+      "name": "perfLog",
+      "vtable": "0xa0eb62d4",
+      "name_method": "0xa0caf4a0"
+    },
+    {
+      "name": "perfLogPeaks",
+      "vtable": "0xa0eb635c",
+      "name_method": "0xa0caf4c0"
+    },
+    {
+      "name": "perfLogStats",
+      "vtable": "0xa0eb63e4",
+      "name_method": "0xa0caf4d0"
+    },
+    {
+      "name": "perfLogLongFrames",
+      "vtable": "0xa0eb6470",
+      "name_method": "0xa0caf4b0"
+    },
+    {
+      "name": "perfCollect",
+      "vtable": "0xa0eb64fc",
+      "name_method": "0xa0caf490"
+    },
+    {
+      "name": "perfReset",
+      "vtable": "0xa0eb6568",
+      "name_method": "0xa0caf4e0"
+    },
+    {
+      "name": "perfScopeAutoDisable",
+      "vtable": "0xa0eb65d0",
+      "name_method": "0xa0caf4f0"
+    },
+    {
+      "name": "perfScopeDisable",
+      "vtable": "0xa0eb6660",
+      "name_method": "0xa0caf500"
+    },
+    {
+      "name": "perfScopeEnable",
+      "vtable": "0xa0eb66c8",
+      "name_method": "0xa0caf510"
+    },
+    {
+      "name": "perfScopeVTuneDisable",
+      "vtable": "0xa0eb672c",
+      "name_method": "0xa0caf520"
+    },
+    {
+      "name": "perfScopeVTuneEnable",
+      "vtable": "0xa0eb67a4",
+      "name_method": "0xa0caf530"
+    },
+    {
+      "name": "metricsReset",
+      "vtable": "0xa0eb681c",
+      "name_method": "0xa0caf470"
+    },
+    {
+      "name": "metricsReport",
+      "vtable": "0xa0eb6894",
+      "name_method": "0xa0caf450"
+    },
+    {
+      "name": "metricsReportHtml",
+      "vtable": "0xa0eb6918",
+      "name_method": "0xa0caf460"
+    },
+    {
+      "name": "argSpecTest",
+      "vtable": "0xa0eb69a4",
+      "name_method": "0xa0caf350"
+    },
+    {
+      "name": "logFilter",
+      "vtable": "0xa0eb6be4",
+      "name_method": "0xa0caf3b0"
+    },
+    {
+      "name": "logFormatter",
+      "vtable": "0xa0eb6c34",
+      "name_method": "0xa0caf3d0"
+    },
+    {
+      "name": "logFilterLevel",
+      "vtable": "0xa0eb6c88",
+      "name_method": "0xa0caf3c0"
+    },
+    {
+      "name": "logReporterLevel",
+      "vtable": "0xa0eb6d10",
+      "name_method": "0xa0caf400"
+    },
+    {
+      "name": "logServiceLevel",
+      "vtable": "0xa0eb6da4",
+      "name_method": "0xa0caf420"
+    },
+    {
+      "name": "logPreset",
+      "vtable": "0xa0eb6e1c",
+      "name_method": "0xa0caf3f0"
+    },
+    {
+      "name": "logFormatterPreset",
+      "vtable": "0xa0eb6e8c",
+      "name_method": "0xa0caf3e0"
+    },
+    {
+      "name": "logReporterProp",
+      "vtable": "0xa0eb6f04",
+      "name_method": "0xa0caf410"
+    },
+    {
+      "name": "logFile",
+      "vtable": "0xa0eb6fcc",
+      "name_method": "0xa0caf3a0"
+    },
+    {
+      "name": "logWindow",
+      "vtable": "0xa0eb709c",
+      "name_method": "0xa0caf440"
+    },
+    {
+      "name": "logSettings",
+      "vtable": "0xa0eb7104",
+      "name_method": "0xa0caf430"
+    },
+    {
+      "name": "vsync",
+      "vtable": "0xa0eb7954",
+      "name_method": "0xa0cb91f0"
+    },
+    {
+      "name": "rttManager",
+      "vtable": "0xa0eb837c",
+      "name_method": "0xa0cbf410"
+    },
+    {
+      "name": "purgeFaceSystemMemory",
+      "vtable": "0xa0eba3b4",
+      "name_method": "0xa0cf43c0"
+    },
+    {
+      "name": "faceBlendLimits",
+      "vtable": "0xa0eba440",
+      "name_method": "0xa0cf43b0"
+    },
+    {
+      "name": "setHighestAllowedLevel",
+      "vtable": "0xa0ebb874",
+      "name_method": "0xa0d15060"
+    },
+    {
+      "name": "roofSlopeAngle",
+      "vtable": "0xa0ebb8e8",
+      "name_method": "0xa0d15070"
+    },
+    {
+      "name": "listener",
+      "vtable": "0xa0da84dc",
+      "name_method": "0xa0211463"
+    },
+    {
+      "name": "ams",
+      "vtable": "0xa0da9e4c",
+      "name_method": "0xa022520c"
+    },
+    {
+      "name": "setLotLightingFile",
+      "vtable": "0xa0dbcf64",
+      "name_method": "0xa03a1870"
+    },
+    {
+      "name": "addNeighborToFamilyCheat",
+      "vtable": "0xa0dc395c",
+      "name_method": "0xa0419e90"
+    },
+    {
+      "name": "forcetwins",
+      "vtable": "0xa0dc39d8",
+      "name_method": "0xa0419f00"
+    },
+    {
+      "name": "PlumbBobToggle",
+      "vtable": "0xa0dc3a60",
+      "name_method": "0xa0419f60"
+    },
+    {
+      "name": "dumpWants",
+      "vtable": "0xa0dcb278",
+      "name_method": "0xa0491a90"
+    },
+    {
+      "name": "setQuarterTilePlacement",
+      "vtable": "0xa0df9aa8",
+      "name_method": "0xa0772036"
+    },
+    {
+      "name": "include",
+      "vtable": "0xa0e7dc6c",
+      "name_method": "0xa0b03ca0"
+    },
+    {
+      "name": "sinclude",
+      "vtable": "0xa0e7dcbc",
+      "name_method": "0xa0b03dc0"
+    },
+    {
+      "name": "wildInclude",
+      "vtable": "0xa0e7dd38",
+      "name_method": "0xa0b03e10"
+    },
+    {
+      "name": "end",
+      "vtable": "0xa0e7dde8",
+      "name_method": "0xa0b03c40"
+    },
+    {
+      "name": "ignoreErrors",
+      "vtable": "0xa0e7de38",
+      "name_method": "0xa0b03c90"
+    },
+    {
+      "name": "list",
+      "vtable": "0xa0e7dea0",
+      "name_method": "0xa0b03cb0"
+    },
+    {
+      "name": "eval",
+      "vtable": "0xa0e7df1c",
+      "name_method": "0xa0b03c70"
+    },
+    {
+      "name": "assert",
+      "vtable": "0xa0e7df78",
+      "name_method": "0xa0b03ba0"
+    },
+    {
+      "name": "set",
+      "vtable": "0xa0e7e004",
+      "name_method": "0xa0b03d40"
+    },
+    {
+      "name": "sete",
+      "vtable": "0xa0e7e054",
+      "name_method": "0xa0b03d50"
+    },
+    {
+      "name": "setb",
+      "vtable": "0xa0e7e0e0",
+      "name_method": "0xa0b03d20"
+    },
+    {
+      "name": "seti",
+      "vtable": "0xa0e7e13c",
+      "name_method": "0xa0b03d70"
+    },
+    {
+      "name": "setf",
+      "vtable": "0xa0e7e1b0",
+      "name_method": "0xa0b03d60"
+    },
+    {
+      "name": "setc",
+      "vtable": "0xa0e7e230",
+      "name_method": "0xa0b03d30"
+    },
+    {
+      "name": "setv2",
+      "vtable": "0xa0e7e294",
+      "name_method": "0xa0b03d80"
+    },
+    {
+      "name": "setv3",
+      "vtable": "0xa0e7e304",
+      "name_method": "0xa0b03d90"
+    },
+    {
+      "name": "setv4",
+      "vtable": "0xa0e7e378",
+      "name_method": "0xa0b03da0"
+    },
+    {
+      "name": "namespace",
+      "vtable": "0xa0e7e3e0",
+      "name_method": "0xa0b03d00"
+    },
+    {
+      "name": "purge",
+      "vtable": "0xa0e7e444",
+      "name_method": "0xa0b03d10"
+    },
+    {
+      "name": "if",
+      "vtable": "0xa0e7e4d0",
+      "name_method": "0xa0b03c80"
+    },
+    {
+      "name": "elseif",
+      "vtable": "0xa0e7e540",
+      "name_method": "0xa0b03c30"
+    },
+    {
+      "name": "else",
+      "vtable": "0xa0e7e5d4",
+      "name_method": "0xa0b03c20"
+    },
+    {
+      "name": "endif",
+      "vtable": "0xa0e7e658",
+      "name_method": "0xa0b03c60"
+    },
+    {
+      "name": "define",
+      "vtable": "0xa0e7e6c8",
+      "name_method": "0xa0b03bf0"
+    },
+    {
+      "name": "enddef",
+      "vtable": "0xa0e7e748",
+      "name_method": "0xa0b03c50"
+    },
+    {
+      "name": "undefine",
+      "vtable": "0xa0e7e7bc",
+      "name_method": "0xa0b03de0"
+    },
+    {
+      "name": "create",
+      "vtable": "0xa0e7e850",
+      "name_method": "0xa0b03bc0"
+    },
+    {
+      "name": "arrayCreate",
+      "vtable": "0xa0e7e980",
+      "name_method": "0xa0b03b90"
+    },
+    {
+      "name": "trace",
+      "vtable": "0xa0e7ea04",
+      "name_method": "0xa0b03dd0"
+    },
+    {
+      "name": "log",
+      "vtable": "0xa0e7ea4c",
+      "name_method": "0xa0b03cc0"
+    },
+    {
+      "name": "dump",
+      "vtable": "0xa0e7ea90",
+      "name_method": "0xa0b03c10"
+    },
+    {
+      "name": "debug",
+      "vtable": "0xa0e7eb20",
+      "name_method": "0xa0b03bd0"
+    },
+    {
+      "name": "showArguments",
+      "vtable": "0xa0e7eba8",
+      "name_method": "0xa0b03db0"
+    },
+    {
+      "name": "debuggerBreak",
+      "vtable": "0xa0e7ec18",
+      "name_method": "0xa0b03be0"
+    },
+    {
+      "name": "version",
+      "vtable": "0xa0e7ec70",
+      "name_method": "0xa0b03e00"
+    },
+    {
+      "name": "alias",
+      "vtable": "0xa0e7ed78",
+      "name_method": "0xa0b03b70"
+    },
+    {
+      "name": "listPropNames",
+      "vtable": "0xa0e83b6c",
+      "name_method": "0xa0b3bb70"
+    },
+    {
+      "name": "listProps",
+      "vtable": "0xa0e83bcc",
+      "name_method": "0xa0b3bb80"
+    },
+    {
+      "name": "stringProp",
+      "vtable": "0xa0e83c8c",
+      "name_method": "0xa0b3bbb0"
+    },
+    {
+      "name": "boolProp",
+      "vtable": "0xa0e83ce4",
+      "name_method": "0xa0b3bb40"
+    },
+    {
+      "name": "sintProp",
+      "vtable": "0xa0e83d38",
+      "name_method": "0xa0b3bba0"
+    },
+    {
+      "name": "uintProp",
+      "vtable": "0xa0e83d8c",
+      "name_method": "0xa0b3bbc0"
+    },
+    {
+      "name": "intProp",
+      "vtable": "0xa0e83de0",
+      "name_method": "0xa0b3bb60"
+    },
+    {
+      "name": "floatProp",
+      "vtable": "0xa0e83e14",
+      "name_method": "0xa0b3bb50"
+    },
+    {
+      "name": "boolProp",
+      "vtable": "0xa0e83e78",
+      "name_method": "0xa0b3bb40"
+    },
+    {
+      "name": "intProp",
+      "vtable": "0xa0e83f18",
+      "name_method": "0xa0b3bb60"
+    },
+    {
+      "name": "uintProp",
+      "vtable": "0xa0e83f60",
+      "name_method": "0xa0b3bbc0"
+    },
+    {
+      "name": "sintProp",
+      "vtable": "0xa0e83f8c",
+      "name_method": "0xa0b3bba0"
+    },
+    {
+      "name": "floatProp",
+      "vtable": "0xa0e83fb8",
+      "name_method": "0xa0b3bb50"
+    },
+    {
+      "name": "propExists",
+      "vtable": "0xa0e84000",
+      "name_method": "0xa0b3bb90"
+    },
+    {
+      "name": "control",
+      "vtable": "0xa0e84418",
+      "name_method": "0xa0b3efc0"
+    },
+    {
+      "name": "unlitRoomColor",
+      "vtable": "0xa0e84534",
+      "name_method": "0xa0b3f0b0"
+    },
+    {
+      "name": "fog",
+      "vtable": "0xa0e847f4",
+      "name_method": "0xa0ad96e0"
+    },
+    {
+      "name": "lightMap",
+      "vtable": "0xa0e84848",
+      "name_method": "0xa0b3f000"
+    },
+    {
+      "name": "transitionTimes",
+      "vtable": "0xa0e848c8",
+      "name_method": "0xa0b3f090"
+    },
+    {
+      "name": "timeOfDay",
+      "vtable": "0xa0e849c8",
+      "name_method": "0xa0b3f080"
+    },
+    {
+      "name": "PITextCvt",
+      "vtable": "0xa0eb61e0",
+      "name_method": "0xa0caf480"
+    },
+    {
+      "name": "compareDriverBuild",
+      "vtable": "0xa0eb992c",
+      "name_method": "0xa0cd32b0"
+    }
+  ]
+}

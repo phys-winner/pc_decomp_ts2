@@ -1,0 +1,109 @@
+{
+  "provenance": {
+    "device": "WQD4C18C19014870",
+    "date": "2026-11-09",
+    "source": [
+      "family-catalogue-runtime.json",
+      "houses-catalogue-runtime.json",
+      "catalogue-owner-chains.json"
+    ],
+    "description": "Original native heap snapshots. Only fields read by catalog binding and scrolling are retained."
+  },
+  "cases": [
+    {
+      "name": "family",
+      "window": "0x10731e78",
+      "catalogue": "0xdc4a8f8",
+      "delegate": "0xdbf6fb8",
+      "slot": "0x18",
+      "manager": "0x014f0ae8",
+      "records": {
+        "0x10b3ee38": {
+          "0x0": "A0DE3704",
+          "0x4": "014F0AE8",
+          "0x58": "10731E78"
+        },
+        "0x10731e78": {
+          "0x0": "A0DE3704",
+          "0x4": "014F0AE8",
+          "0x58": "115B9CC8",
+          "0xe8": "0008C023",
+          "0x12c": "0DBF6FB8"
+        },
+        "0x115b9cc8": {
+          "0x0": "A0DE3704",
+          "0x4": "014F0AE8",
+          "0x58": "01DCBE08"
+        },
+        "0x1dcbe08": {
+          "0x0": "A0E54498",
+          "0x4": "014F0AE8",
+          "0x58": "00000000"
+        },
+        "0xdbf6fb8": {
+          "0x0": "A0DDADA8",
+          "0xc": "10731E78",
+          "0x18": "0DC4AA58"
+        },
+        "0xdc4a8f8": {
+          "0x0": "A0DDAE7C",
+          "0x20": "00000000",
+          "0x24": "00000009",
+          "0x28": "00000000",
+          "0x54": "10B3EE38",
+          "0x160": "A0DDAF60"
+        }
+      }
+    },
+    {
+      "name": "houses",
+      "window": "0x10711ca8",
+      "catalogue": "0xdf391c8",
+      "delegate": "0xdbee4a8",
+      "slot": "0x20",
+      "manager": "0x014f0ae8",
+      "records": {
+        "0xdbe13c8": {
+          "0x0": "A0DE3704",
+          "0x4": "014F0AE8",
+          "0x58": "0DBE12A8"
+        },
+        "0xdbe12a8": {
+          "0x0": "A0DE3D88",
+          "0x4": "014F0AE8",
+          "0x58": "10711CA8"
+        },
+        "0x10711ca8": {
+          "0x0": "A0DE3704",
+          "0x4": "014F0AE8",
+          "0x58": "115B9CC8",
+          "0xe8": "0008C023",
+          "0x12c": "0DBEE4A8"
+        },
+        "0x115b9cc8": {
+          "0x0": "A0DE3704",
+          "0x4": "014F0AE8",
+          "0x58": "01DCBE08"
+        },
+        "0x1dcbe08": {
+          "0x0": "A0E54498",
+          "0x4": "014F0AE8",
+          "0x58": "00000000"
+        },
+        "0xdbee4a8": {
+          "0x0": "A0DDB1DC",
+          "0xc": "10711CA8",
+          "0x20": "0DF39328"
+        },
+        "0xdf391c8": {
+          "0x0": "A0DDB290",
+          "0x20": "00000000",
+          "0x24": "00000009",
+          "0x28": "00000000",
+          "0x54": "0DBE13C8",
+          "0x160": "A0DDB374"
+        }
+      }
+    }
+  ]
+}

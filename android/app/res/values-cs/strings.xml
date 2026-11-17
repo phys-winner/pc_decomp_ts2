@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Otočit</string>
+  <string name="place">Umístit</string>
+  <string name="cancel">Zrušit</string>
+  <string name="loading">Načítání The Sims 2…</string>
+  <string name="scale_busy">Hra je zaneprázdněna. Měřítko se nezměnilo; vyberte ho znovu.</string>
+  <string name="interface_settings">Rozhraní hry</string>
+  <string name="close">Zavřít</string>
+  <string name="field_too_long">Pole obsahuje více než 128 znaků. Upravte ho původními ovládacími prvky hry.</string>
+  <string name="edit_text">Text hry</string>
+  <string name="done">Hotovo</string>
+  <string name="invalid_text">Text je příliš dlouhý nebo obsahuje neplatný znak</string>
+  <string name="field_changed">Pole se změnilo. Před zavřením a opětovným otevřením zkopírujte rozepsaný text.</string>
+  <string name="text_cancelled">Zadávání bylo zrušeno před použitím. Před zavřením editoru zkopírujte rozepsaný text.</string>
+  <string name="text_busy">Hra je zaneprázdněna. Text zůstává v editoru.</string>
+  <string name="text_unknown">Výsledek není potvrzen. Zkontrolujte pole ve hře; pokus se automaticky neopakuje.</string>
+  <string name="fill_armed">Výplň je připravena. Uvolněte pro použití; druhý prst nebo Zpět ji zruší.</string>
+  <string name="fill_rejected">Výplň se nepoužila. Vyberte podlahu nebo tapetu a zopakujte gesto.</string>
+  <string name="fill_cancelled">Výplň byla zrušena před provedením.</string>
+  <string name="fill_busy">Hra je zaneprázdněna. Vyplňování nezačalo.</string>
+  <string name="fill_unknown">Výsledek výplně není potvrzen. Zkontrolujte oblast; pokus se automaticky neopakuje.</string>
+  <string name="rotate_rejected">Otočení se neprovedlo. Vyberte předmět a podržte jeho polohu.</string>
+  <string name="rotate_cancelled">Otočení bylo zrušeno před provedením.</string>
+  <string name="rotate_busy">Hra je zaneprázdněna. Otáčení nezačalo.</string>
+  <string name="rotate_unknown">Výsledek otočení není potvrzen. Zkontrolujte předmět; pokus se automaticky neopakuje.</string>
+  <string name="wait_command">Počkejte na dokončení příkazu.</string>
+  <string name="fill_disarmed">Připravená výplň zrušena.</string>
+  <string name="place_hint">Vyberte polohu předmětu a stiskněte Umístit.</string>
+  <string name="choose_tool">Vyberte podporovaný nástroj v rozhraní hry.</string>
+  <string name="fill_changed">Připravená výplň zrušena: nástroj nebo okno se změnilo.</string>
+  <string name="gestures_help">Město a pozemky: tažením posouvejte kameru, sevřením prstů přibližujte a otáčením dvou prstů otáčejte. Seznamy posouvejte tažením. Vyberte polohu předmětu a použijte Otočit, Umístit nebo Zrušit. Podržte vybranou ikonu katalogu pro popis; přetáhněte ji na pozemek pro náhled. Jedním prstem držte polohu a druhým otáčejte předmět. Krátké současné klepnutí dvěma prsty zruší předmět nebo jakýkoli stavební nástroj včetně stěn. Pohyb dvou prstů ovládá kameru; potom znovu vyberte polohu. Podlaha/tapeta: podržte a uvolněte pro vyplnění oblasti. Venku může podlaha vyplnit vnější oblast pozemku. Druhý prst nebo Zpět zruší přípravu. Stavba se provede při uvolnění; přerušení může zanechat částečný výsledek. Podržení ovládacího prvku znamená pravé tlačítko, například zamknutí přání. Současné svislé tažení dvěma prsty naklání kameru. Měřítko rozhraní je v nastavení grafiky. Select zobrazí ovládání gamepadu. Skutečné zvětšení rozhraní se podle potřeby omezuje, aby se okna vešla na obrazovku.</string>
+  <string name="selected_object">Vybraný předmět: %1$s</string>
+  <string name="scale_status">Zvolené měřítko rozhraní: %1$d%% (nastavení hry: %2$d%%)</string>
+  <string name="scale_value">Měřítko rozhraní: %1$d%%</string>
+  <string name="scale_pending">Změna na %1$d%% zatím není potvrzena. Použito: %2$d%%.</string>
+  <string name="image_mismatch">Soubory hry chybí nebo nejsou podporovány. Obnovte Sims2EP9.exe a ijl15.dll z Legacy Collection 2025.</string>
+  <string name="gamepad_help">Levá páčka: ukazatel; A: vybrat, pak umístit; B: zrušit/Zpět; X: pravé tlačítko; Y: pauza. Pravá páčka: kamera; stisknutá: náklon. Spouště: zoom; horní tlačítka: otáčení kamery či předmětu. Směrový kříž: posun seznamu pod ukazatelem. Start: rozhraní; Select: nápověda. Levá páčka stisknutá: přesný ukazatel.</string>
+  <string name="upscale_fallback">FSR 3 není k dispozici (kód %1$d). Používá se FSR 1.</string>
+  <string name="ui_swipe_controls">Ovládat prvky rozhraní tahem</string>
+  <string name="time_controls">Ovládání času</string>
+  <string name="time_swipe_hint">Přejeďte přes hodiny nebo tlačítka rychlosti: doprava pro zrychlení, doleva pro zpomalení až do pozastavení. Stupnice uprostřed ukazuje zvolenou rychlost.</string>
+</resources>

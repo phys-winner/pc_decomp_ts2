@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">Kierrä</string>
+  <string name="place">Sijoita</string>
+  <string name="cancel">Peruuta</string>
+  <string name="loading">Ladataan The Sims 2:ta…</string>
+  <string name="scale_busy">Peli on varattu. Skaalausta ei muutettu; valitse se uudelleen.</string>
+  <string name="interface_settings">Pelin käyttöliittymä</string>
+  <string name="close">Sulje</string>
+  <string name="field_too_long">Kentässä on yli 128 merkkiä. Muokkaa sitä pelin alkuperäisillä toiminnoilla.</string>
+  <string name="edit_text">Pelin teksti</string>
+  <string name="done">Valmis</string>
+  <string name="invalid_text">Teksti on liian pitkä tai sisältää virheellisen merkin</string>
+  <string name="field_changed">Kenttä muuttui. Kopioi luonnos ennen kuin suljet kentän ja avaat sen uudelleen.</string>
+  <string name="text_cancelled">Syöttö peruttiin ennen käyttöönottoa. Kopioi luonnos ennen editorin sulkemista.</string>
+  <string name="text_busy">Peli on varattu. Teksti säilyy editorissa.</string>
+  <string name="text_unknown">Tulosta ei vahvistettu. Tarkista kenttä pelissä; uutta yritystä ei tehdä automaattisesti.</string>
+  <string name="fill_armed">Täyttö on valmis. Vapauta käyttääksesi; toinen sormi tai Takaisin peruuttaa.</string>
+  <string name="fill_rejected">Täyttöä ei tehty. Valitse lattia tai tapetti ja toista ele.</string>
+  <string name="fill_cancelled">Täyttö peruttiin ennen suoritusta.</string>
+  <string name="fill_busy">Peli on varattu. Täyttö ei alkanut.</string>
+  <string name="fill_unknown">Täytön tulosta ei vahvistettu. Tarkista alue; uutta yritystä ei tehdä automaattisesti.</string>
+  <string name="rotate_rejected">Kiertoa ei tehty. Valitse esine ja pidä sen sijainti paikallaan.</string>
+  <string name="rotate_cancelled">Kierto peruttiin ennen suoritusta.</string>
+  <string name="rotate_busy">Peli on varattu. Kierto ei alkanut.</string>
+  <string name="rotate_unknown">Kierron tulosta ei vahvistettu. Tarkista esine; uutta yritystä ei tehdä automaattisesti.</string>
+  <string name="wait_command">Odota komennon valmistumista.</string>
+  <string name="fill_disarmed">Valmisteltu täyttö peruttu.</string>
+  <string name="place_hint">Valitse esineen sijainti ja paina Sijoita.</string>
+  <string name="choose_tool">Valitse tuettu työkalu pelin käyttöliittymästä.</string>
+  <string name="fill_changed">Valmisteltu täyttö peruttiin: työkalu tai ikkuna muuttui.</string>
+  <string name="gestures_help">Kaupunki ja tontit: siirrä kameraa pyyhkäisemällä, zoomaa nipistämällä ja kierrä kahdella sormella. Selaa luetteloita pyyhkäisemällä. Valitse esineen sijainti ja käytä Kierrä-, Sijoita- tai Peruuta-painiketta. Pidä valittua luettelokuvaketta painettuna nähdäksesi kuvauksen; vedä se tontille esikatselua varten. Pidä sijainti yhdellä sormella ja kierrä toisella esinettä. Lyhyt samanaikainen napautus kahdella sormella peruuttaa esineen tai minkä tahansa rakennustyökalun, myös seinät. Kahden sormen liike ohjaa kameraa; valitse sijainti sen jälkeen uudelleen. Lattia/tapetti: pidä painettuna ja vapauta täyttääksesi alueen. Ulkona lattia voi täyttää tontin ulkoalueen. Toinen sormi tai Takaisin peruuttaa valmistelun. Rakennus tapahtuu vapautettaessa; keskeytys voi jättää osittaisen tuloksen. Pitkä painallus tekee oikean napsautuksen, esimerkiksi lukitsee toiveen. Kallista kameraa pyyhkäisemällä kahdella sormella yhdessä pystysuunnassa. Käyttöliittymän skaalaus on grafiikka-asetuksissa. Select näyttää ohjaimen ohjeet. Käyttöliittymän todellista suurennusta rajoitetaan tarvittaessa, jotta ikkunat mahtuvat näytölle.</string>
+  <string name="selected_object">Valittu esine: %1$s</string>
+  <string name="scale_status">Valittu käyttöliittymän skaalaus: %1$d%% (peliasetus: %2$d%%)</string>
+  <string name="scale_value">Käyttöliittymän skaalaus: %1$d%%</string>
+  <string name="scale_pending">Muutosta arvoon %1$d%% ei vielä vahvistettu. Käytössä: %2$d%%.</string>
+  <string name="image_mismatch">Pelitiedostot puuttuvat tai niitä ei tueta. Palauta Legacy Collection 2025:n Sims2EP9.exe ja ijl15.dll.</string>
+  <string name="gamepad_help">Vasen sauva: osoitin; A: valitse, sitten sijoita; B: peruuta/Takaisin; X: oikea napsautus; Y: tauko. Oikea sauva: kamera; painettuna: kallistus. Liipaisimet: zoomaus; olkapainikkeet: kameran tai esineen kierto. Ristiohjain: selaa osoittimen luetteloa. Start: käyttöliittymä; Select: ohje. Vasen sauva painettuna: tarkka osoitin.</string>
+  <string name="upscale_fallback">FSR 3 ei ole käytettävissä (koodi %1$d). Käytetään FSR 1:tä.</string>
+  <string name="ui_swipe_controls">Käyttöliittymän pyyhkäisysäätimet</string>
+  <string name="time_controls">Ajan hallinta</string>
+  <string name="time_swipe_hint">Pyyhkäise kellon tai nopeuspainikkeiden yli: oikealle nopeuttaaksesi, vasemmalle hidastaaksesi ja keskeyttääksesi. Keskellä oleva asteikko näyttää valitun nopeuden.</string>
+</resources>

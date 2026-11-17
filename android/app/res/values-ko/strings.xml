@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">회전</string>
+  <string name="place">배치</string>
+  <string name="cancel">취소</string>
+  <string name="loading">The Sims 2 불러오는 중…</string>
+  <string name="scale_busy">게임이 처리 중입니다. 배율이 변경되지 않았습니다. 다시 선택하세요.</string>
+  <string name="interface_settings">게임 인터페이스</string>
+  <string name="close">닫기</string>
+  <string name="field_too_long">이 입력란은 128자를 초과합니다. 게임의 원래 조작으로 편집하세요.</string>
+  <string name="edit_text">게임 텍스트</string>
+  <string name="done">완료</string>
+  <string name="invalid_text">텍스트가 너무 길거나 잘못된 문자가 포함되어 있습니다</string>
+  <string name="field_changed">입력란이 변경되었습니다. 닫고 다시 열기 전에 초안을 복사하세요.</string>
+  <string name="text_cancelled">적용 전에 입력이 취소되었습니다. 편집기를 닫기 전에 초안을 복사하세요.</string>
+  <string name="text_busy">게임이 처리 중입니다. 텍스트는 편집기에 남아 있습니다.</string>
+  <string name="text_unknown">결과가 확인되지 않았습니다. 게임에서 입력란을 확인하세요. 자동으로 다시 시도하지 않습니다.</string>
+  <string name="fill_armed">영역 채우기가 준비되었습니다. 손을 떼면 적용됩니다. 두 번째 손가락이나 뒤로 버튼으로 취소하세요.</string>
+  <string name="fill_rejected">채우기가 적용되지 않았습니다. 바닥이나 벽지를 선택하고 동작을 반복하세요.</string>
+  <string name="fill_cancelled">실행 전에 채우기가 취소되었습니다.</string>
+  <string name="fill_busy">게임이 처리 중입니다. 채우기가 시작되지 않았습니다.</string>
+  <string name="fill_unknown">채우기 결과가 확인되지 않았습니다. 영역을 확인하세요. 자동으로 다시 시도하지 않습니다.</string>
+  <string name="rotate_rejected">회전이 적용되지 않았습니다. 물건을 선택하고 위치를 유지하세요.</string>
+  <string name="rotate_cancelled">실행 전에 회전이 취소되었습니다.</string>
+  <string name="rotate_busy">게임이 처리 중입니다. 회전이 시작되지 않았습니다.</string>
+  <string name="rotate_unknown">회전 결과가 확인되지 않았습니다. 물건을 확인하세요. 자동으로 다시 시도하지 않습니다.</string>
+  <string name="wait_command">명령이 완료될 때까지 기다리세요.</string>
+  <string name="fill_disarmed">준비된 채우기가 취소되었습니다.</string>
+  <string name="place_hint">물건의 위치를 선택한 다음 배치를 누르세요.</string>
+  <string name="choose_tool">게임 인터페이스에서 지원되는 도구를 선택하세요.</string>
+  <string name="fill_changed">도구나 창이 변경되어 준비된 채우기가 취소되었습니다.</string>
+  <string name="gestures_help">도시와 부지: 밀어서 카메라 이동, 두 손가락을 모으거나 벌려 확대/축소, 비틀어 회전합니다. 목록은 밀어서 스크롤합니다. 물건의 위치를 선택한 다음 회전, 배치 또는 취소를 누르세요. 선택된 카탈로그 아이콘을 길게 누르면 설명이 나옵니다. 부지로 끌면 미리 보기가 표시됩니다. 한 손가락으로 위치를 유지하고 다른 손가락을 돌리면 물건이 회전합니다. 두 손가락으로 짧게 동시에 누르면 물건이나 벽을 포함한 모든 건축 도구를 취소합니다. 두 손가락 이동은 카메라를 조작합니다. 이후 위치를 다시 선택하세요. 바닥/벽지: 길게 누른 후 떼면 영역을 채웁니다. 실외에서는 부지의 실외 영역이 바닥으로 채워질 수 있습니다. 두 번째 손가락이나 뒤로 버튼으로 준비를 취소합니다. 건축은 손을 뗄 때 적용되며 중단하면 일부 결과가 남을 수 있습니다. 조작 요소를 길게 누르면 오른쪽 클릭이 되어 소망 고정 등에 사용됩니다. 두 손가락을 함께 세로로 밀면 카메라가 기울어집니다. UI 배율은 그래픽 설정에서 변경하세요. 게임패드의 Select로 조작 도움말을 엽니다. 창이 화면에 맞도록 필요할 때 실제 인터페이스 확대 배율이 제한됩니다.</string>
+  <string name="selected_object">선택한 물건: %1$s</string>
+  <string name="scale_status">선택한 인터페이스 배율: %1$d%% (게임 설정: %2$d%%)</string>
+  <string name="scale_value">인터페이스 배율: %1$d%%</string>
+  <string name="scale_pending">%1$d%% 변경이 아직 확인되지 않았습니다. 적용됨: %2$d%%.</string>
+  <string name="image_mismatch">게임 파일이 없거나 지원되지 않습니다. Legacy Collection 2025의 Sims2EP9.exe와 ijl15.dll을 복원하세요.</string>
+  <string name="gamepad_help">왼쪽 스틱: 포인터; A: 선택 후 배치; B: 취소/뒤로; X: 오른쪽 클릭; Y: 일시 정지. 오른쪽 스틱: 카메라; 누른 채 이동: 기울이기. 트리거: 확대/축소; 범퍼: 카메라 또는 물건 회전. 방향 패드: 포인터 아래 목록 스크롤. Start: 인터페이스 설정; Select: 도움말. 왼쪽 스틱 누르기: 정밀 포인터.</string>
+  <string name="upscale_fallback">FSR 3을 사용할 수 없습니다(코드 %1$d). FSR 1을 사용합니다.</string>
+  <string name="ui_swipe_controls">스와이프로 UI 조작</string>
+  <string name="time_controls">시간 조작</string>
+  <string name="time_swipe_hint">시계나 속도 버튼 위를 스와이프하세요. 오른쪽으로 밀면 빨라지고, 왼쪽으로 밀면 느려지다가 일시 정지됩니다. 중앙 눈금에 선택한 속도가 표시됩니다.</string>
+</resources>

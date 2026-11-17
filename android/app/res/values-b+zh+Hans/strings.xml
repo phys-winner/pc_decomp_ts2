@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="rotate">旋转</string>
+  <string name="place">放置</string>
+  <string name="cancel">取消</string>
+  <string name="loading">正在载入《模拟人生2》…</string>
+  <string name="scale_busy">游戏正忙。缩放比例未更改，请重新选择。</string>
+  <string name="interface_settings">游戏界面</string>
+  <string name="close">关闭</string>
+  <string name="field_too_long">此输入框超过128个字符。请使用游戏原有操作进行编辑。</string>
+  <string name="edit_text">游戏文本</string>
+  <string name="done">完成</string>
+  <string name="invalid_text">文本过长或包含无效字符</string>
+  <string name="field_changed">输入框已改变。关闭并重新打开前，请复制草稿。</string>
+  <string name="text_cancelled">输入在应用前已取消。关闭编辑器前，请复制草稿。</string>
+  <string name="text_busy">游戏正忙。文本仍保留在编辑器中。</string>
+  <string name="text_unknown">结果尚未确认。请检查游戏中的输入框，不会自动重试。</string>
+  <string name="fill_armed">区域填充已准备好。松手即可应用；第二根手指或返回键可取消。</string>
+  <string name="fill_rejected">填充未应用。请选择地板或壁纸后重复操作。</string>
+  <string name="fill_cancelled">填充在执行前已取消。</string>
+  <string name="fill_busy">游戏正忙。填充尚未开始。</string>
+  <string name="fill_unknown">填充结果尚未确认。请检查该区域，不会自动重试。</string>
+  <string name="rotate_rejected">旋转未应用。请选择物品并保持其位置。</string>
+  <string name="rotate_cancelled">旋转在执行前已取消。</string>
+  <string name="rotate_busy">游戏正忙。旋转尚未开始。</string>
+  <string name="rotate_unknown">旋转结果尚未确认。请检查物品，不会自动重试。</string>
+  <string name="wait_command">请等待命令完成。</string>
+  <string name="fill_disarmed">已取消准备中的填充。</string>
+  <string name="place_hint">请选择物品位置，再按“放置”。</string>
+  <string name="choose_tool">请在游戏界面选择支持的工具。</string>
+  <string name="fill_changed">工具或窗口已改变，已取消准备中的填充。</string>
+  <string name="gestures_help">城镇和地段：滑动可移动镜头，双指捏合可缩放，双指扭转可旋转。滑动列表可滚动。选择物品位置后使用“旋转”“放置”或“取消”。长按已选中的目录图标可查看说明，拖到地段上可预览。一根手指保持位置，另一根手指转动可旋转物品。双指同时短按可取消物品或任何建筑工具，包括墙壁。双指移动控制镜头，之后需重新选择物品位置。地板和壁纸：长按再松手可填充区域。在户外，地板可能填满地段的室外区域。第二根手指或返回键可取消准备。建筑操作在松手时应用，中断后可能保留部分结果。长按控件相当于右键，可用于锁定期望等操作。双指一起上下滑动可倾斜镜头。界面缩放位于图形设置中。手柄的Select键显示操作帮助。 为确保窗口完整显示在屏幕内，必要时会限制界面的实际放大比例。</string>
+  <string name="selected_object">所选物品：%1$s</string>
+  <string name="scale_status">所选界面缩放：%1$d%%（游戏设置：%2$d%%）</string>
+  <string name="scale_value">界面缩放：%1$d%%</string>
+  <string name="scale_pending">更改为%1$d%%尚未确认。目前已应用：%2$d%%。</string>
+  <string name="image_mismatch">游戏文件缺失或不受支持。请恢复Legacy Collection 2025的Sims2EP9.exe和ijl15.dll。</string>
+  <string name="gamepad_help">左摇杆：指针；A：选择后放置；B：取消/返回；X：右键；Y：暂停。右摇杆：镜头移动；按住摇杆：倾斜。扳机：缩放；肩键：旋转镜头或物品。方向键：滚动指针下的列表。Start：界面设置；Select：帮助。按住左摇杆：精细移动指针。</string>
+  <string name="upscale_fallback">FSR 3不可用（代码%1$d）。正在使用FSR 1。</string>
+  <string name="ui_swipe_controls">滑动操作界面控件</string>
+  <string name="time_controls">时间控制</string>
+  <string name="time_swipe_hint">在时钟或速度按钮上滑动：向右加速，向左减速直至暂停。中央刻度会显示所选速度。</string>
+</resources>
