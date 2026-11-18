@@ -10,7 +10,7 @@ from check_touch import JDK, ROOT
 
 STUBS = {
     'android/content/Context.java': 'package android.content; public class Context {public static final int MODE_PRIVATE=0;public String getString(int r){return "warning";}final android.content.SharedPreferences p=new android.content.SharedPreferences();public android.content.SharedPreferences getSharedPreferences(String n,int mode){return p;}}',
-    'android/content/SharedPreferences.java': 'package android.content; public class SharedPreferences {java.util.Map<String,Boolean> values=new java.util.HashMap<>();public boolean getBoolean(String k,boolean v){return values.getOrDefault(k,v);}public SharedPreferences edit(){return this;}public SharedPreferences putBoolean(String k,boolean v){values.put(k,v);return this;}public void apply(){}}',
+    'android/content/SharedPreferences.java': 'package android.content; public class SharedPreferences {java.util.Map<String,Object> values=new java.util.HashMap<>();public boolean getBoolean(String k,boolean v){return (Boolean)values.getOrDefault(k,v);}public int getInt(String k,int v){return (Integer)values.getOrDefault(k,v);}public SharedPreferences edit(){return this;}public SharedPreferences putBoolean(String k,boolean v){values.put(k,v);return this;}public SharedPreferences putInt(String k,int v){values.put(k,v);return this;}public void apply(){}}',
     'android/os/Environment.java': 'package android.os; public class Environment {public static java.io.File getExternalStorageDirectory(){return new java.io.File(System.getProperty("java.io.tmpdir"));}}',
     'org/sims2/port/launcher/PortHooks.java': 'package org.sims2.port.launcher; public interface PortHooks {void migrate(android.content.Context c);default CharSequence optionWarning(android.content.Context c,String k,String v){return null;}}',
     'org/sims2/port/launcher/Launch.java': '''package org.sims2.port.launcher;
@@ -38,6 +38,13 @@ public class PreferencesCheck {public static void main(String[] args){
  assert GamePreferences.uiSwipeControls();GamePreferences.initControls(c);assert GamePreferences.uiSwipeControls();
  GamePreferences.uiSwipeControls(false);assert !GamePreferences.uiSwipeControls();GamePreferences.initControls(c);assert !GamePreferences.uiSwipeControls();GamePreferences.uiSwipeControls(true);assert GamePreferences.uiSwipeControls();
  assert !GamePreferences.timeHintShown();GamePreferences.markTimeHintShown();assert GamePreferences.timeHintShown()&&GamePreferences.uiSwipeControls();GamePreferences.initControls(c);assert GamePreferences.timeHintShown();
+ assert GamePreferences.targetRadius()==16&&GamePreferences.targetRadius()*3==GamePreferences.MAX_TARGET_RADIUS;
+ assert !GamePreferences.targetRadiusHintShown();GamePreferences.markTargetRadiusHintShown();
+ GamePreferences.initControls(c);assert GamePreferences.targetRadiusHintShown();
+ GamePreferences.targetRadius(24);
+ GamePreferences.initControls(c);assert GamePreferences.targetRadius()==24;
+ GamePreferences.targetRadius(-1);assert GamePreferences.targetRadius()==4;
+ GamePreferences.targetRadius(100);assert GamePreferences.targetRadius()==48;
  assert prefs.optionWarning(c,"adaptive_ui","0")==null&&prefs.optionWarning(c,"ui_fsr","1")==null;
  assert prefs.optionWarning(c,"adaptive_ui","1")==null;
  prefs.migrate(c);assert Launch.choices.isEmpty();

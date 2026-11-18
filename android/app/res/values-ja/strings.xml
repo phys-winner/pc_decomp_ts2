@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">スワイプで UI を操作</string>
   <string name="time_controls">時間の操作</string>
   <string name="time_swipe_hint">時計または速度ボタンの上をスワイプすると、右で加速、左で減速して一時停止できます。中央の目盛りに選択した速度が表示されます。</string>
+  <string name="choose_target">対象を選択</string>
+  <string name="target_ground">地面</string>
+  <string name="target_object">オブジェクト %1$d</string>
+  <string name="target_changed">対象が移動しました。もう一度タップしてください。</string>
 </resources>

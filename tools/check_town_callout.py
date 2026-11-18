@@ -131,7 +131,7 @@ def source(touch_source, current):
 def run_arm(path, output, current, image, image_base):
     output.mkdir(parents=True, exist_ok=True); cfile, binary = output / 'check.c', output / 'check.elf'
     cfile.write_text(source(path, current), encoding='utf-8')
-    subprocess.run([str(B.CLANG), *B.COMMON, '-O2', '-fno-builtin', '-fno-stack-protector', '-nostdlib',
+    subprocess.run([str(B.CLANG), *B.COMMON, '-O2', '-mno-outline-atomics', '-fno-builtin', '-fno-stack-protector', '-nostdlib',
         '-Iandroid/host', '-Iandroid/runtime', '-Wl,--gc-sections,-e,selftest', str(cfile), '-o', str(binary)], check=True)
     elf = ELFFile(io.BytesIO(binary.read_bytes())); symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM);base,guest,stack,stop=0x10000000,0x2000000000,0x50000000,0x60000000

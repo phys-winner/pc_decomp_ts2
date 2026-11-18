@@ -91,4 +91,11 @@
   <string name="swipe_collar">Halsband</string>
   <string name="swipe_coat">Fellfarben und Muster</string>
   <string name="swipe_body">Körperbau</string>
+  <string name="choose_target">Ziel auswählen</string>
+  <string name="target_ground">Boden</string>
+  <string name="target_object">Objekt %1$d</string>
+  <string name="target_changed">Das Ziel hat sich bewegt. Tippe erneut.</string>
+    <string name="target_area_diameter">Durchmesser des Tippbereichs: %1$d px</string>
+    <string name="target_area_label">Tippbereich</string>
+    <string name="target_area_hint">Der Regler ändert, wie weit das Spiel um die Tippstelle nach Objekten sucht. Der Kreis zeigt den Suchbereich.</string>
 </resources>

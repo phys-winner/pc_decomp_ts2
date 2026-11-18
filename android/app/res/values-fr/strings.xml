@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Balayer les commandes de l’interface</string>
   <string name="time_controls">Contrôle du temps</string>
   <string name="time_swipe_hint">Glissez sur la pendule ou les boutons de vitesse : vers la droite pour accélérer, vers la gauche pour ralentir et mettre en pause. La jauge au centre indique la vitesse choisie.</string>
+  <string name="choose_target">Choisir une cible</string>
+  <string name="target_ground">Sol</string>
+  <string name="target_object">Objet %1$d</string>
+  <string name="target_changed">La cible a bougé. Touchez de nouveau.</string>
 </resources>

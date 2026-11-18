@@ -43,9 +43,10 @@ static uint64_t shown_swipe;
 #define atomic_load(p) (*(p))
 #define atomic_fetch_add(p,v) ((*(p)+=(v))-(v))
 static void void_log(const char *s,...){(void)s;}
-static unsigned fixture_menu,fixture_chooser,fixture_hidden_vertical;
+static unsigned fixture_menu,fixture_chooser,fixture_hidden_vertical,fixture_rewards;
 static uint32_t win_manager=0x11000,last_id,scene_owner,scene_window,town_camera,last_world_context,tool_handler;
 static unsigned s2_touch_context(void){return context;}
+static int s2_touch_rewards(void){return fixture_rewards!=0;}
 static unsigned s2_touch_layout_epoch(void){return epoch;}
 static uint32_t s2_touch_owner_manager(void){return owner?win_manager:0;}
 static int touch_layout_matches(unsigned c,uint64_t size,unsigned e){return c==context&&size==((uint64_t)600<<32|1300)&&e==epoch;}
@@ -94,7 +95,7 @@ static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int n,const uint3
 API void reset(unsigned group,unsigned selected){
  shown_swipe=0;swipe_sequence=0;
  context=128;epoch=3;owner=1;notified=reentry=picks=toggles=0;last_id=0;
- fixture_menu=fixture_chooser=fixture_hidden_vertical=0;MEM32(0x11034)=0;MEM32(0x12000)=0xA0DE3704u;
+ fixture_menu=fixture_chooser=fixture_hidden_vertical=fixture_rewards=0;MEM32(0x11034)=0;MEM32(0x12000)=0xA0DE3704u;
  scene_owner=0x18100;scene_window=0x18000;town_camera=tool_handler=last_world_context=0;
  MEM32(0x18000)=0xA0E54498u;MEM32(0x18004)=win_manager;MEM32(0x18010)=0x480E8304u;MEM32(0x18058)=0x12000;MEM32(0x180E8)=3;
  MEM32(0x17404)=0xA0E53EECu;MEM32(0x17408)=win_manager;MEM32(0x17414)=0x37D82A93u;MEM32(0x1745C)=0x17000;MEM32(0x174EC)=1;
@@ -142,6 +143,18 @@ API unsigned chooser_window(void){return touch_chooser_window(0x12000);}
 API int chooser_scroll(int amount,unsigned c,uint64_t size,unsigned e){return touch_catalog_apply(916,278,amount,0,c,size,e);}
 API unsigned classify_owner(void){int index;return touch_swipe_group(0x13000,&index);}
 API unsigned vertical_band(int x,int y){return touch_vertical_band(0x12000,x,y);}
+API void rewards(void){context=S2_TOUCH_BUY;fixture_rewards=1;}
+API void primary_strip(unsigned id,unsigned selected){
+ reset(1,selected);fixture_menu=1;
+ MEM32(0x13000)=0xA0DE3D88u;MEM32(0x13010)=id;
+ MEM32(0x13024)=400;MEM32(0x13028)=0;MEM32(0x1302C)=500;MEM32(0x13030)=250;
+ for(unsigned n=0;n<9;++n){
+  uint32_t b=button(n);
+  if(n>=5 || (id==0x31D5BA3Au && n>=4))MEM32(b+0x10)=MEM32(b+0xE8)=0;
+  MEM32(b+0x24)=410;MEM32(b+0x2C)=440;
+  MEM32(b+0x28)=n*40;MEM32(b+0x30)=n*40+27;
+ }
+}
 API unsigned band(int x,int y){return touch_time_band(0x12000,x,y);}
 API unsigned root_clock(void){uint32_t id=0x37D82A93u;return void_call_guest_this(MEM32(MEM32(0x12000)+0x9C),0x12000,1,&id);}
 API int band_scroll(int x,int y,int amount){return touch_catalog_apply(x,y,amount,0,context,((uint64_t)600<<32|1300),epoch);}
@@ -200,7 +213,7 @@ def original_button_notifications(image):
 def main():
     source=(ROOT/'android/host/sims2_touch.c').read_text()
     actual=source[source.index('static const uint32_t touch_swipe_ids'):source.index('static const uint32_t *touch_vertical_set')]
-    actual+='\n'.join(function(source,s) for s in ('static const char *touch_type(uint32_t object)\n{','static int touch_ui_button(','static const uint32_t *touch_vertical_set(','static int touch_swipe_group(','static int touch_swipe_owner(','static uint32_t touch_vertical_band(','static int touch_time_index(','static unsigned touch_time_state(','static uint32_t touch_time_band(','static int touch_swipe_apply(','static int touch_town_navigation(','static int touch_catalog_apply(', 'uint64_t s2_touch_swipe_feedback('))
+    actual+='\n'.join(function(source,s) for s in ('static const char *touch_type(uint32_t object)\n{','static int touch_ui_button(','static int touch_live_hud_context(','static const uint32_t *touch_vertical_set(','static int touch_swipe_group(','static int touch_swipe_owner(','static uint32_t touch_vertical_band(','static int touch_time_index(','static unsigned touch_time_state(','static uint32_t touch_time_band(','static int touch_swipe_apply(','static int touch_town_navigation(','static int touch_catalog_apply(', 'uint64_t s2_touch_swipe_feedback('))
     pe=pefile.PE(str(ROOT/'generated/input/Sims2EP9.exe'));image=pe.get_memory_mapped_image()
     for table,name in [(0xA0E54B18,b'.?AVcGZWinFlatRect@@'),(0xA0DE3D88,b'.?AVcTSWinFlatRectTransp@@')]:
         locator=struct.unpack_from('<I',image,table-pe.OPTIONAL_HEADER.ImageBase-4)[0]
@@ -263,6 +276,13 @@ def main():
                 assert not lib.vertical_band(420,10), reenter
             lib.vertical_setup(0,1)
             assert lib.apply(1,1,128,size,3)==1 and lib.last()==0x80000000, 'sort the actual tabs by Y, including Hobbies'
+            lib.vertical_setup(0,1);lib.change(256,3,0,1)
+            assert not lib.vertical_band(420,65), 'ordinary Buy leaves Live tabs inactive'
+            lib.rewards()
+            assert lib.vertical_band(420,65), 'the gap in the Live tab strip remains active in Rewards'
+            assert lib.band_scroll(420,65,1) and lib.last()==0x80000000
+            lib.change(256|1,3,0,1)
+            assert not lib.vertical_band(420,65), 'a modal owns touches even in Rewards'
             lib.vertical_setup(2,0);lib.change(4|1024,3,0,1)
             assert lib.classify(0)==4 and lib.apply(0,1,4|1024,size,3)==1, 'CAS tabs stay usable while the name field owns focus'
             lib.vertical_setup(0,0);lib.change(128|1024,3,0,1)
@@ -310,6 +330,17 @@ def main():
                     lib.reset(1,2);lib.write32(0x13000,table);lib.write32(0x13010,holder);lib.write32(0x130E8,3)
                     assert lib.classify_window(0x13000)==2 and lib.apply_window(0x13000,1,128,size,3)
                     assert lib.last()==ids[1][3]
+            for holder,count in [(0xA94E97E8,5),(0xA94E97F4,5),(0x31D5BA3A,4)]:
+                lib.primary_strip(holder,count-1)
+                if count==5:lib.rewards()
+                for selected in reversed(range(1,count)):
+                    assert lib.vertical_band(420,selected*40-5), (holder,selected)
+                    assert lib.band_scroll(420,selected*40-5,-1)
+                    assert lib.last()==ids[1][selected-1]
+                assert lib.notices()==count-1 and lib.band_scroll(420,12,-1) and lib.notices()==count-1
+                assert not lib.vertical_band(450,52)
+                lib.write32(0x130E8,0)
+                assert not lib.vertical_band(420,52)
             for age in [0x2E9AF844,0x2E9AF849]:
                 for table in [0xA0E54B18,0xA0DE3D88]:
                     lib.reset(0,1);lib.write32(0x15404,table);lib.write32(0x15414,age);lib.write32(0x1545C,0x13400)

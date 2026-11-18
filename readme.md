@@ -1,6 +1,6 @@
 # The Sims 2 Legacy for ARM64 Android
 
-Development release: **0.1-dev**.
+Development build: **0.1.1-dev**.
 
 An unofficial Android port of the PC version of **The Sims 2 Legacy Collection**.
 The original x86 executable is statically recompiled to C and built for ARM64,
@@ -62,6 +62,10 @@ requirements are additional to the minimum Android version.
    in the background with progress and cancellation. For ZIP installations the
    converted cache stays in the separate sidecar; the original ZIP is never changed.
 
+The launcher accepts game files on a mounted SD card. Select the installed
+folder or ZIP from the card in **Game files**. For FAT32 cards, copy the game
+folder because FAT32 cannot hold a single ZIP of 4 GiB or more.
+
 The engine reads the original EXE/DLL directly from the selected game installation.
 Port resources are installed into private app storage automatically. A separate
 `lifted` folder or manually copied resource overlay is unnecessary.
@@ -79,8 +83,12 @@ an existing installation in place.
 
 ## Controls and settings
 
-- Tap to interact. Drag one finger to pan the town or lot camera; pinch to zoom,
-  twist two fingers to rotate, and move two fingers vertically to tilt.
+- Tap to interact. In Live Mode a tap checks a small area for nearby targets.
+  A single object opens its actions immediately. With several objects, choose
+  one from the list, which also includes the ground if the tap area hits it.
+  A tap on the ground alone opens its actions directly.
+- Drag one finger to pan the town or lot camera. Pinch to zoom, twist to rotate,
+  and move two fingers vertically to tilt.
 - Drag a Buy/Build catalog object onto the lot to preview it. The on-screen
   rotate, confirm and cancel buttons control placement; releasing a drag does
   not purchase the object. A brief two-finger world tap cancels selection.
@@ -239,19 +247,20 @@ python -X utf8 -B tools/build_game_apk.py --skip-native --install --serial DEVIC
 
 ## Local release artifacts
 
-Version `0.1-dev` is stored in `android/app/AndroidManifest.xml`. Its version code
-remains `2` to retain update compatibility with the existing development APK;
-increase the code for subsequent published updates.
+Version `0.1.1-dev` and version code `3` are stored in
+`android/app/AndroidManifest.xml`. Increase the code for subsequent published updates.
 
-Commit the reviewed source before packaging so that the launcher's
-`assets/launcher/build.json` records that source commit. Use the same convention
-as the sibling Heroes V port: **`pub/sims2-0.1-dev-COMMIT.apk`**, where `COMMIT`
-is the first eight characters of the Git commit, with a matching `.apk.sha256`:
+Package a published release from its reviewed commit so that the launcher's
+`assets/launcher/build.json` records that source commit. Name the artifact
+**`pub/sims2-0.1.1-dev-COMMIT.apk`**, where `COMMIT`
+is the first eight characters of the Git commit, with a matching `.apk.sha256`.
+For a local build with uncommitted changes, append `-dirty` to the commit suffix.
 
 ```powershell
 python -X utf8 -B tools/build_game_apk.py --skip-native
 $sims2Commit = git rev-parse --short=8 HEAD
-$sims2ApkName = "sims2-0.1-dev-$sims2Commit.apk"
+if (git status --porcelain) { $sims2Commit += "-dirty" }
+$sims2ApkName = "sims2-0.1.1-dev-$sims2Commit.apk"
 New-Item -ItemType Directory -Force pub | Out-Null
 Copy-Item build/android-game/sims2.apk (Join-Path pub $sims2ApkName)
 $sims2Hash = (Get-FileHash (Join-Path pub $sims2ApkName) -Algorithm SHA256).Hash.ToLowerInvariant()

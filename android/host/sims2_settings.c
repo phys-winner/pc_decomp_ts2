@@ -40,6 +40,7 @@ static uint32_t ui_fit_lot_info;
 static unsigned ui_option_resize_depth;
 static unsigned ui_lot_info_refresh_depth;
 static unsigned touch_modal_depth, touch_mode_flags;
+static unsigned ui_pie_depth;
 static unsigned touch_input_flags;
 static uint32_t touch_mode_owner;
 static _Atomic unsigned touch_context;
@@ -229,6 +230,8 @@ void s2_fit_tick(void)
         ui_fit_linger = 0;
         ui_layout_pending = 1;
     }
+    /* The pie menu lays out around the cursor in the current logical coordinates. */
+    if (ui_pie_depth) return;
     double factor = ui_desired_factor();
     if (!ui_layout_pending && factor == ui_applied_factor) return;
     uint32_t manager = s2_touch_owner_manager();
@@ -308,6 +311,36 @@ void sub_A09713BE(void)
     g_esp += 8;
 }
 
+void sub_A05CA399_lifted(void);
+void sub_A05CA399(void)
+{
+    uint32_t menu = g_ecx, rect = MEM32(g_esp + 4), manager = MEM32(menu + 4);
+    uint32_t root = manager && void_vm_readable(manager, 0x48) ? MEM32(manager + 0x44) : 0;
+    if (ui_applied_factor == 1.0 || !void_vm_readable(root, 0x34)) {
+        sub_A05CA399_lifted();
+        return;
+    }
+    /* The original multiplies the edge correction by the UI scale, then adds it to logical coordinates. */
+    int left = (int)MEM32(rect), top = (int)MEM32(rect + 4);
+    int right = (int)MEM32(rect + 8), bottom = (int)MEM32(rect + 12);
+    int margin_x = (int)MEM32(menu + 0x118), margin_y = (int)MEM32(menu + 0x11C);
+    int min_x = (int)MEM32(root + 0x24) + margin_x, min_y = (int)MEM32(root + 0x28) + margin_y;
+    int max_x = (int)MEM32(root + 0x2C) - margin_x, max_y = (int)MEM32(root + 0x30) - margin_y;
+    int dx = left < min_x ? min_x - left : right > max_x ? max_x - right : 0;
+    int dy = top < min_y ? min_y - top : bottom > max_y ? max_y - bottom : 0;
+    uint32_t bounds[] = { left + dx, top + dy, right + dx, bottom + dy };
+    for (unsigned i = 0; i < 4; ++i) MEM32(rect + 4 * i) = bounds[i];
+    void_regs saved;
+    void_regs_save(&saved);
+    void_call_guest_this(0xA0932914u, menu, 4, bounds);
+    void_regs_load(&saved);
+    MEM32(menu + 0x110) = MEM32(menu + 0x108);
+    MEM32(menu + 0x114) = MEM32(menu + 0x10C);
+    MEM32(menu + 0x108) += dx;
+    g_eax = (MEM32(menu + 0x10C) += dy);
+    g_esp += 8;
+}
+
 static int ui_modal_gen(uint32_t window)
 {
     uint32_t table = MEM32(window);
@@ -382,22 +415,24 @@ void sub_A0972F48_lifted(void);
 void sub_A0972F48(void)
 {
     uint32_t window = MEM32(g_esp + 4);
+    int pie = void_vm_readable(window, 4) && MEM32(window) == 0xA0DDA24Cu;
     /* A dialog right after a fitted one fits only by its size: it continues
      * the fit instead (no resize now, and none to a floor in between). */
     /* Story procs stay attached after Close; fit only their RunModal lifetime. */
-    int fit = ui_fit_linger || ui_story_window(g_ecx, window) || !ui_modal_fits(g_ecx, window);
+    int fit = !pie && (ui_fit_linger || ui_story_window(g_ecx, window) || !ui_modal_fits(g_ecx, window));
     int saved_right = ui_modal_floor_right, saved_bottom = ui_modal_floor_bottom;
-    if (!fit) {
+    if (!fit && !pie) {
         int right = (int)MEM32(window + 0x2C), bottom = (int)MEM32(window + 0x30);
         if (right > ui_modal_floor_right) ui_modal_floor_right = right;
         if (bottom > ui_modal_floor_bottom) ui_modal_floor_bottom = bottom;
     }
+    if (pie) ++ui_pie_depth;
     ++touch_modal_depth;
     touch_publish();
     if (fit) { void_log("[fit] modal open %08X (depth %u)", window, ui_fit_depth + 1); ui_fit(1, 1); }
     sub_A0972F48_lifted();
     if (fit) { void_log("[fit] modal close %08X (depth %u)", window, ui_fit_depth ? ui_fit_depth - 1 : 0); ui_fit(0, 1); }
-    else {
+    else if (!pie) {
         int old_w, old_h, new_w, new_h;
         s2_game_resolution(&old_w, &old_h);
         ui_modal_floor_right = saved_right;
@@ -405,6 +440,7 @@ void sub_A0972F48(void)
         s2_game_resolution(&new_w, &new_h);
         if (new_w != old_w || new_h != old_h) s2_ui_scale_requested(ui_scale);
     }
+    if (pie) --ui_pie_depth;
     --touch_modal_depth;
     touch_publish();
 }

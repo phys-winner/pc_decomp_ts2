@@ -65,7 +65,7 @@ API void response(unsigned yes,float value,unsigned mutation){found=yes;distance
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source',type=Path,default=ROOT/'android/host/sims2_touch.c')
+    parser.add_argument('--source',type=Path,required=True,help='historical source with per-touch surface picking')
     args=parser.parse_args()
     actual=function(args.source.read_text(),'static int touch_lot_surface(')
     oracle=original_camera();rng=random.Random(20261109)

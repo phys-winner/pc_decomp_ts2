@@ -55,6 +55,7 @@ static void clamp(void){
 }
 static void void_input_mouse_move(int dx,int dy){++moves;cursor_x+=dx;cursor_y+=dy;clamp();}
 static void void_input_mouse_warp(int x,int y){++warps;cursor_x=x;cursor_y=y;clamp();}
+void s2_touch_camera_pointer_intent(void){}
 unsigned s2_touch_context(void){return context;}
 int s2_touch_pick(int x,int y){++picks;picked_x=x;picked_y=y;return mock_area;}
 static unsigned query_prectx_logs;

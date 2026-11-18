@@ -38,6 +38,12 @@ float expf(float x){bad=209;return x;}
 float sinf(float x){bad=209;return x;}
 float cosf(float x){bad=209;return x;}
 float sqrtf(float x){bad=209;return x;}
+float fminf(float x,float y){return x<y?x:y;}
+float fmaxf(float x,float y){return x>y?x:y;}
+void_fn void_dispatch_find(uint32_t va){(void)va;bad=209;return NULL;}
+double fmax(double x,double y){return x>y?x:y;}
+double fabs(double x){return x<0?-x:x;}
+long lround(double x){return (long)(x<0?x-.5:x+.5);}
 static void drive(void);
 double s2_ui_factor(void){return 1;}
 uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}
@@ -69,6 +75,7 @@ void void_wait_broadcast(void){}
 void void_input_cursor(uint32_t *x,uint32_t *y){*x=700;*y=500;}
 uint32_t void_window_main(void){return main_window;}
 unsigned s2_touch_context(void){return context|input_context;}
+int s2_touch_rewards(void){return 0;}
 void s2_touch_input_context(unsigned f){input_context=f;}
 int void_vm_readable(uint32_t a,uint32_t n){return a>=0x10000 && (uint64_t)a+n<=0x30000;}
 int void_vm_writable(uint32_t a,uint32_t n){return void_vm_readable(a,n);}
@@ -240,7 +247,7 @@ def main():
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     base, guest, stack, stop = 0x10000000, 0x2000000000, 0x50000000, 0x60000000
     uc.mem_map(base, 0x1000000); uc.mem_map(guest + 0x10000, 0x20000)
-    uc.mem_map(stack, 0x10000); uc.mem_map(stop, 0x1000)
+    uc.mem_map(stack, 0x100000); uc.mem_map(stop, 0x1000)
     for segment in elf.iter_segments():
         if segment['p_type'] == 'PT_LOAD': uc.mem_write(base + segment['p_vaddr'], segment.data())
     relocations = elf.get_section_by_name('.rela.dyn')
@@ -248,7 +255,7 @@ def main():
         for r in relocations.iter_relocations():
             assert r['r_info_type'] == 1027
             uc.mem_write(base + r['r_offset'], (base + r['r_addend']).to_bytes(8, 'little'))
-    uc.reg_write(A.UC_ARM64_REG_TPIDR_EL0, stack + 0x100); uc.reg_write(A.UC_ARM64_REG_SP, stack + 0xF000); uc.reg_write(A.UC_ARM64_REG_LR, stop)
+    uc.reg_write(A.UC_ARM64_REG_TPIDR_EL0, stack + 0x100); uc.reg_write(A.UC_ARM64_REG_SP, stack + 0xFF000); uc.reg_write(A.UC_ARM64_REG_LR, stop)
     uc.emu_start(base + symbols['selftest'], stop, count=10000000)
     assert uc.reg_read(A.UC_ARM64_REG_PC) == stop
     assert uc.reg_read(A.UC_ARM64_REG_X0) == 0, ('C line', uc.reg_read(A.UC_ARM64_REG_X0))

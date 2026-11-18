@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Ovládat prvky rozhraní tahem</string>
   <string name="time_controls">Ovládání času</string>
   <string name="time_swipe_hint">Přejeďte přes hodiny nebo tlačítka rychlosti: doprava pro zrychlení, doleva pro zpomalení až do pozastavení. Stupnice uprostřed ukazuje zvolenou rychlost.</string>
+  <string name="choose_target">Vyberte cíl</string>
+  <string name="target_ground">Země</string>
+  <string name="target_object">Objekt %1$d</string>
+  <string name="target_changed">Cíl se pohnul. Klepněte znovu.</string>
 </resources>

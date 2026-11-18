@@ -150,7 +150,7 @@ typedef unsigned long long size_t;
 typedef unsigned int uint32_t;
 static char game_dir[512], data_dir[512], images_dir[512];
 static const char *environment, *recorded;
-static int called, started, exited, failure;
+static int called, started, exited, failure, audio_started;
 static int equal(const char *a, const char *b) {
     while (*a && *a == *b) { ++a; ++b; }
     return *a == *b;
@@ -170,8 +170,10 @@ static int snprintf(char *out, size_t n, const char *fmt, const char *data) {
 }
 static void record(const char *path) { recorded = path; ++called; }
 static void (*__llvm_profile_set_filename)(const char *);
+static void audio_log_start(void) { ++audio_started; }
 static int void_game_main(const char *game, const char *data, const char *images, int test) {
     if (game != game_dir || data != data_dir || images != images_dir || test) failure |= 4;
+    if (audio_started != 1) failure |= 128;
     started = called;
     return 7;
 }
@@ -179,7 +181,7 @@ static void void_log(const char *fmt, ...) { (void)fmt; }
 static void void_process_exit(unsigned int code, int detach) { exited = code == 7 && !detach; }
 ''' + function + r'''
 __declspec(dllexport) unsigned int check(unsigned int mode) {
-    called = started = exited = failure = 0;
+    called = started = exited = failure = audio_started = 0;
     recorded = NULL;
     environment = mode == 2 ? "chosen.profraw" : mode == 3 ? "" : NULL;
     __llvm_profile_set_filename = mode == 0 ? NULL : record;

@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Svep på gränssnittets reglage</string>
   <string name="time_controls">Tidskontroll</string>
   <string name="time_swipe_hint">Svep över klockan eller hastighetsknapparna: åt höger för att öka hastigheten, åt vänster för att sakta ned och pausa. Skalan i mitten visar vald hastighet.</string>
+  <string name="choose_target">Välj ett mål</string>
+  <string name="target_ground">Mark</string>
+  <string name="target_object">Föremål %1$d</string>
+  <string name="target_changed">Målet har flyttats. Tryck igen.</string>
 </resources>

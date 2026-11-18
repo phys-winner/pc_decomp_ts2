@@ -15,6 +15,8 @@ static pthread_cond_t pick_ready = PTHREAD_COND_INITIALIZER;
 static int pick_x, pick_y, pick_pending, pick_diagnostic, pick_result;
 static int pick_radius;
 static uint64_t pick_point;
+static uint64_t pick_world_key;
+static s2_world_targets pick_world;
 static unsigned pick_serial, pick_done;
 static unsigned query_zero_logs, slider_reject_logs, pick_owner_context;
 static unsigned target_logs;
@@ -32,7 +34,6 @@ static uint32_t tool_handler;
 static unsigned last_world_context;
 static uint32_t town_camera, lot_camera, last_clamp_camera, last_clamp_vtable;
 static uint32_t camera_view, camera_view_owner;
-static struct { uint32_t camera; unsigned context, epoch; uint64_t size; float height, to_x, to_y; int valid; } camera_anchor;
 static _Atomic uint64_t shown_tool;
 static _Atomic unsigned shown_fill_kind;
 static _Atomic int shown_cost = -1;
@@ -51,7 +52,7 @@ static unsigned swipe_sequence;
 static unsigned cas_pan_seen_epoch;
 static float cas_pan_y;
 static int cas_pan_selected;
-static struct { float dx, dy, radians, zoom, pitch, from_x, from_y; unsigned epoch, context; uint64_t size; int absolute; float pose[6]; } camera_request;
+static struct { float dx, dy, radians, zoom, pitch; unsigned epoch, context; uint64_t size; int absolute; float pose[6]; } camera_request;
 static struct { int x, y, amount, info; unsigned context, epoch; uint64_t size, owner; } catalog_request;
 static const char *touch_type(uint32_t object);
 
@@ -231,7 +232,7 @@ int s2_touch_ui_command(unsigned kind, uint32_t value)
     return accepted;
 }
 
-static int touch_camera_queue(float dx, float dy, float radians, float zoom, float pitch, float from_x, float from_y)
+static int touch_camera_queue(float dx, float dy, float radians, float zoom, float pitch)
 {
     unsigned context = s2_touch_context();
     if (!isfinite(dx) || !isfinite(dy) || !isfinite(radians) || !isfinite(zoom) || !isfinite(pitch) || __builtin_fabsf(zoom) > 1 ||
@@ -261,7 +262,6 @@ static int touch_camera_queue(float dx, float dy, float radians, float zoom, flo
             if (ui_command_kind != S2_UI_CAMERA || camera_request.epoch != epoch || camera_request.size != size || camera_request.context != context ||
                 camera_request.absolute)
                 memset(&camera_request, 0, sizeof camera_request);
-            if (!camera_request.dx && !camera_request.dy) { camera_request.from_x = from_x; camera_request.from_y = from_y; }
             camera_request.dx = __builtin_fmaxf(-1, __builtin_fminf(1, camera_request.dx + dx));
             camera_request.dy = __builtin_fmaxf(-1, __builtin_fminf(1, camera_request.dy + dy));
             camera_request.radians = __builtin_fmaxf(-3.141593f, __builtin_fminf(3.141593f, camera_request.radians + radians));
@@ -281,14 +281,14 @@ static int touch_camera_queue(float dx, float dy, float radians, float zoom, flo
 
 int s2_touch_camera(float dx, float dy, float radians, float zoom, float pitch)
 {
-    return touch_camera_queue(dx, dy, radians, zoom, pitch, .5f, .5f);
+    return touch_camera_queue(dx, dy, radians, zoom, pitch);
 }
 
 int s2_touch_pan(float from_x, float from_y, float to_x, float to_y)
 {
     if (!isfinite(from_x) || !isfinite(from_y) || !isfinite(to_x) || !isfinite(to_y) ||
         from_x < 0 || from_x > 1 || from_y < 0 || from_y > 1 || to_x < 0 || to_x > 1 || to_y < 0 || to_y > 1) return 0;
-    return touch_camera_queue(to_x - from_x, to_y - from_y, 0, 0, 0, from_x, from_y);
+    return touch_camera_queue(to_x - from_x, to_y - from_y, 0, 0, 0);
 }
 
 /* Benchmarks (script camset): put the town or lot camera at an absolute pose,
@@ -515,93 +515,6 @@ int s2_touch_camera_projection(float projection[3])
     projection[0]=near;projection[1]=far;projection[2]=fov;return 1;
 }
 
-static int touch_town_height(float x, float y, float *height)
-{
-    if (s2_touch_context() != S2_TOUCH_TOWN || !isfinite(x) || !isfinite(y) ||
-        !void_vm_readable(0xA10CC458u, 4)) return 0;
-    uint32_t system = MEM32(0xA10CC458u);
-    if (!system || !void_vm_readable(system, 0x88) || MEM32(system) != 0xA0DAE264u) return 0;
-    uint32_t terrain = MEM32(system + 0x84);
-    if (!terrain || !void_vm_readable(terrain, 0x78) || MEM32(terrain) != 0xA0DB2FC0u ||
-        MEM32(terrain + 8) != 0xA0DB302Cu) return 0;
-    float cell = touch_float(terrain + 0x14);
-    uint32_t width = MEM32(terrain + 0x1C), rows = MEM32(terrain + 0x20), vertices = MEM32(terrain + 0x70);
-    if (!isfinite(cell) || cell <= 0 || width < 2 || width > 4096 || rows < 2 || rows > 4096 ||
-        x < 0 || y < 0 || x / cell >= width - 1 || y / cell >= rows - 1 ||
-        (uint64_t)vertices + (uint64_t)width * rows * 12 > UINT32_MAX) return 0;
-    uint32_t column = (uint32_t)(x / cell), row = (uint32_t)(y / cell);
-    uint32_t point = vertices + (row * width + column) * 12;
-    if (!void_vm_readable(point, 24) || !void_vm_readable(point + width * 12, 24)) return 0;
-    uint32_t args[2]; memcpy(args, &x, 4); memcpy(args + 1, &y, 4);
-    void_call_guest_this(0xA02A0660u, terrain + 8, 2, args);
-    float result = (float)fp_pop();
-    if (!isfinite(result) || s2_touch_context() != S2_TOUCH_TOWN ||
-        MEM32(0xA10CC458u) != system || MEM32(system + 0x84) != terrain) return 0;
-    *height = result;
-    return 1;
-}
-
-static int touch_lot_surface(const float eye[3], const float ray[3], float *height)
-{
-    unsigned context = s2_touch_context();
-    if ((context != S2_TOUCH_LIVE && context != S2_TOUCH_BUY && context != S2_TOUCH_BUILD) ||
-        !void_vm_readable(0xA10CC458u, 12)) return 0;
-    float length2 = 0, direction[3];
-    for (unsigned n = 0; n < 3; ++n) {
-        if (!isfinite(eye[n]) || !isfinite(ray[n])) return 0;
-        length2 += ray[n] * ray[n];
-    }
-    if (!isfinite(length2) || length2 < .00000001f) return 0;
-    float length = sqrtf(length2);
-    for (unsigned n = 0; n < 3; ++n) direction[n] = ray[n] / length;
-    uint32_t system = MEM32(0xA10CC458u), scene = MEM32(0xA10CC460u);
-    if (!system || !void_vm_readable(system, 0x9C) || MEM32(system) != 0xA0DAE264u ||
-        !scene || !void_vm_readable(scene, 12) || MEM32(scene) != 0xA0DB5344u) return 0;
-    uint32_t root = MEM32(scene + 8), manager = MEM32(system + 0x98);
-    if (!root || !void_vm_readable(root, 0xE0) || MEM32(root) != 0xA0E6D0B4u || MEM8(root + 0x98) ||
-        !manager || !void_vm_readable(manager, 0x28) || MEM32(manager) != 0xA0DB56D0u) return 0;
-    uint32_t mask = MEM32(manager + 0x24);
-    if (!mask || !void_vm_readable(mask, 20) || MEM32(mask) != 0xA0DB5654u) return 0;
-    uint32_t scratch = g_esp - 64;
-    if (!void_vm_writable(scratch, 64)) return 0;
-    memcpy(GPTR(scratch + 32), eye, 12); memcpy(GPTR(scratch + 44), direction, 12);
-    MEM32(scratch + 56) = 0x7F7FFFFFu;
-    uint32_t args[3] = {scratch + 32, scratch + 44, 0};
-    g_esp = scratch;
-    void_call_guest_this(0xA018E720u, scratch, 2, args);
-    args[0] = scratch + 56; args[1] = mask; args[2] = scratch;
-    int found = void_call_guest_this(0xA0A4EFD0u, root, 3, args) != 0;
-    float distance = touch_float(scratch + 56);
-    void_call_guest_this(0xA018E860u, scratch, 0, 0);
-    g_esp = scratch + 64;
-    if (!found || !isfinite(distance) || distance <= 0 || distance > 1000000 ||
-        s2_touch_context() != context || MEM32(0xA10CC458u) != system || MEM32(0xA10CC460u) != scene ||
-        MEM32(scene + 8) != root || MEM32(system + 0x98) != manager || MEM32(manager + 0x24) != mask) return 0;
-    float result = eye[2] + distance * direction[2];
-    if (!isfinite(result)) return 0;
-    *height = result;
-    return 1;
-}
-
-static float touch_camera_ground_plane(const float eye[3], const float ray[3], float fallback)
-{
-    if (!isfinite(ray[2]) || ray[2] >= -.00001f) return fallback;
-    float t = (fallback - eye[2]) / ray[2], previous_t = 0, previous_error = 0;
-    for (unsigned n = 0; n < 12; ++n) {
-        if (!isfinite(t) || t <= 0 || t > 1000000) break;
-        float height;
-        if (!touch_town_height(eye[0] + t * ray[0], eye[1] + t * ray[1], &height)) break;
-        float error = eye[2] + t * ray[2] - height;
-        if (__builtin_fabsf(error) < .001f) return height;
-        float next = (height - eye[2]) / ray[2];
-        if (n && __builtin_fabsf(error - previous_error) > .00001f)
-            next = t - error * (t - previous_t) / (error - previous_error);
-        previous_t = t; previous_error = error; t = next;
-    }
-    /* Sky, map edges and nonconvergent terrain keep the camera's target plane. */
-    return fallback;
-}
-
 static int touch_camera_basis(uint32_t camera, float distance, float eye[3], float matrix[9])
 {
     uint32_t scratch = g_esp - 96;
@@ -622,46 +535,25 @@ static int touch_camera_basis(uint32_t camera, float distance, float eye[3], flo
     return 1;
 }
 
-static int touch_camera_translation(uint32_t camera, float distance, float dx, float dy, float from_x, float from_y, uint64_t size, float movement[2])
+static int touch_camera_translation(uint32_t camera, float distance, float dx, float dy, uint64_t size, float movement[2])
 {
     float eye[3], matrix[9];
     if (!touch_camera_basis(camera, distance, eye, matrix)) return 0;
-    float tangent = tanf(touch_float(camera + 0x134) * .5f);
+    float span = 2 * distance * tanf(touch_float(camera + 0x134) * .5f);
     float aspect = (float)(uint32_t)size / (float)(uint32_t)(size >> 32);
-    float plane = touch_float(camera + 372);
-    unsigned context = s2_touch_context(), epoch = s2_touch_layout_epoch();
-    int lot = context == S2_TOUCH_LIVE || context == S2_TOUCH_BUY || context == S2_TOUCH_BUILD;
-    int continued = lot && camera_anchor.valid && camera_anchor.camera == camera && camera_anchor.context == context &&
-        camera_anchor.epoch == epoch && camera_anchor.size == size &&
-        __builtin_fabsf(camera_anchor.to_x - from_x) < .00001f && __builtin_fabsf(camera_anchor.to_y - from_y) < .00001f;
-    float points[2][2];
-    for (unsigned n = 0; n < 2; ++n) {
-        float x = (2 * (from_x + (n ? dx : 0)) - 1) * tangent;
-        float y = (1 - 2 * (from_y + (n ? dy : 0))) * tangent / aspect;
-        /* A0A656F0 uses horizontal FOV; camera-local axes are right, forward, up. */
-        float ray[3];
-        for (unsigned k = 0; k < 3; ++k) ray[k] = matrix[k * 3 + 1] + x * matrix[k * 3] + y * matrix[k * 3 + 2];
-        if (!isfinite(ray[2]) || __builtin_fabsf(ray[2]) < .00001f) return 0;
-        if (!n) {
-            if (!lot) plane = touch_camera_ground_plane(eye, ray, plane);
-            else if (continued) plane = camera_anchor.height;
-            else touch_lot_surface(eye, ray, &plane);
-        }
-        float t = (plane - eye[2]) / ray[2];
-        if (!isfinite(t) || t <= 0 || t > 1000000) return 0;
-        points[n][0] = eye[0] + t * ray[0]; points[n][1] = eye[1] + t * ray[1];
-    }
-    movement[0] = points[0][0] - points[1][0]; movement[1] = points[0][1] - points[1][1];
-    if (!isfinite(movement[0]) || !isfinite(movement[1])) return 0;
-    if (lot) {
-        /* Keep the grabbed surface through the gesture, without traversing the scene per MOVE. */
-        camera_anchor.camera = camera; camera_anchor.context = context; camera_anchor.epoch = epoch; camera_anchor.size = size;
-        camera_anchor.height = plane; camera_anchor.to_x = from_x + dx; camera_anchor.to_y = from_y + dy; camera_anchor.valid = 1;
+    /* Use the ground-plane derivative at the center of the view. A ray through the finger changes scale with position and terrain. */
+    float down = matrix[7] < -.20f ? matrix[7] : -.20f;
+    for (unsigned k = 0; k < 2; ++k) {
+        float forward = matrix[k * 3 + 1];
+        float right = matrix[k * 3] - forward * matrix[6] / down;
+        float up = matrix[k * 3 + 2] - forward * matrix[8] / down;
+        movement[k] = span * (-dx * right + dy / aspect * up);
+        if (!isfinite(movement[k])) return 0;
     }
     return 1;
 }
 
-static int touch_camera_apply_at(float dx, float dy, float radians, float zoom, float pitch, unsigned epoch, uint64_t size, float from_x, float from_y)
+static int touch_camera_apply(float dx, float dy, float radians, float zoom, float pitch, unsigned epoch, uint64_t size)
 {
     unsigned context = s2_touch_context();
     int town = context == S2_TOUCH_TOWN;
@@ -692,10 +584,9 @@ static int touch_camera_apply_at(float dx, float dy, float radians, float zoom, 
     if (!isfinite(fov) || fov <= 0 || fov >= 3.141593f) return 0;
     float tilt=touch_float(camera+0x154);
     if(pitch&&(!isfinite(tilt)||tilt<0||tilt>3.141593f))return 0;
-    if (radians || zoom || pitch) camera_anchor.valid = 0;
     if (dx || dy) {
         float movement[2];
-        if (!touch_camera_translation(camera, distance, dx, dy, from_x, from_y, size, movement) ||
+        if (!touch_camera_translation(camera, distance, dx, dy, size, movement) ||
             !touch_layout_matches(context, size, epoch) || camera != (town ? town_camera : lot_camera) ||
             !void_vm_writable(camera, 0x458) || MEM32(camera) != table) return 0;
         float position[3] = { x + movement[0], y + movement[1], z };
@@ -725,21 +616,15 @@ static int touch_camera_apply_at(float dx, float dy, float radians, float zoom, 
         memcpy(GPTR(camera + 0xE4), &distance, 4);
         MEM8(camera + 0xE8) = 1;
     }
-    if (radians || zoom || pitch) camera_anchor.valid = 0;
     return 1;
 }
 
-static int touch_camera_apply(float dx, float dy, float radians, float zoom, float pitch, unsigned epoch, uint64_t size)
-{
-    return touch_camera_apply_at(dx, dy, radians, zoom, pitch, epoch, size, .5f, .5f);
-}
 
 /* The absolute form of touch_camera_apply (script camset): the same camera
  * checks, setter and fields, with the pose's position, yaw, distance (clamped
  * to the camera's zoom range) and pitch (clamped as the tilt gesture is). */
 static int touch_camera_pose_apply(const float *pose, unsigned epoch, uint64_t size)
 {
-    camera_anchor.valid = 0;
     unsigned context = s2_touch_context();
     int town = context == S2_TOUCH_TOWN;
     if (!town && context != S2_TOUCH_LIVE && context != S2_TOUCH_BUY && context != S2_TOUCH_BUILD) return 0;
@@ -895,6 +780,27 @@ static int touch_ui_button(uint32_t window)
         !strcmp(touch_type(window), ".?AVcGZWinBtn@@");
 }
 
+static int touch_live_hud_context(unsigned context)
+{
+    return context == S2_TOUCH_LIVE || (context == S2_TOUCH_BUY && s2_touch_rewards());
+}
+
+static int touch_live_hud_background(uint32_t window)
+{
+    /* The unfilled Live HUD container's rectangle extends over the visible lot. */
+    if (!void_vm_readable(window, 0xEC) || MEM32(window) != 0xA0E54B18u || MEM32(window + 0x10)) return 0;
+    uint32_t parent = MEM32(window + 0x58);
+    return void_vm_readable(parent, 0xEC) && MEM32(parent) == 0xA0DE3704u && MEM32(parent + 0x10) == 0x77D986A1u;
+}
+
+/* The pick result of a tap on the unfilled Live HUD container, which TouchLayer pans like the lot. */
+static int touch_pan_background(unsigned context, uint32_t manager, uint32_t root, uint32_t hit, int result)
+{
+    return touch_live_hud_context(context) && result == 1 && s2_touch_context() == context &&
+        manager && manager == s2_touch_owner_manager() && void_vm_readable(manager, 0x48) &&
+        MEM32(manager + 0x44) == root && !MEM32(manager + 0x34) && touch_live_hud_background(hit);
+}
+
 static int touch_empty_procs(uint32_t window)
 {
     if (!window || !void_vm_readable(window, 0xA8) || MEM32(window + 0xA4)) return 0;
@@ -1039,7 +945,7 @@ static const uint32_t *touch_vertical_set(uint32_t window, uint32_t *parent)
 {
     unsigned context = s2_touch_context();
     if (context == (S2_TOUCH_CAS | S2_TOUCH_FOCUSED_TEXT)) context = S2_TOUCH_CAS;
-    if (context != S2_TOUCH_CAS && context != S2_TOUCH_LIVE) return NULL;
+    if (context != S2_TOUCH_CAS && !touch_live_hud_context(context)) return NULL;
     if (!void_vm_readable(window, 0xFC) || !(MEM32(window + 0xE8) & 1)) return NULL;
     uint32_t id = MEM32(window + 0x10);
     for (unsigned group = 0; group < sizeof touch_vertical_ids / sizeof touch_vertical_ids[0]; ++group) {
@@ -1070,7 +976,7 @@ static int touch_swipe_group(uint32_t window, int *index)
         !void_vm_readable(window, 0xFC)) return 0;
     uint32_t id = MEM32(window + 0x10);
     if ((MEM32(window) == 0xA0E54B18u || MEM32(window) == 0xA0DE3D88u) && (MEM32(window + 0xE8) & 1)) {
-        if (id == 0xA94E97E8u || id == 0xA94E97F4u) { *index = -1; return 2; }
+        if (id == 0xA94E97E8u || id == 0xA94E97F4u || id == 0x31D5BA3Au) { *index = -1; return 2; }
         if (id == 0x2E9AF844u || id == 0x2E9AF849u) { *index = -1; return 1; }
     }
     /* The original clock is deliberately disabled; its visible label can still own a swipe. */
@@ -1103,20 +1009,26 @@ static uint32_t touch_vertical_band(uint32_t root, int x, int y)
 {
     x = (int)((float)x / (float)s2_ui_factor()); y = (int)((float)y / (float)s2_ui_factor());
     unsigned context = s2_touch_context(), mode = context & ~S2_TOUCH_FOCUSED_TEXT, epoch = s2_touch_layout_epoch();
+    int live_hud = touch_live_hud_context(context);
     uint32_t manager = s2_touch_owner_manager();
-    if ((mode != S2_TOUCH_LIVE && mode != S2_TOUCH_CAS) || !manager ||
+    if ((!live_hud && mode != S2_TOUCH_CAS) || !manager ||
         MEM32(manager + 0x44) != root || !void_vm_readable(root, 0xEC) || !void_vm_readable(MEM32(root), 0xA0)) return 0;
-    if (mode == S2_TOUCH_LIVE && context != mode) return 0;
-    uint32_t scope = mode == S2_TOUCH_LIVE ? scene_window : root;
+    uint32_t scope = live_hud ? scene_window : root;
     if (!scope || !void_vm_readable(scope, 0xEC) || MEM32(scope + 4) != manager ||
         !void_vm_readable(MEM32(scope), 0xA0)) return 0;
-    for (unsigned group = 0; group < sizeof touch_vertical_ids / sizeof touch_vertical_ids[0]; ++group) {
-        if ((group >= 2) != (mode == S2_TOUCH_CAS)) continue;
-        const uint32_t *ids = touch_vertical_ids[group];
-        uint32_t parent = void_call_guest_this(MEM32(MEM32(scope) + 0x9C), scope, 1, ids);
+    static const uint32_t main_strip_ids[] = {0xA94E97E8u, 0xA94E97F4u, 0x31D5BA3Au};
+    const unsigned subgroups = sizeof touch_vertical_ids / sizeof touch_vertical_ids[0];
+    const unsigned strips = sizeof main_strip_ids / sizeof main_strip_ids[0];
+    for (unsigned group = live_hud ? 0 : 2; group < (live_hud ? 2 + strips : subgroups); ++group) {
+        int main_strip = live_hud && group >= 2;
+        uint32_t parent_id = main_strip ? main_strip_ids[group - 2] : touch_vertical_ids[group][0];
+        const uint32_t *ids = main_strip ? touch_swipe_ids[1] : touch_vertical_ids[group] + 1;
+        uint32_t parent = void_call_guest_this(MEM32(MEM32(scope) + 0x9C), scope, 1, &parent_id);
         if (s2_touch_context() != context || s2_touch_layout_epoch() != epoch || s2_touch_owner_manager() != manager ||
-            MEM32(manager + 0x44) != root || (mode == S2_TOUCH_LIVE && scene_window != scope)) return 0;
-        if (!parent || !void_vm_readable(parent, 0xEC) || MEM32(parent + 4) != manager || MEM32(parent + 0x10) != ids[0] ||
+            MEM32(manager + 0x44) != root || (live_hud && scene_window != scope)) return 0;
+        int index;
+        if (!parent || !void_vm_readable(parent, 0xEC) || MEM32(parent + 4) != manager || MEM32(parent + 0x10) != parent_id ||
+            (main_strip && touch_swipe_group(parent, &index) != 2) ||
             !void_vm_readable(MEM32(parent), 0xA0) || x < (int)MEM32(parent + 0x24) || x >= (int)MEM32(parent + 0x2C) ||
             y < (int)MEM32(parent + 0x28) || y >= (int)MEM32(parent + 0x30)) continue;
         uint32_t owner = parent;
@@ -1127,14 +1039,14 @@ static uint32_t touch_vertical_band(uint32_t root, int x, int y)
         if (owner != root) continue;
         uint32_t first = 0;
         int left = INT32_MAX, top = INT32_MAX, right = 0, bottom = 0;
-        for (unsigned n = 1; n < 10 && ids[n]; ++n) {
+        for (unsigned n = 0; n < 9 && ids[n]; ++n) {
             uint32_t button = void_call_guest_this(MEM32(MEM32(parent) + 0x9C), parent, 1, &ids[n]);
             if (s2_touch_context() != context || s2_touch_layout_epoch() != epoch || s2_touch_owner_manager() != manager ||
                 MEM32(manager + 0x44) != root || !void_vm_readable(parent, 0xEC) || MEM32(parent + 4) != manager ||
-                MEM32(parent + 0x10) != ids[0] || !(MEM32(parent + 0xE8) & 1)) return 0;
-            uint32_t holder = 0;
+                MEM32(parent + 0x10) != parent_id || !(MEM32(parent + 0xE8) & 1)) return 0;
+            uint32_t holder = parent;
             if (!button || !touch_ui_button(button) || MEM32(button + 4) != manager || MEM32(button + 0x10) != ids[n] ||
-                touch_vertical_set(button, &holder) != ids + 1 || (holder != parent &&
+                (main_strip ? MEM32(button + 0x58) != parent : touch_vertical_set(button, &holder) != ids) || (holder != parent &&
                 (!void_vm_readable(holder, 0xEC) || MEM32(holder + 4) != manager || MEM32(holder + 0x58) != parent))) continue;
             int l = (int)MEM32(button + 0x24), t = (int)MEM32(button + 0x28);
             int r = (int)MEM32(button + 0x2C), b = (int)MEM32(button + 0x30);
@@ -1359,54 +1271,354 @@ static unsigned touch_widget(uint32_t window)
     return flags;
 }
 
+static uint32_t touch_pie_owner(uint32_t window)
+{
+    for (unsigned depth = 0; window && depth < 16 && void_vm_readable(window, 0xEC); ++depth) {
+        if (MEM32(window) == 0xA0DDA24Cu)
+            return (MEM32(window + 0xE8) & 3) == 3 ? window : 0;
+        window = MEM32(window + 0x58);
+    }
+    return 0;
+}
+
+static int touch_pie_item(uint32_t window, uint32_t menu)
+{
+    if (!menu || !void_vm_readable(window, 0xEC) || MEM32(window + 0x58) != menu) return 0;
+    uint32_t head = MEM32(window + 0xA0);
+    if (!head || !void_vm_readable(head, 4)) return 0;
+    uint32_t node = MEM32(head);
+    for (unsigned n = 0; node && node != head && n < 16 && void_vm_readable(node, 12); ++n) {
+        uint32_t proc = MEM32(node + 8);
+        if (void_vm_readable(proc, 4) && MEM32(proc) == 0xA0DDA548u) return 1;
+        node = MEM32(node);
+    }
+    return 0;
+}
+
+static uint32_t touch_pie_label(uint32_t row)
+{
+    uint32_t list = MEM32(row + 0x54);
+    if (!list || !void_vm_readable(list, 12)) return 0;
+    uint32_t head = MEM32(list);
+    if (!head || !void_vm_readable(head, 12)) return 0;
+    uint32_t node = MEM32(head);
+    for (unsigned n = 0; node && node != head && n < 32 && void_vm_readable(node, 12); ++n) {
+        uint32_t child = MEM32(node + 8);
+        if (void_vm_readable(child, 0xEC) && MEM32(child + 0x58) == row &&
+            MEM32(child + 0x10) == 0xCB93E6FCu && (MEM32(child + 0xE8) & 1)) return child;
+        node = MEM32(node);
+    }
+    return 0;
+}
+
+/* cTSWinPieMenu (A05C88C0) highlights the item nearest the cursor's direction
+ * once the cursor leaves kGesturePickBoundary, and button up (message 10,
+ * A05C819C) selects it. A tap has no hover feedback, so a tap that reaches no
+ * item closes the menu the way the original closes on a press with nothing
+ * highlighted: outside its rectangle grown by kCancelBoundary (message 7,
+ * A05C816C). The menu receives every click while it is open and hit-tests its
+ * own item windows (A05C929E: a child of the item window at the point), not the
+ * global z-order. Escape (A05C8148) also closes it but then loses the next
+ * click; a right press (message 8, A05C818D) always cancels it. */
+static uint32_t touch_open_pie(uint32_t manager, uint32_t root)
+{
+    uint32_t capture = MEM32(manager + 0x34);
+    if (capture) return touch_pie_owner(capture);
+    /* Live mode opens the pie without mouse capture: find it among the visible windows. */
+    uint32_t stack[512] = {root};
+    unsigned pending = 1, visited = 0;
+    while (pending && ++visited <= 4096) {
+        uint32_t window = stack[--pending];
+        if (!void_vm_readable(window, 0xEC) || MEM32(window + 4) != manager || !(MEM32(window + 0xE8) & 1)) continue;
+        if (MEM32(window) == 0xA0DDA24Cu) {
+            if ((MEM32(window + 0xE8) & 3) == 3) return window;
+            continue;
+        }
+        uint32_t list = MEM32(window + 0x54);
+        if (!list || !void_vm_readable(list, 12)) continue;
+        uint32_t head = MEM32(list), node = head && void_vm_readable(head, 12) ? MEM32(head) : 0;
+        for (unsigned n = 0; node && node != head && n < 4096 && void_vm_readable(node, 12); ++n) {
+            uint32_t child = MEM32(node + 8);
+            if (child && void_vm_readable(child, 0xEC) && MEM32(child + 0x58) == window) {
+                if (pending == 512) return 0;
+                stack[pending++] = child;
+            }
+            node = MEM32(node);
+        }
+    }
+    return 0;
+}
+
+static int touch_pie_rect(uint32_t window, double px, double py, double grow)
+{
+    int left = (int)MEM32(window + 0x24), top = (int)MEM32(window + 0x28);
+    int right = (int)MEM32(window + 0x2C), bottom = (int)MEM32(window + 0x30);
+    return left <= right && top <= bottom && right - left <= 8192 && bottom - top <= 8192 &&
+        px >= left - grow && px < right + grow && py >= top - grow && py < bottom + grow;
+}
+
+/* The menu's own direct hit (A05C929E) for an item id at a logical point, after
+ * the conversion A05C88C0 applies (the parent's vtable +128). */
+static int touch_pie_direct(uint32_t pie, uint32_t id, int lx, int ly)
+{
+    uint32_t parent = MEM32(pie + 0x58);
+    if (!parent || !void_vm_readable(parent, 4) || !void_vm_readable(MEM32(parent), 0x12C)) return 0;
+    uint32_t convert = MEM32(MEM32(parent) + 0x128);
+    if (!void_dispatch_find(convert)) return 0;
+    uint32_t stack = g_esp, scratch = stack - 64;
+    if (!void_vm_writable(scratch, 64)) return 0;
+    MEM32(scratch) = (uint32_t)lx;
+    MEM32(scratch + 4) = (uint32_t)ly;
+    g_esp = scratch;
+    uint32_t points[2] = { scratch, scratch + 4 };
+    void_call_guest_this(convert, parent, 2, points);
+    uint32_t args[3] = { id, MEM32(scratch), MEM32(scratch + 4) };
+    g_esp = stack;
+    return (void_call_guest_this(0xA05C929Eu, pie, 3, args) & 255) != 0;
+}
+
+/* Any item (or the head) the menu hits directly at a game pixel. */
+static int touch_pie_hits(uint32_t pie, double factor, int x, int y)
+{
+    int lx = (int)(x / factor), ly = (int)(y / factor);
+    if (touch_pie_direct(pie, MEM32(pie + 0x1A0), lx, ly)) return 1;
+    uint32_t sentinel = MEM32(pie + 0x254);
+    if (!sentinel || !void_vm_readable(sentinel, 4)) return 0;
+    uint32_t node = MEM32(sentinel);
+    for (unsigned n = 0; node && node != sentinel && n < 64 && void_vm_readable(node, 0x6C); ++n) {
+        if (touch_pie_direct(pie, MEM32(node + 0x68), lx, ly)) return 1;
+        node = MEM32(node);
+    }
+    return 0;
+}
+
+static void touch_pie_center(uint32_t window, double factor, int *x, int *y)
+{
+    int left = (int)MEM32(window + 0x24), top = (int)MEM32(window + 0x28);
+    float sx = (left + ((int)MEM32(window + 0x2C) - left) / 2) * (float)factor;
+    float sy = (top + ((int)MEM32(window + 0x30) - top) / 2) * (float)factor;
+    /* The inverse input transform truncates to an integer logical pixel. */
+    *x = (int)sx; *y = (int)sy;
+    *x += *x < sx; *y += *y < sy;
+}
+
+static unsigned pie_pick_logs;
+
+/* Logs the first open menus' windows and item parts, for touch diagnostics. */
+static void touch_pie_describe(uint32_t pie, uint32_t manager)
+{
+    static uint32_t described[2];
+    static unsigned count;
+    for (unsigned i = 0; i < count; ++i) if (described[i] == pie) return;
+    if (count == 2) return;
+    described[count++] = pie;
+    void_log("[touch-pie] menu %08X rect=%d,%d,%d,%d center=%d,%d cancel=%d gesture=%d factor=%.3f", pie,
+        (int)MEM32(pie + 0x24), (int)MEM32(pie + 0x28), (int)MEM32(pie + 0x2C), (int)MEM32(pie + 0x30),
+        (int)MEM32(pie + 0x108), (int)MEM32(pie + 0x10C), (int)MEM32(pie + 0x100), (int)MEM32(pie + 0x104), s2_ui_factor());
+    uint32_t list = MEM32(pie + 0x54);
+    if (!list || !void_vm_readable(list, 12)) return;
+    uint32_t head = MEM32(list), node = head && void_vm_readable(head, 12) ? MEM32(head) : 0;
+    for (unsigned n = 0; node && node != head && n < 32 && void_vm_readable(node, 12); ++n) {
+        uint32_t child = MEM32(node + 8);
+        if (child && void_vm_readable(child, 0xEC) && MEM32(child + 0x58) == pie) {
+            uint32_t label = touch_pie_item(child, pie) ? touch_pie_label(child) : 0;
+            void_log("[touch-pie]   child %08X vt=%08X id=%08X flags=%X rect=%d,%d,%d,%d item=%d label=%08X %d,%d,%d,%d mgr=%d",
+                child, MEM32(child), MEM32(child + 0x10), MEM32(child + 0xE8),
+                (int)MEM32(child + 0x24), (int)MEM32(child + 0x28), (int)MEM32(child + 0x2C), (int)MEM32(child + 0x30),
+                touch_pie_item(child, pie), label,
+                label ? (int)MEM32(label + 0x24) : 0, label ? (int)MEM32(label + 0x28) : 0,
+                label ? (int)MEM32(label + 0x2C) : 0, label ? (int)MEM32(label + 0x30) : 0, MEM32(child + 4) == manager);
+            uint32_t sub = MEM32(child + 0x54);
+            uint32_t sub_head = sub && void_vm_readable(sub, 12) ? MEM32(sub) : 0;
+            uint32_t sub_node = sub_head && void_vm_readable(sub_head, 12) ? MEM32(sub_head) : 0;
+            for (unsigned k = 0; sub_node && sub_node != sub_head && k < 8 && void_vm_readable(sub_node, 12); ++k) {
+                uint32_t grand = MEM32(sub_node + 8);
+                if (grand && void_vm_readable(grand, 0xEC))
+                    void_log("[touch-pie]     part %08X vt=%08X id=%08X flags=%X rect=%d,%d,%d,%d parent=%d kids=%d", grand,
+                        MEM32(grand), MEM32(grand + 0x10), MEM32(grand + 0xE8), (int)MEM32(grand + 0x24), (int)MEM32(grand + 0x28),
+                        (int)MEM32(grand + 0x2C), (int)MEM32(grand + 0x30), MEM32(grand + 0x58) == child, MEM32(grand + 0x54) != 0);
+                sub_node = MEM32(sub_node);
+            }
+        }
+        node = MEM32(node);
+    }
+}
+
+/* Where a tap reaches an open menu, in game pixels: 1 when the menu itself hits
+ * an item or the head there (the point is kept), 2 for an item row's own area
+ * or a near miss (moved to the centre of its label), 0 for none. The bubble and
+ * stem images are no direct hit, and the rows' rectangles overlap: the row
+ * whose label is nearest wins, and only a label centre the menu hits counts.
+ * `side` is the touch target in game pixels. */
+static int touch_pie_pick(uint32_t pie, uint32_t manager, int *x, int *y, int side)
+{
+    double factor = s2_ui_factor();
+    if (factor < 1 || factor > 8 || side < 1 || side > 512) return 0;
+    if (touch_pie_hits(pie, factor, *x, *y)) return 1;
+    double px = *x / factor, py = *y / factor, minimum = side / factor;
+    uint32_t labels[8];
+    double scores[8];
+    unsigned count = 0;
+    uint32_t list = MEM32(pie + 0x54);
+    if (!list || !void_vm_readable(list, 12)) return 0;
+    uint32_t head = MEM32(list), node = head && void_vm_readable(head, 12) ? MEM32(head) : 0;
+    for (unsigned n = 0; node && node != head && n < 64 && void_vm_readable(node, 12); ++n) {
+        uint32_t child = MEM32(node + 8);
+        node = MEM32(node);
+        if (!child || !void_vm_readable(child, 0xEC) || MEM32(child + 0x58) != pie || MEM32(child + 4) != manager ||
+            (MEM32(child + 0xE8) & 3) != 3 || (MEM32(child + 0xE8) & 0x200000)) continue;
+        uint32_t label = touch_pie_label(child);
+        if (!label || MEM32(label + 4) != manager) continue;
+        int left = (int)MEM32(label + 0x24), top = (int)MEM32(label + 0x28);
+        int right = (int)MEM32(label + 0x2C), bottom = (int)MEM32(label + 0x30);
+        int width = right - left, height = bottom - top;
+        if (width <= 0 || height <= 0 || width > 8192 || height > 8192) continue;
+        double cx = left + width * .5, cy = top + height * .5;
+        double half_w = fmax(width, minimum) * .5 + minimum / 8, half_h = fmax(height, minimum) * .5 + minimum / 8;
+        if (!touch_pie_rect(child, px, py, 0) && (fabs(px - cx) > half_w || fabs(py - cy) > half_h)) continue;
+        double dx = px < left ? left - px : px > right ? px - right : 0;
+        double dy = py < top ? top - py : py > bottom ? py - bottom : 0;
+        double score = dx * dx + dy * dy;
+        unsigned at = count < 8 ? count++ : 8;
+        while (at > 0 && scores[at - 1] > score) {
+            if (at < 8) { scores[at] = scores[at - 1]; labels[at] = labels[at - 1]; }
+            --at;
+        }
+        if (at < 8) { scores[at] = score; labels[at] = label; }
+    }
+    for (unsigned i = 0; i < count; ++i) {
+        int tx, ty;
+        touch_pie_center(labels[i], factor, &tx, &ty);
+        /* Only a point the menu itself resolves to an item. */
+        if (!touch_pie_hits(pie, factor, tx, ty)) continue;
+        *x = tx; *y = ty;
+        return 2;
+    }
+    return 0;
+}
+
+/* The click that closes the menu: a press outside its rectangle grown by
+ * kCancelBoundary cancels it (A05C816C), and the release then reaches the
+ * window under the cursor. Over Live HUD controls that release swallows the next
+ * tap, so the point is the nearest on-screen one over the lot (the scene) when
+ * there is one, else the nearest outside point. 0 when there is none. */
+static int touch_pie_outside(uint32_t pie, uint32_t root, int *x, int *y)
+{
+    double factor = s2_ui_factor();
+    int width, height;
+    void_input_screen_size(&width, &height);
+    if (factor < 1 || factor > 8 || width < 1 || height < 1 || !void_vm_readable(pie, 0x104)) return 0;
+    int boundary = (int)MEM32(pie + 0x100);
+    if (boundary < 0 || boundary > 512) return 0;
+    /* Logical pixels, as the menu sees the cursor; a margin absorbs rounding. */
+    double grow = boundary + 4;
+    double left = (int)MEM32(pie + 0x24) - grow, top = (int)MEM32(pie + 0x28) - grow;
+    double right = (int)MEM32(pie + 0x2C) + grow, bottom = (int)MEM32(pie + 0x30) + grow;
+    double px = *x / factor, py = *y / factor, w = (width - 1) / factor, h = (height - 1) / factor;
+    if (!(left < right && top < bottom)) return 0;
+    double cx[20], cy[20], cd[20];
+    unsigned count = 0;
+    if (px < left || px > right || py < top || py > bottom) { cx[0] = px; cy[0] = py; cd[0] = 0; count = 1; }
+    static const double steps[4] = { 0, 40, 100, 200 };
+    for (unsigned step = 0; step < 4; ++step) {
+        double ex[4] = { left - steps[step], right + steps[step], px, px };
+        double ey[4] = { py, py, top - steps[step], bottom + steps[step] };
+        for (unsigned i = 0; i < 4; ++i) {
+            if (ex[i] < 0 || ey[i] < 0 || ex[i] > w || ey[i] > h) continue;
+            double d = fabs(ex[i] - px) + fabs(ey[i] - py);
+            unsigned at = count++;
+            while (at > 0 && cd[at - 1] > d) { cx[at] = cx[at - 1]; cy[at] = cy[at - 1]; cd[at] = cd[at - 1]; --at; }
+            cx[at] = ex[i]; cy[at] = ey[i]; cd[at] = d;
+        }
+    }
+    if (!count) return 0;
+    unsigned chosen = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        /* Both coordinates are on screen (non-negative): truncation is floor. */
+        int gx = (int)(cx[i] * factor + (cx[i] < px ? 0 : cx[i] > px ? 1 : .5));
+        int gy = (int)(cy[i] * factor + (cy[i] < py ? 0 : cy[i] > py ? 1 : .5));
+        if (gx >= width) gx = width - 1;
+        if (gy >= height) gy = height - 1;
+        uint32_t hit = s2_ui_pick(root, gx, gy);
+        if (hit && (hit == scene_window || !strcmp(touch_type(hit), ".?AVcTSWinSceneGraph@@"))) { chosen = i; break; }
+    }
+    int gx = (int)(cx[chosen] * factor + (cx[chosen] < px ? 0 : cx[chosen] > px ? 1 : .5));
+    int gy = (int)(cy[chosen] * factor + (cy[chosen] < py ? 0 : cy[chosen] > py ? 1 : .5));
+    *x = gx < 0 ? 0 : gx >= width ? width - 1 : gx;
+    *y = gy < 0 ? 0 : gy >= height ? height - 1 : gy;
+    return 1;
+}
+
 static uint32_t touch_ui_target(uint32_t root, uint32_t hit, int *x, int *y, int side)
 {
     double factor = s2_ui_factor();
     uint32_t manager = s2_touch_owner_manager();
     unsigned context = s2_touch_context(), epoch = s2_touch_layout_epoch();
-    if (factor < 1.5 || s2_ui_scale() < 200 || side < 1 || side > 512 || !manager || !void_vm_readable(manager, 0x48) ||
-        MEM32(manager + 0x44) != root || MEM32(manager + 0x34) || touch_ui_button(hit)) return 0;
+    if (factor < 1 || side < 1 || side > 512 || !manager || !void_vm_readable(manager, 0x48) ||
+        MEM32(manager + 0x44) != root) return 0;
+    uint32_t capture = MEM32(manager + 0x34), pie = touch_pie_owner(capture ? capture : hit);
+    if (capture && !pie) return 0;
     for (uint32_t parent = hit, depth = 0; parent && depth < 16 && void_vm_readable(parent, 0xEC); ++depth) {
-        if (touch_ui_button(parent)) return 0;
+        if (pie ? parent != hit && touch_pie_item(parent, pie) && touch_pie_label(parent) == hit
+                : touch_ui_button(parent)) return 0;
         parent = MEM32(parent + 0x58);
     }
-    if (hit && (touch_widget(hit) & (4 | 8 | 16))) return 0;
+    if (!pie && hit && (touch_widget(hit) & (4 | 8 | 16))) return 0;
     int px = (int)(*x / factor), py = (int)(*y / factor);
     double minimum = side / factor, best_distance = 1e30;
-    uint32_t stack[512] = {root}, best = 0;
+    uint32_t stack[512] = {pie ? pie : root}, best = 0;
     unsigned pending = 1, visited = 0;
     int best_x = 0, best_y = 0;
     while (pending && ++visited <= 4096) {
         uint32_t window = stack[--pending];
         if (!void_vm_readable(window, 0xEC) || MEM32(window + 4) != manager || !(MEM32(window + 0xE8) & 1)) continue;
-        if (touch_ui_button(window)) {
-            int left = (int)MEM32(window + 0x24), top = (int)MEM32(window + 0x28);
-            int right = (int)MEM32(window + 0x2C), bottom = (int)MEM32(window + 0x30);
+        uint32_t parent = MEM32(window + 0x58);
+        uint32_t row_menu = pie;
+        if (!row_menu && !(context & (S2_TOUCH_MODAL | S2_TOUCH_OPTIONS | S2_TOUCH_LOT_INFO)) &&
+            (!hit || hit == root || hit == scene_window) && void_vm_readable(parent, 4) &&
+            MEM32(parent) == 0xA0DDA24Cu) row_menu = touch_pie_owner(parent);
+        if (row_menu ? (MEM32(window + 0xE8) & 3) == 3 && touch_pie_item(window, row_menu)
+                     : touch_ui_button(window)) {
+            /* The native pie hit test requires a child of the row, including its label. */
+            uint32_t bounds = row_menu ? touch_pie_label(window) : window;
+            if (!bounds) continue;
+            int left = (int)MEM32(bounds + 0x24), top = (int)MEM32(bounds + 0x28);
+            int right = (int)MEM32(bounds + 0x2C), bottom = (int)MEM32(bounds + 0x30);
             if (left < -8192 || top < -8192 || right > 8192 || bottom > 8192 || right < left || bottom < top) continue;
             int width = right - left, height = bottom - top;
-            if (width > 0 && height > 0 && width <= 8192 && height <= 8192 && (width < minimum || height < minimum)) {
+            if (width > 0 && height > 0 && width <= 8192 && height <= 8192 &&
+                (row_menu || width < minimum || height < minimum)) {
                 double cx = (left + right) * .5, cy = (top + bottom) * .5;
                 double half_w = fmax(width, minimum) * .5, half_h = fmax(height, minimum) * .5;
+                if (row_menu) { half_w += minimum / 8; half_h += minimum / 8; }
                 double distance = (px - cx) * (px - cx) + (py - cy) * (py - cy);
                 if (fabs(px - cx) <= half_w && fabs(py - cy) <= half_h && distance < best_distance) {
-                    int tx = (int)lround(cx * factor), ty = (int)lround(cy * factor);
+                    float sx = (left + width / 2) * (float)factor, sy = (top + height / 2) * (float)factor;
+                    /* The inverse input transform truncates to an integer logical pixel. */
+                    int tx = (int)sx, ty = (int)sy;
+                    tx += tx < sx;
+                    ty += ty < sy;
                     uint32_t picked = s2_ui_pick(root, tx, ty), ancestor = picked;
                     if (s2_touch_context() != context || s2_touch_layout_epoch() != epoch ||
-                        s2_touch_owner_manager() != manager || MEM32(manager + 0x44) != root) return 0;
+                        s2_touch_owner_manager() != manager || MEM32(manager + 0x44) != root ||
+                        MEM32(manager + 0x34) != capture) return 0;
                     for (unsigned depth = 0; ancestor && depth < 16 && void_vm_readable(ancestor, 0xEC); ++depth) {
                         if (ancestor == window) break;
                         ancestor = MEM32(ancestor + 0x58);
                     }
-                    if (ancestor != window) {
+                    if (ancestor != window && !row_menu) {
                         uint32_t target_parent = 0, band_parent = 0;
                         const uint32_t *set = touch_vertical_set(window, &target_parent);
                         uint32_t band = set ? touch_vertical_band(root, tx, ty) : 0;
                         if (band && touch_vertical_set(band, &band_parent) == set && target_parent == band_parent) ancestor = window;
                     }
-                    if (ancestor == window) { best = window; best_x = tx; best_y = ty; best_distance = distance; }
+                    if (ancestor == window && (!row_menu || picked != window)) {
+                        best = window; best_x = tx; best_y = ty; best_distance = distance;
+                    }
                 }
             }
         }
+        if (pie && window != pie) continue;
         /* Original cGZWin child list: +54 COW header, sentinel nodes carry the child at +8. */
         uint32_t list = MEM32(window + 0x54);
         if (!list || !void_vm_readable(list, 12)) continue;
@@ -1422,7 +1634,8 @@ static uint32_t touch_ui_target(uint32_t root, uint32_t hit, int *x, int *y, int
         if (node && node != head) return 0;
     }
     if (pending || s2_touch_context() != context || s2_touch_layout_epoch() != epoch ||
-        s2_touch_owner_manager() != manager || MEM32(manager + 0x44) != root) return 0;
+        s2_touch_owner_manager() != manager || MEM32(manager + 0x44) != root ||
+        MEM32(manager + 0x34) != capture) return 0;
     if (best) {
         if (ui_target_logs++ < 32) void_log("[touch-ui-target] %d,%d -> %d,%d button=%08X side=%d scale=%.3f visited=%u",
             *x, *y, best_x, best_y, MEM32(best + 0x10), side, factor, visited);
@@ -1622,7 +1835,7 @@ void s2_touch_request_pick(int x, int y)
     pthread_mutex_unlock(&pick_lock);
 }
 
-static int touch_query(int x, int y, int radius, uint64_t *point)
+static int touch_query(int x, int y, int radius, uint64_t *point, uint64_t key, s2_world_targets *targets)
 {
     struct timespec until, started = {0};
     int timed = clock_gettime(CLOCK_MONOTONIC, &started) == 0;
@@ -1642,7 +1855,7 @@ static int touch_query(int x, int y, int radius, uint64_t *point)
     }
     unsigned serial = ++pick_serial;
     if (!serial) serial = ++pick_serial;
-    pick_x = x; pick_y = y; pick_radius = radius; pick_pending = 1; pick_diagnostic = 0;
+    pick_x = x; pick_y = y; pick_radius = radius; pick_world_key = key; pick_pending = 1; pick_diagnostic = 0;
     int queued = void_input_touch_barrier(serial);
     int wait_result = 0;
     while (queued && pick_done != serial) {
@@ -1651,6 +1864,10 @@ static int touch_query(int x, int y, int radius, uint64_t *point)
     }
     int result = pick_done == serial ? pick_result : 0;
     if (point && pick_done == serial) *point = pick_point;
+    if (targets && (result & 3) == 2) {
+        targets->count = pick_world.count;
+        memcpy(targets->items, pick_world.items, targets->count * sizeof targets->items[0]);
+    }
     unsigned done = pick_done, current = pick_serial, owner_context = done == serial ? pick_owner_context : 0;
     uint32_t owner_root = done == serial ? pick_owner_root : 0, owner_hit = done == serial ? pick_owner_hit : 0;
     int pending = pick_pending, trace = !result && query_zero_logs < 16;
@@ -1667,151 +1884,305 @@ static int touch_query(int x, int y, int radius, uint64_t *point)
     return result;
 }
 
-int s2_touch_pick(int x, int y) { return touch_query(x, y, 0, NULL); }
+int s2_touch_pick(int x, int y) { return touch_query(x, y, 0, NULL, 0, NULL); }
 
 int s2_touch_ui_pick(int x, int y, int side, uint64_t *point)
 {
-    return point && side > 0 && side <= 512 ? touch_query(x, y, -side, point) : 0;
+    return point && side > 0 && side <= 512 ? touch_query(x, y, -side, point, 0, NULL) : 0;
 }
 
-uint64_t s2_touch_target(int x, int y, int radius)
+int s2_touch_world_targets(int x, int y, int radius, s2_world_targets *targets)
 {
-    uint64_t point = (uint64_t)(uint32_t)y << 32 | (uint32_t)x;
-    return radius > 0 && radius <= 48 && (touch_query(x, y, radius, &point) & 3) == 2 ? point : UINT64_MAX;
+    if (radius < 1) radius = 1;
+    if (radius > S2_WORLD_PICK_RADIUS) radius = S2_WORLD_PICK_RADIUS;
+    return (touch_query(x, y, radius, NULL, 0, targets) & 3) == 2;
 }
 
-static uint32_t touch_target_node(uint32_t tool, uint32_t root, int x, int y, uint32_t scratch)
+int s2_touch_world_confirm(int x, int y, uint64_t key)
 {
-    if (s2_touch_context() != S2_TOUCH_LIVE || !s2_touch_owner_manager() ||
-        MEM32(win_manager + 0x44) != root || !tool_handler || MEM32(tool_handler + 0x20) != tool ||
-        !void_vm_readable(tool, 8) || MEM32(tool) != 0xA0DE9374u) return 0;
-    int w, h;
-    void_input_screen_size(&w, &h);
-    if (x < 0 || y < 0 || x >= w || y >= h) return 0;
-    uint32_t hit = s2_ui_pick(root, x, y);
-    if ((hit != scene_window && strcmp(touch_type(hit), ".?AVcTSWinSceneGraph@@")) ||
-        s2_touch_context() != S2_TOUCH_LIVE || !win_manager || !tool_handler ||
-        MEM32(win_manager + 0x44) != root || MEM32(tool_handler + 0x20) != tool) return 0;
-    uint32_t args[5] = { (uint32_t)x, (uint32_t)y, 0, scratch, 0 };
-    return void_call_guest_this(0xA078D789u, tool, 5, args);
+    return key && (touch_query(x, y, 1, NULL, key, NULL) & 3) == 2;
 }
 
-static int touch_target_bounds(uint32_t node, const float eye[3], const float matrix[9],
-    float focal, float near, int limit, uint32_t scratch)
+static int touch_world_owner(uint32_t manager, uint32_t tool, uint32_t root, unsigned epoch)
 {
-    /* Animated parts (a phone's handset) have their own cObject; measure the outer object. */
-    for (uint32_t parent = node, depth = 0; parent; ++depth) {
-        if (depth >= 64 || !void_vm_readable(parent, 4) || !void_vm_readable(MEM32(parent), 0x124)) return 0;
-        uint32_t table = MEM32(parent), object_iid = 0xFA1C39EDu;
-        if (void_call_guest_this(MEM32(table + 0x64), parent, 1, &object_iid) & 255) node = parent;
-        parent = void_call_guest_this(MEM32(table + 0x88), parent, 0, NULL);
+    return s2_touch_context() == S2_TOUCH_LIVE && s2_touch_layout_epoch() == epoch &&
+        win_manager == manager && void_vm_readable(manager, 0x48) &&
+        MEM32(manager + 0x44) == root && !MEM32(manager + 0x34) &&
+        tool_handler && void_vm_readable(tool_handler, 0x24) && MEM32(tool_handler + 0x20) == tool;
+}
+
+static uint64_t touch_world_object(uint32_t node, uint32_t hit_position)
+{
+    if (!node || !void_vm_readable(node, 4) || !void_vm_readable(MEM32(node), 0x1EC)) return 0;
+    /* The original click resolves the scene hit to a simulation object at the hit point. */
+    uint32_t object = void_call_guest_this(MEM32(MEM32(node) + 0x1E8), node, 1, &hit_position);
+    if (!object || !void_vm_readable(object, 4) || !void_vm_readable(MEM32(object), 0x4AC)) return 0;
+    uint32_t table = MEM32(object), slot = 59;
+    if (void_call_guest_this(MEM32(table + 0x188), object, 0, NULL) == 19 &&
+        void_call_guest_this(MEM32(table + 0x34), object, 1, &slot) != 167) return 0;
+    uint32_t primary = void_call_guest_this(MEM32(table + 0x1E0), object, 0, NULL);
+    if (primary && void_vm_readable(primary, 4) && void_vm_readable(MEM32(primary), 0x4AC)) object = primary;
+    uint16_t id = (uint16_t)void_call_guest_this(MEM32(MEM32(object) + 0xBC), object, 0, NULL);
+    return (uint64_t)id << 32 | object;
+}
+
+static void touch_world_name(s2_world_target *target, uint32_t string)
+{
+    uint32_t object = (uint32_t)target->key;
+    void_call_guest_this(0xA0144F5Bu, string, 0, NULL);
+    void_call_guest_this(MEM32(MEM32(object) + 0x4A8), object, 1, &string);
+    unsigned n = void_call_guest_this(0xA0149D00u, string, 0, NULL);
+    uint32_t data = void_call_guest_this(0xA01ACD4Fu, string, 0, NULL);
+    if (n && n < sizeof target->name && data && void_vm_readable(data, n))
+        memcpy(target->name, GPTR(data), n);
+    void_call_guest_this(0xA0141455u, string + 4, 0, NULL);
+}
+
+static uint32_t touch_scene_method(uint32_t node, unsigned offset)
+{
+    if (!node || !void_vm_readable(node, 4)) return 0;
+    uint32_t table = MEM32(node);
+    if (!table || !void_vm_readable(table, offset + 4)) return 0;
+    uint32_t method = MEM32(table + offset);
+    return void_dispatch_find(method) ? method : 0;
+}
+
+static uint32_t touch_world_member(uint32_t object, unsigned offset)
+{
+    uint32_t method = touch_scene_method(object, offset);
+    return method ? void_call_guest_this(method, object, 0, NULL) : 0;
+}
+
+static uint32_t touch_world_guid(uint32_t object)
+{
+    uint32_t definition = touch_world_member(object, 0x100);
+    if (!void_vm_readable(definition, 4) || MEM32(definition) != 0xA0DC3B30u) return 0;
+    return void_call_guest_this(0xA041B670u, definition, 1, (uint32_t[]){201});
+}
+
+static int touch_world_phone_base(uint32_t object)
+{
+    switch (touch_world_guid(object)) {
+    case 0x6C734D8Cu: case 0x6C7EF3B7u: case 0xECA6E041u:
+    case 0x11243517u: case 0x3124350Fu: case 0x34250E7Eu: case 0x74250E9Cu:
+        return 1;
+    default: return 0;
     }
-    /* shortcut: skip models over 128 nodes; raise this only if a small model needs it. */
-    uint32_t nodes[128];
-    nodes[0] = node;
-    unsigned pending = 1, visited = 0, bounds = 0;
-    float minimum[3] = {1e30f,1e30f,1e30f}, maximum[3] = {-1e30f,-1e30f,-1e30f};
-    while (pending) {
-        uint32_t current = nodes[--pending];
-        if (++visited > 128 || !void_vm_readable(current, 4) || !void_vm_readable(MEM32(current), 0x124)) return 0;
-        uint32_t table = MEM32(current);
-        uint32_t child = void_call_guest_this(MEM32(table + 0x9C), current, 0, NULL);
-        uint32_t sibling = current == node ? 0 : void_call_guest_this(MEM32(table + 0x94), current, 0, NULL);
-        if (pending + (child != 0) + (sibling != 0) > 128) return 0;
-        if (child) nodes[pending++] = child;
-        if (sibling) nodes[pending++] = sibling;
-        uint32_t kind = 1;
-        if (!(void_call_guest_this(MEM32(table + 0xC0), current, 1, &kind) & 255)) continue;
-        if (void_call_guest_this(MEM32(table + 0x118), current, 0, NULL) & 255) return 0;
-        void_call_guest_this(MEM32(table + 0x120), current, 1, &scratch);
-        float box[6];
-        memcpy(box, GPTR(scratch), sizeof box);
-        /* Object origins and animation locators are points, not visible model bounds. */
-        if (box[0] == box[3] && box[1] == box[4] && box[2] == box[5]) continue;
-        for (unsigned k = 0; k < 3; ++k) {
-            if (!isfinite(box[k]) || !isfinite(box[k + 3]) || box[k] > box[k + 3]) return 0;
-            minimum[k] = __builtin_fminf(minimum[k], box[k]); maximum[k] = __builtin_fmaxf(maximum[k], box[k + 3]);
+}
+
+static int touch_world_phone_duplicate(const s2_world_targets *targets, uint32_t object)
+{
+    uint32_t guid = touch_world_guid(object);
+    if (guid != 0x6C734DB3u && guid != 0xCCA8324Cu && guid != 0x112437F8u && guid != 0x342B59C8u) return 0;
+    uint32_t holder = touch_world_member(object, 0x11C);
+    uint32_t attribute = touch_scene_method(object, 0x3C);
+    /* Create Handset stores the base's object ID in handset attribute zero. */
+    uint16_t base = attribute && guid != 0xCCA8324Cu
+        ? (uint16_t)void_call_guest_this(attribute, object, 1, (uint32_t[]){0}) : 0;
+    for (unsigned i = 0; i < targets->count; ++i) {
+        uint64_t key = targets->items[i].key;
+        uint32_t candidate = (uint32_t)key;
+        if (candidate != object && (candidate == holder || (base && base == (uint16_t)(key >> 32))) &&
+            touch_world_phone_base(candidate)) return 1;
+    }
+    return 0;
+}
+
+static void touch_world_bounds(uint32_t node, uint32_t scratch, float bounds[6], unsigned *remaining, int root)
+{
+    uint32_t is_type = touch_scene_method(node, 0x64);
+    if (!is_type || !*remaining) return;
+    --*remaining;
+    /* A slotted object has its own target and must not pull the supporting object's center. */
+    if (!root && (void_call_guest_this(is_type, node, 1, (uint32_t[]){0xFA1C39EDu}) & 255)) return;
+
+    /* cIRenderableNode extends cIBoundedNode. Ignore room, cutout and collision bounds. */
+    uint32_t get_bounds = (void_call_guest_this(is_type, node, 1, (uint32_t[]){0x1C585E30u}) & 255)
+        ? touch_scene_method(node, 0x120) : 0;
+    if (get_bounds && void_call_guest_this(get_bounds, node, 1, &scratch) == scratch) {
+        float part[6];
+        memcpy(part, GPTR(scratch), sizeof part);
+        int valid = 1, extent = 0;
+        for (unsigned i = 0; i < 3; ++i) {
+            valid &= isfinite(part[i + 3] - part[i]) && part[i] <= part[i + 3];
+            extent |= part[i] < part[i + 3];
         }
-        ++bounds;
-    }
-    if (!bounds) return 0;
-    float left = 1e30f, right = -1e30f, top = 1e30f, bottom = -1e30f;
-    for (unsigned corner = 0; corner < 8; ++corner) {
-        float local[3] = {0};
-        for (unsigned k = 0; k < 3; ++k) {
-            float delta = (corner & (1u << k) ? maximum[k] : minimum[k]) - eye[k];
-            for (unsigned axis = 0; axis < 3; ++axis) local[axis] += delta * matrix[k * 3 + axis];
+        if (valid && extent) for (unsigned i = 0; i < 3; ++i) {
+            bounds[i] = fminf(bounds[i], part[i]);
+            bounds[i + 3] = fmaxf(bounds[i + 3], part[i + 3]);
         }
-        if (!isfinite(local[1]) || local[1] <= near) return 0;
-        float x = focal * local[0] / local[1], y = focal * local[2] / local[1];
-        if (!isfinite(x) || !isfinite(y)) return 0;
-        left = __builtin_fminf(left, x); right = __builtin_fmaxf(right, x); top = __builtin_fminf(top, y); bottom = __builtin_fmaxf(bottom, y);
     }
-    if (target_logs < 32) void_log("[touch-model] node=%08X visited=%u bounds=%u px=%.2f,%.2f limit=%d",
-        node, visited, bounds, (double)(right-left), (double)(bottom-top), limit);
-    return right > left && bottom > top && right - left <= limit && bottom - top <= limit;
+    uint32_t first_child = touch_scene_method(node, 0x9C);
+    uint32_t child = first_child ? void_call_guest_this(first_child, node, 0, NULL) : 0;
+    while (child && *remaining) {
+        uint32_t next_sibling = touch_scene_method(child, 0x98);
+        unsigned before = *remaining;
+        touch_world_bounds(child, scratch, bounds, remaining, 0);
+        if (!next_sibling || *remaining == before) break;
+        child = void_call_guest_this(next_sibling, child, 0, NULL);
+    }
 }
 
-static void touch_small_target(uint32_t tool, uint32_t root, int *x, int *y, int radius)
+static void touch_world_anchor(s2_world_target *target, uint32_t node, uint32_t view, uint32_t scratch, int width, int height)
 {
-    if (radius < 1 || radius > 48 || s2_touch_context() != S2_TOUCH_LIVE ||
-        !tool || !void_vm_readable(tool, 8) || MEM32(tool) != 0xA0DE9374u ||
-        !root || !void_vm_readable(MEM32(root), 0xC0) || MEM32(win_manager + 0x34) ||
-        !lot_camera || !void_vm_readable(lot_camera, 0x458)) return;
-    uint32_t scratch = g_esp - 32;
-    if (!void_vm_writable(scratch, 24)) return;
-    uint32_t stack = g_esp;
+    if (!void_vm_readable(view, 16) || MEM32(view) != 0xA0DD8CB8u || !MEM32(view + 12)) return;
+    float bounds[6] = { INFINITY, INFINITY, INFINITY, -INFINITY, -INFINITY, -INFINITY };
+    unsigned remaining = 128;
+    touch_world_bounds(node, scratch, bounds, &remaining, 1);
+    /* shortcut: use the hit when the scene has no usable model bounds or the center is offscreen. */
+    if (!remaining || !isfinite(bounds[0])) return;
+    float center[3];
+    for (unsigned i = 0; i < 3; ++i) center[i] = bounds[i] * .5f + bounds[i + 3] * .5f;
+    memcpy(GPTR(scratch + 24), center, sizeof center);
+    /* cTSWinSceneGraph projects world coordinates into the same screen space as its picker. */
+    uint32_t args[] = { scratch, scratch + 24 };
+    if (void_call_guest_this(0xA05BD6B6u, view, 2, args) != scratch) return;
+    int x = (int)MEM32(scratch), y = (int)MEM32(scratch + 4);
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+        target->anchor_x = x;
+        target->anchor_y = y;
+    }
+}
+
+static int touch_world_scan(uint32_t manager, uint32_t tool, uint32_t root, int x, int y,
+    int radius, uint64_t expected, s2_world_targets *out)
+{
+    unsigned epoch = s2_touch_layout_epoch();
+    uint32_t stack = g_esp, scratch = stack - 64;
+    if (!tool || !void_vm_readable(tool, 8) || MEM32(tool) != 0xA0DE9374u ||
+        !touch_world_owner(manager, tool, root, epoch) || !void_vm_writable(scratch, 64)) {
+        if (!expected) {
+            out->count = 1;
+            out->items[0] = (s2_world_target){ .x = x, .y = y, .anchor_x = x, .anchor_y = y };
+        }
+        return expected == 0;
+    }
+
+    /* A single reported surface represents the terrain anywhere in the tap area. */
+    s2_world_target ground = {0};
+    int distances[S2_WORLD_TARGET_LIMIT];
+    uint32_t nodes[S2_WORLD_TARGET_LIMIT];
+    int ground_distance = radius * radius + 1;
+    struct { uint32_t node; uint64_t key; } cache[32];
+    unsigned cached = 0;
+    int width, height;
+    void_input_screen_size(&width, &height);
     g_esp = scratch;
-    if (touch_target_node(tool, root, *x, *y, scratch)) { g_esp = stack; return; }
-    float eye[3], matrix[9], fov = touch_float(lot_camera + 0x134), near = touch_float(lot_camera + 0xFC);
-    float distance = touch_float(lot_camera + 224);
-    int w, h;
-    void_input_screen_size(&w, &h);
-    if (!isfinite(fov) || fov <= 0 || fov >= 3.141593f || !isfinite(near) || near <= 0 ||
-        !isfinite(distance) || distance <= 0 || distance > 10000 ||
-        !touch_camera_basis(lot_camera, distance, eye, matrix)) { g_esp = stack; return; }
-    float focal = w / (2 * tanf(fov * .5f));
-    struct { uint32_t node; int x, y, distance, left, right, top, bottom; } targets[8] = {0};
+    if (expected) radius = 0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            int sx = x + dx, sy = y + dy, distance = dx * dx + dy * dy;
+            if (distance > radius * radius || sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+            /* shortcut: sample farther rings more coarsely to keep large taps bounded until bulk picking is available. */
+            int step = distance > 32 * 32 ? 8 : distance > 16 * 16 ? 4 : distance > 8 ? 2 : 1;
+            if (dx % step || dy % step) continue;
+            uint32_t hit = s2_ui_pick(root, sx, sy);
+            if (!touch_world_owner(manager, tool, root, epoch)) goto stale;
+            if (!hit || (hit != scene_window && strcmp(touch_type(hit), ".?AVcTSWinSceneGraph@@"))) continue;
+
+            uint32_t args[5] = { (uint32_t)sx, (uint32_t)sy, 0, scratch, 0 };
+            uint32_t node = void_call_guest_this(0xA078D789u, tool, 5, args);
+            uint64_t key = 0;
+            if (node) {
+                unsigned i = 0;
+                while (i < cached && cache[i].node != node) ++i;
+                if (i < cached) key = cache[i].key;
+                else {
+                    key = touch_world_object(node, scratch);
+                    if (cached < sizeof cache / sizeof cache[0]) {
+                        cache[cached].node = node;
+                        cache[cached++].key = key;
+                    }
+                }
+            }
+            if (!key && distance < ground_distance &&
+                (void_call_guest_this(0xA068C4C1u, tool, 3, (uint32_t[]){(uint32_t)sx, (uint32_t)sy, scratch}) & 255)) {
+                ground = (s2_world_target){ .key = UINT64_MAX, .x = sx, .y = sy, .anchor_x = sx, .anchor_y = sy };
+                ground_distance = distance;
+            }
+            if (expected) {
+                g_esp = stack;
+                return (key ? key == expected : ground.key == expected) && touch_world_owner(manager, tool, root, epoch);
+            }
+            if (!key) continue;
+            unsigned i = 0;
+            while (i < out->count && out->items[i].key != key) ++i;
+            if (i == out->count) {
+                ++out->count;
+                distances[i] = radius * radius + 1;
+            }
+            if (distance < distances[i]) {
+                out->items[i] = (s2_world_target){ .key = key, .x = sx, .y = sy, .anchor_x = sx, .anchor_y = sy };
+                nodes[i] = node;
+                distances[i] = distance;
+            }
+        }
+    }
+    if (expected || !touch_world_owner(manager, tool, root, epoch)) goto stale;
+    for (unsigned i = 1; i < out->count; ++i) {
+        s2_world_target target = out->items[i];
+        uint32_t node = nodes[i];
+        int distance = distances[i];
+        unsigned j = i;
+        for (; j > 0 && distance < distances[j - 1]; --j) {
+            out->items[j] = out->items[j - 1];
+            nodes[j] = nodes[j - 1];
+            distances[j] = distances[j - 1];
+        }
+        out->items[j] = target;
+        nodes[j] = node;
+        distances[j] = distance;
+    }
+    if (out->count && void_vm_readable(0xA10CC288u, 4)) {
+        /* StandardAction uses this test for the currently selected Sim. */
+        uint32_t simulator = MEM32(0xA10CC288u);
+        uint32_t actor = touch_world_member(touch_world_member(simulator, 104), 156);
+        uint32_t service = actor ? touch_world_member(simulator, 60) : 0;
+        uint32_t test = touch_scene_method(service, 72);
+        struct timespec started;
+        int timed = !clock_gettime(CLOCK_MONOTONIC, &started);
+        unsigned count = 0;
+        for (unsigned i = 0; test && i < out->count; ++i) {
+            struct timespec now;
+            /* shortcut: show confirmed options only, until action testing can be spread across frames. */
+            if (i && timed && !clock_gettime(CLOCK_MONOTONIC, &now) &&
+                (now.tv_sec - started.tv_sec) * 1000000000LL + now.tv_nsec - started.tv_nsec >= 120000000) break;
+            uint32_t args[] = { actor, (uint32_t)out->items[i].key };
+            int available = void_call_guest_this(test, service, 2, args) & 255;
+            if (!touch_world_owner(manager, tool, root, epoch)) goto stale;
+            if (!available) continue;
+            out->items[count] = out->items[i];
+            nodes[count++] = nodes[i];
+        }
+        if (test) out->count = count;
+    }
     unsigned count = 0;
-    /* Bound work even at native display resolution; a one-pixel object must not fall between probes. */
-    if (radius > 16) radius = 16;
-    int limit = (radius * 4 + 2) / 3;
-    for (int oy = -radius; oy <= radius; ++oy) for (int ox = -radius; ox <= radius; ++ox) {
-        int distance = ox * ox + oy * oy;
-        if (!distance || distance > radius * radius) continue;
-        uint32_t node = touch_target_node(tool, root, *x + ox, *y + oy, scratch);
-        if (!node) continue;
-        unsigned n;
-        for (n = 0; n < count && targets[n].node != node; ++n) {}
-        if (n == count) {
-            if (count == 8) {
-                n = 0;
-                for (unsigned i = 1; i < count; ++i) if (targets[i].distance > targets[n].distance) n = i;
-                if (distance >= targets[n].distance) continue;
-            } else ++count;
-            targets[n].node = node; targets[n].distance = radius * radius + 1;
-            targets[n].left = targets[n].right = *x + ox; targets[n].top = targets[n].bottom = *y + oy;
-        }
-        if (*x + ox < targets[n].left) targets[n].left = *x + ox;
-        if (*x + ox > targets[n].right) targets[n].right = *x + ox;
-        if (*y + oy < targets[n].top) targets[n].top = *y + oy;
-        if (*y + oy > targets[n].bottom) targets[n].bottom = *y + oy;
-        if (distance < targets[n].distance) {
-            targets[n].x = *x + ox; targets[n].y = *y + oy; targets[n].distance = distance;
+    for (unsigned i = 0; i < out->count; ++i) {
+        if (out->count > 1 && touch_world_phone_duplicate(out, (uint32_t)out->items[i].key)) continue;
+        out->items[count] = out->items[i];
+        nodes[count++] = nodes[i];
+    }
+    out->count = count;
+    if (!touch_world_owner(manager, tool, root, epoch)) goto stale;
+    if (out->count > 1) {
+        uint32_t view = MEM32(tool + 4);
+        for (unsigned i = 0; i < out->count; ++i) {
+            touch_world_anchor(&out->items[i], nodes[i], view, scratch, width, height);
+            if (!touch_world_owner(manager, tool, root, epoch)) goto stale;
+            touch_world_name(&out->items[i], scratch + 16);
+            if (!touch_world_owner(manager, tool, root, epoch)) goto stale;
         }
     }
-    int best = radius * radius + 1;
-    for (unsigned n = 0; n < count; ++n) {
-        if (targets[n].distance >= best) continue;
-        if (touch_target_bounds(targets[n].node, eye, matrix, focal, near, limit, scratch)) {
-            best = targets[n].distance;
-            int cx = (targets[n].left + targets[n].right) / 2, cy = (targets[n].top + targets[n].bottom) / 2;
-            /* Aim inside: the original action handler can reject the picker's one-pixel rim. */
-            if (touch_target_node(tool, root, cx, cy, scratch) == targets[n].node) { *x = cx; *y = cy; }
-            else { *x = targets[n].x; *y = targets[n].y; }
-        }
-    }
+    /* A separate target choice is needed only when at least two objects were hit. */
+    if (out->count == 0 || (out->count > 1 && ground.key)) out->items[out->count++] = ground.key ? ground :
+        (s2_world_target){ .x = x, .y = y, .anchor_x = x, .anchor_y = y };
     g_esp = stack;
+    return 1;
+
+stale:
+    out->count = 0;
+    g_esp = stack;
+    return 0;
 }
 
 static uint64_t slider_receipt(unsigned serial, int result, int before, int after)
@@ -2389,7 +2760,6 @@ void s2_touch_barrier(unsigned serial)
     unsigned rotate_context = 0, rotate_epoch = 0;
     unsigned command = 0;
     float camera_dx = 0, camera_dy = 0, camera_radians = 0, camera_zoom = 0, camera_pitch = 0, camera_pose[6] = {0};
-    float camera_from_x = .5f, camera_from_y = .5f;
     int camera_absolute = 0;
     unsigned camera_epoch = 0, camera_context = 0;
     uint64_t camera_size = 0;
@@ -2401,6 +2771,7 @@ void s2_touch_barrier(unsigned serial)
     ui_command_expire();
     slider_expire();
     int pending = pick_pending && pick_serial == serial;
+    uint64_t world_key = pick_world_key;
     x = pick_x; y = pick_y; diagnostic = pick_diagnostic; radius = pick_radius;
     if (pending && slider_serial == serial && slider_state == SLIDER_QUEUED) {
         slider_state = SLIDER_STARTED; step = 1; delta = slider_delta;
@@ -2413,7 +2784,6 @@ void s2_touch_barrier(unsigned serial)
         if (command == S2_UI_CAMERA) {
             camera_dx = camera_request.dx; camera_dy = camera_request.dy; camera_radians = camera_request.radians; camera_zoom = camera_request.zoom;
             camera_pitch = camera_request.pitch;
-            camera_from_x = camera_request.from_x; camera_from_y = camera_request.from_y;
             camera_epoch = camera_request.epoch; camera_context = camera_request.context; camera_size = camera_request.size;
             camera_absolute = camera_request.absolute;
             memcpy(camera_pose, camera_request.pose, sizeof camera_pose);
@@ -2450,7 +2820,7 @@ void s2_touch_barrier(unsigned serial)
             applied = touch_camera_pose_apply(camera_pose, camera_epoch, camera_size);
             void_log("[camera] camset applied=%d", applied);
         }
-        else if (command == S2_UI_CAMERA && s2_touch_context() == camera_context) applied = touch_camera_apply_at(camera_dx, camera_dy, camera_radians, camera_zoom, camera_pitch, camera_epoch, camera_size, camera_from_x, camera_from_y);
+        else if (command == S2_UI_CAMERA && s2_touch_context() == camera_context) applied = touch_camera_apply(camera_dx, camera_dy, camera_radians, camera_zoom, camera_pitch, camera_epoch, camera_size);
         else if (command == S2_UI_CATALOG) applied = catalog_info == 3 ?
             touch_fling_apply(catalog_x, catalog_y, catalog_amount, catalog_context, catalog_size, catalog_epoch, catalog_owner) :
             touch_catalog_apply(catalog_x, catalog_y, catalog_amount, catalog_info, catalog_context, catalog_size, catalog_epoch);
@@ -2495,7 +2865,6 @@ void s2_touch_barrier(unsigned serial)
     void_regs_save(&saved);
     unsigned context = s2_touch_context();
     if (!(context & S2_TOUCH_LOADING) && root && void_vm_readable(root, 0x5C) && void_vm_readable(MEM32(root), 0xC0)) {
-        camera_anchor.valid = 0;
         hit = s2_ui_pick(root, x, y);
         if (hit) {
             unsigned modes = S2_TOUCH_CAS | S2_TOUCH_TOWN | S2_TOUCH_LIVE | S2_TOUCH_BUY | S2_TOUCH_BUILD;
@@ -2507,25 +2876,63 @@ void s2_touch_barrier(unsigned serial)
                 result = 1 | (int)touch_widget(hit);
         }
         if (context == S2_TOUCH_CHOOSER && touch_chooser_window(root)) result = 1 | 256;
-        else if ((result & 3) == 1) {
-            if (touch_vertical_band(root, x, y)) result |= 512;
-            uint32_t clock = touch_time_band(root, x, y);
-            if (clock) result |= 256 | touch_time_state(clock);
+        else if ((result & 3) == 1 || (!step && radius < 0 && result == 2)) {
+            if (touch_vertical_band(root, x, y)) result = 1 | (result & ~3) | 512;
+            if ((result & 3) == 1) {
+                uint32_t clock = touch_time_band(root, x, y);
+                if (clock) result |= 256 | touch_time_state(clock);
+            }
         }
     }
     int target_x = x, target_y = y;
-    if (!step && radius < 0 && root && !(context & S2_TOUCH_LOADING)) {
-        uint32_t target = touch_ui_target(root, hit, &target_x, &target_y, -radius);
-        if (target) { hit = target; result = 1 | (int)touch_widget(target); }
+    /* An open pie menu takes every click (TouchLayer.PIE_ITEM / PIE_DISMISS). It runs as
+     * a modal loop; in Live mode without mouse capture. */
+    uint32_t pie = !step && radius < 0 && root && !(context & S2_TOUCH_LOADING) &&
+        (context & S2_TOUCH_MODAL) && s2_touch_context() == context && manager == s2_touch_owner_manager() &&
+        void_vm_readable(manager, 0x48) && MEM32(manager + 0x44) == root ? touch_open_pie(manager, root) : 0;
+    if (pie) {
+        touch_pie_describe(pie, manager);
+        int item = touch_pie_pick(pie, manager, &target_x, &target_y, -radius);
+        if (item) result = 1 | 32768;
+        else if (touch_pie_outside(pie, root, &target_x, &target_y)) result = 1 | 16384;
+        else result = 1 | 32768; /* no point outside the menu: the original resolves the finger */
+        if (pie_pick_logs++ < 64) void_log("[touch-pie] tap %d,%d -> %d,%d %s hit=%08X", x, y, target_x, target_y,
+            item == 1 ? "item" : item == 2 ? "label" : (result & 16384) ? "dismiss" : "none", hit);
     }
+    else if (!step && radius < 0 && root && !(context & S2_TOUCH_LOADING)) {
+        uint32_t target = touch_ui_target(root, hit, &target_x, &target_y, -radius);
+        /* Enlarged tap targets must not change the gesture that starts at the finger. */
+        const unsigned swipe_flags = 256 | 512 | 1024 | (3 << 11);
+        unsigned gestures = result & swipe_flags;
+        if (touch_pan_background(context, manager, root, hit, result))
+            gestures |= 8192; /* TouchLayer.PAN_BACKGROUND */
+        if (target) {
+            hit = target;
+            result = 1 | (touch_widget(target) & ~swipe_flags);
+        }
+        result |= gestures;
+        /* TouchLayer.HOLD_BUTTON: a held finger keeps an original button pressed, as a held mouse. */
+        if ((result & 3) == 1)
+            for (uint32_t window = hit, depth = 0; window && depth < 4 && void_vm_readable(window, 0xEC); ++depth) {
+                if (touch_ui_button(window)) { result |= 65536; break; }
+                window = MEM32(window + 0x58);
+            }
+    }
+    /* A second finger on the HUD's transparent container is a world finger for a pinch. */
+    else if (!step && !radius && touch_pan_background(context, manager, root, hit, result)) result |= 8192;
     uint32_t picked = hit;
-    if (!step && radius > 0 && result == 2) {
+    static s2_world_targets world;
+    static _Atomic int world_busy;
+    int scan_world = !step && radius > 0 && result == 2;
+    if (scan_world && atomic_exchange(&world_busy, 1)) { scan_world = 0; result = 0; }
+    if (scan_world) {
+        world.count = 0;
         struct timespec started = {0}, finished = {0};
         clock_gettime(CLOCK_MONOTONIC, &started);
-        touch_small_target(tool, root, &target_x, &target_y, radius);
+        if (!touch_world_scan(manager, tool, root, x, y, radius, world_key, &world)) result = 0;
         clock_gettime(CLOCK_MONOTONIC, &finished);
-        if (target_logs++ < 32) void_log("[touch-target] %d,%d -> %d,%d radius=%d us=%lld", x, y, target_x, target_y, radius,
-            (long long)(finished.tv_sec - started.tv_sec) * 1000000 + (finished.tv_nsec - started.tv_nsec) / 1000);
+        if (target_logs++ < 32) void_log("[touch-target] %d,%d radius=%d choices=%u result=%d us=%lld", x, y, radius,
+            world.count, result, (long long)(finished.tv_sec - started.tv_sec) * 1000000 + (finished.tv_nsec - started.tv_nsec) / 1000);
     }
     int before = -101, after = -101;
     if (step) result = touch_slider_apply(manager, hit, x, y, delta, &before, &after);
@@ -2573,8 +2980,13 @@ void s2_touch_barrier(unsigned serial)
     if (pick_serial == serial) {
         pick_done = serial; pick_result = result;
         pick_point = (uint64_t)(uint32_t)target_y << 32 | (uint32_t)target_x;
+        if (scan_world && !world_key && result == 2) {
+            pick_world.count = world.count;
+            memcpy(pick_world.items, world.items, world.count * sizeof world.items[0]);
+        }
         pick_owner_context = context; pick_owner_root = root; pick_owner_hit = picked;
     }
+    if (scan_world) atomic_store(&world_busy, 0);
     pthread_cond_broadcast(&pick_ready);
     pthread_mutex_unlock(&pick_lock);
 }

@@ -48,7 +48,7 @@ STUBS = {'android/content/Context.java': 'package android.content; public class 
                            '    public View(android.content.Context c){}\n'
                            '    public static int width=2400,height=1080;\n'
                            '    public int getWidth(){return width;} public int getHeight(){return height;}\n'
-                           '    public static final int VISIBLE=0,GONE=8;public int visibility;public boolean enabled=true;public float alpha=1;public Object background;public String description;\n'
+                           '    public static final int VISIBLE=0,GONE=8,LAYOUT_DIRECTION_LTR=0;public float rotation;public void setRotation(float a){rotation=a;}public void setLayoutDirection(int n){}public int visibility;public boolean enabled=true;public float alpha=1;public Object background;public String description;\n'
                            '    public void setVisibility(int v){visibility=v;}public void setEnabled(boolean b){enabled=b;}public void setAlpha(float v){alpha=v;}public void setBackground(Object b){background=b;}public void setContentDescription(String s){description=s;}\n'
                            '    public void setMinimumWidth(int n){}public void setMinimumHeight(int n){}\n'
                            '    public void setPadding(int a,int b,int c,int d){}\n'
@@ -99,20 +99,20 @@ STUBS = {'android/content/Context.java': 'package android.content; public class 
                                 'void setStrokeWidth(float x){}public void setColor(int x){}public void '
                                 'setStyle(Style x){}}',
  'android/graphics/Canvas.java': 'package android.graphics; public class Canvas {public float '
-                                 'circleX,circleY;public String drawnText;public int circles;public void drawRoundRect(float a,float b,float c,float d,float e,float f,Paint p){}public void drawText(String s,float x,float y,Paint p){drawnText=s;}public void drawRect(float a,float '
+                                 'circleX,circleY,circleR;public String drawnText;public int circles;public void drawRoundRect(float a,float b,float c,float d,float e,float f,Paint p){}public void drawText(String s,float x,float y,Paint p){drawnText=s;}public void drawRect(float a,float '
                                  'b,float c,float d,Paint p){}public void drawLine(float a,float b,float '
                                  'c,float d,Paint p){}public void drawCircle(float a,float b,float c,Paint '
-                                 'p){circleX=a;circleY=b;circles++;}}'}
+                                 'p){circleX=a;circleY=b;circleR=c;circles++;}}'}
 
 STUBS.update({
 'android/view/DisplayCutout.java':'''package android.view;public class DisplayCutout {int l,t,r,b;public DisplayCutout(int a,int c,int d,int e){l=a;t=c;r=d;b=e;}public int getSafeInsetLeft(){return l;}public int getSafeInsetTop(){return t;}public int getSafeInsetRight(){return r;}public int getSafeInsetBottom(){return b;}}''',
 'android/widget/CheckBox.java':'''package android.widget;public class CheckBox extends TextView {public boolean checked;public interface Changed {void change(Object button,boolean value);}public Changed changed;public CheckBox(android.content.Context c){super(c);}public void setChecked(boolean v){checked=v;if(changed!=null)changed.change(this,v);}public void setOnCheckedChangeListener(Changed c){changed=c;}}''',
-'org/sims2/port/GamePreferences.java':'''package org.sims2.port;class GamePreferences {static boolean swipes=true,hintShown=true;static boolean uiSwipeControls(){return swipes;}static void uiSwipeControls(boolean b){swipes=b;}static boolean timeHintShown(){return hintShown;}static void markTimeHintShown(){hintShown=true;}}''',
+'org/sims2/port/GamePreferences.java':'''package org.sims2.port;class GamePreferences {static final int MIN_TARGET_RADIUS=4,MAX_TARGET_RADIUS=48;static int radius=16;static boolean targetHint;static boolean targetRadiusHintShown(){return targetHint;}static void markTargetRadiusHintShown(){targetHint=true;}static int targetRadius(){return radius;}static void targetRadius(int r){radius=r;}static boolean swipes=true,hintShown=true;static boolean uiSwipeControls(){return swipes;}static void uiSwipeControls(boolean b){swipes=b;}static boolean timeHintShown(){return hintShown;}static void markTimeHintShown(){hintShown=true;}}''',
 'android/graphics/Rect.java':'''package android.graphics;public class Rect {public int left,top,right,bottom;public Rect(int l,int t,int r,int b){left=l;top=t;right=r;bottom=b;}}''',
 'android/graphics/Color.java':'''package android.graphics;public class Color {public static final int WHITE=-1,BLACK=0xff000000;public static int rgb(int r,int g,int b){return (255<<24)|(r<<16)|(g<<8)|b;}}''',
 'android/graphics/drawable/GradientDrawable.java':'''package android.graphics.drawable;public class GradientDrawable {public int color,stroke,strokeColor;public float radius;public void setColor(int c){color=c;}public void setCornerRadius(float r){radius=r;}public void setStroke(int w,int c){stroke=w;strokeColor=c;}}''',
 'android/view/Gravity.java':'''package android.view;public class Gravity {public static final int TOP=48,BOTTOM=80,RIGHT=5,CENTER=17,CENTER_VERTICAL=16,CENTER_HORIZONTAL=1;}''',
-'android/widget/FrameLayout.java':'''package android.widget;public class FrameLayout extends android.view.View {public interface Click {void click(Object v);}public Click click;public void setOnClickListener(Click c){click=c;}public java.util.List<Object> children=new java.util.ArrayList<>();public FrameLayout(android.content.Context c){super(c);}public void addView(Object v,Object p){children.add(v);if(v instanceof android.view.View)((android.view.View)v).setLayoutParams(p);}public void removeView(Object v){children.remove(v);}public static class LayoutParams {public int width,height,gravity,topMargin,leftMargin,rightMargin,bottomMargin;public LayoutParams(int w,int h){this(w,h,0);}public LayoutParams(int w,int h,int g){width=w;height=h;gravity=g;}}}''',
+'android/widget/FrameLayout.java':'''package android.widget;public class FrameLayout extends android.view.View {public interface Click {void click(Object v);}public Click click;public void setOnClickListener(Click c){click=c;}public java.util.List<Object> children=new java.util.ArrayList<>();public FrameLayout(android.content.Context c){super(c);}public void setClipChildren(boolean b){}public void addView(Object v,Object p){children.add(v);if(v instanceof android.view.View)((android.view.View)v).setLayoutParams(p);}public void removeView(Object v){children.remove(v);}public static class LayoutParams {public int width,height,gravity,topMargin,leftMargin,rightMargin,bottomMargin;public LayoutParams(int w,int h){this(w,h,0);}public LayoutParams(int w,int h,int g){width=w;height=h;gravity=g;}}}''',
 'android/graphics/Insets.java':'''package android.graphics;public class Insets {public int left,top,right,bottom;public Insets(int l,int t,int r,int b){left=l;top=t;right=r;bottom=b;}}''',
 'android/view/RoundedCorner.java':'''package android.view;public class RoundedCorner {int radius;public RoundedCorner(int r){radius=r;}public int getRadius(){return radius;}}''',
 'android/view/WindowInsets.java':'''package android.view;public class WindowInsets {public android.graphics.Insets safe;public DisplayCutout cutout;public android.graphics.Insets getSystemWindowInsets(){return safe;}public DisplayCutout getDisplayCutout(){return cutout;}public RoundedCorner[] corners=new RoundedCorner[4];public WindowInsets(int l,int t,int r,int b){safe=new android.graphics.Insets(l,t,r,b);}public android.graphics.Insets getInsets(int type){assert type==3;return safe;}public RoundedCorner getRoundedCorner(int n){return corners[n];}public static class Type {public static int systemBars(){return 1;}public static int displayCutout(){return 2;}}}''',
@@ -134,8 +134,8 @@ STUBS.update({
 'android/text/InputType.java':'package android.text; public class InputType {public static final int TYPE_CLASS_TEXT=1,TYPE_TEXT_FLAG_CAP_SENTENCES=2;}',
 'android/widget/TextView.java':'''package android.widget;public class TextView extends android.view.View {public int icon;public void setCompoundDrawablesWithIntrinsicBounds(int a,int b,int c,int d){icon=b;}public String text="";public int textColor;public final android.content.Context context;public TextView(android.content.Context c){super(c);context=c;}public void setText(String s){text=s;}public void setTextColor(int c){textColor=c;}public void setTextSize(int s){}public void setGravity(int g){}}''',
 'android/widget/EditText.java':'''package android.widget;public class EditText extends TextView {public String error;public EditText(android.content.Context c){super(c);}public interface EditorAction {boolean action(Object v,int a,Object e);}public EditorAction editorAction;public int imeOptions;public void setImeOptions(int i){imeOptions=i;}public void setOnEditorActionListener(EditorAction l){editorAction=l;}public void setSingleLine(boolean b){}public void setInputType(int t){}public void setFilters(android.text.InputFilter[] f){}public void setSelection(int p){}public int length(){return text.length();}public String getText(){return text;}public void setError(String s){error=s;}public void requestFocus(){}public void post(Runnable r){new android.os.Handler(android.os.Looper.getMainLooper()).post(r);}}''',
-'android/widget/LinearLayout.java':'''package android.widget;public class LinearLayout extends android.view.View {public static final int VERTICAL=1,HORIZONTAL=0;public java.util.List<Object> children=new java.util.ArrayList<>();public int orientation;public LinearLayout(android.content.Context c){super(c);}public void setOrientation(int i){orientation=i;}public void setPadding(int a,int b,int c,int d){}public void addView(Object o){children.add(o);}public void addView(Object o,Object p){children.add(o);}public static class LayoutParams {public int width,height,leftMargin,rightMargin;public LayoutParams(int w,int h){width=w;height=h;}}}''',
-'android/widget/SeekBar.java':'''package android.widget;public class SeekBar {public static SeekBar latest;public int progress;public OnSeekBarChangeListener listener;public SeekBar(android.content.Context c){latest=this;}public void setMax(int i){}public void setProgress(int i){progress=i;}public void setOnSeekBarChangeListener(OnSeekBarChangeListener l){listener=l;}public interface OnSeekBarChangeListener {void onProgressChanged(SeekBar b,int p,boolean user);void onStartTrackingTouch(SeekBar b);void onStopTrackingTouch(SeekBar b);}}''',
+'android/widget/LinearLayout.java':'''package android.widget;public class LinearLayout extends android.view.View {public static final int VERTICAL=1,HORIZONTAL=0;public java.util.List<Object> children=new java.util.ArrayList<>();public int orientation;public void setGravity(int g){}public LinearLayout(android.content.Context c){super(c);}public void setOrientation(int i){orientation=i;}public void setPadding(int a,int b,int c,int d){}public void addView(Object o){children.add(o);}public void addView(Object o,Object p){children.add(o);}public static class LayoutParams {public int width,height,leftMargin,rightMargin,topMargin;public LayoutParams(int w,int h){width=w;height=h;}}}''',
+'android/widget/SeekBar.java':'''package android.widget;public class SeekBar extends android.view.View {public static SeekBar latest;public int progress,max;public OnSeekBarChangeListener listener;public SeekBar(android.content.Context c){super(c);latest=this;}public void setMax(int i){max=i;}public void setProgress(int i){progress=i;}public void setOnSeekBarChangeListener(OnSeekBarChangeListener l){listener=l;}public interface OnSeekBarChangeListener {void onProgressChanged(SeekBar b,int p,boolean user);void onStartTrackingTouch(SeekBar b);void onStopTrackingTouch(SeekBar b);}}''',
 'android/app/AlertDialog.java':'''package android.app;
 public class AlertDialog {
  public static final int BUTTON_POSITIVE=-1;public boolean showing;public Listener show,dismiss;public Pair negative,choice;public String[] choices;public int checked,theme;public Object view;
@@ -184,7 +184,19 @@ public class GameActivity extends ActivityBase {
  static long nativeTouchScrollOwner(){return 123;}
  static int flingStops;static void nativeTouchStopFling(){flingStops++;}
  static boolean nativeTouchFling(float x,float y,int amount,int mode,long size,long epoch,long owner){assert owner==123;flings++;return nativeTouchScroll(x,y,amount,mode,size,epoch);}
- static long nativeTouchTarget(float x,float y,float radius){return(nativeTouchHitKind(x,y)&3)!=2?-1:((long)Math.round(y*1080)<<32)|(Math.round(x*2400)&0xffffffffL);}
+ static WorldTarget[] worldTargets,shownTargets;
+ static java.util.function.Consumer<WorldTarget> chooseTarget;
+ static boolean confirmTarget=true;
+ static int pickedRadius;
+ static WorldTarget[] nativeTouchTargets(float x,float y,int radius){
+  pickedRadius=radius;
+  if((nativeTouchHitKind(x,y)&3)!=2)return null;
+  int px=Math.round(x*2400),py=Math.round(y*1080);
+  return worldTargets!=null?worldTargets:new WorldTarget[]{new WorldTarget(px,py,px,py,0,new byte[0])};
+ }
+ static boolean nativeTouchConfirmTarget(int x,int y,long key){return confirmTarget;}
+ static void chooseWorldTarget(WorldTarget[] targets,long size,java.util.function.BooleanSupplier current,java.util.function.Consumer<WorldTarget> choose){shownTargets=targets;chooseTarget=choose;}
+ WorldTargetMenu targetMenu;
  static long gameSize=(1080L<<32)|2400,layoutEpoch;
  static int nativeTouchObjectCost(){return 80;}static boolean nativeTouchObjectPreview(long token){return token==nativeTouchToolToken();}
  static long nativeTouchGameSize(){return gameSize;}static long nativeTouchLayoutEpoch(){return layoutEpoch;}
@@ -219,7 +231,8 @@ public class GameActivity extends ActivityBase {
  static boolean nativeTouchCamera(float dx,float dy,float radians,float zoom,float pitch){cameraPitch+=pitch;cameraZoom+=zoom;cameraCommands++;cameraDx+=dx;cameraDy+=dy;cameraTurn+=radians;events.add("camera");return true;}
  static boolean nativeTouchPan(float x,float y,float xx,float yy){return nativeTouchCamera(xx-x,yy-y,0,0,0);}
  static int scrolls,scrollAmount,infos;static boolean scrollAccept=true;
- static boolean nativeTouchScroll(float x,float y,int amount,int mode,long size,long epoch){assert mode==context&&size==gameSize&&epoch==layoutEpoch;scrolls++;scrollAmount+=amount;return scrollAccept;}
+ static float scrollX,scrollY;
+ static boolean nativeTouchScroll(float x,float y,int amount,int mode,long size,long epoch){assert mode==context&&size==gameSize&&epoch==layoutEpoch;scrollX=x;scrollY=y;scrolls++;scrollAmount+=amount;return scrollAccept;}
  static boolean nativeTouchCatalogInfo(float x,float y,int mode,long size,long epoch){assert mode==context&&size==gameSize&&epoch==layoutEpoch;infos++;return true;}
  static int toolMenuRequests,lastToolMenuAction;static boolean nativeTouchToolMenu(int action,int mode,long size,long epoch){assert action>=0&&action<9&&mode==context&&size==gameSize&&epoch==layoutEpoch;toolMenuRequests++;lastToolMenuAction=action;return true;}
  static int catalogClears;static boolean nativeTouchClearCatalog(){catalogClears++;events.add("catalog-clear");assert keys[72]||keys[27];return true;}
@@ -240,7 +253,7 @@ public class GameActivity extends ActivityBase {
  static GameActivity active;boolean started=true,firstFrame;float preferredRefreshRate=120;
  GamepadLayer gamepad;TouchLayer touch=new TouchLayer(this);android.os.Handler controlHandler=new android.os.Handler(android.os.Looper.getMainLooper());Runnable updateControls=()->{};
  AlertDialog settingsDialog,textDialog,languageDialog,cheatDialog;EditText textEditor;TextView scaleStatus;int textSerial,desiredScale,lastSubmittedScale,cheatSerial;boolean scaleRequested;String textDraft="";
- LinearLayout objectControls;TextView objectCost;Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;FrameLayout root=new FrameLayout(this),toolMenu;int toolMenuContext;long toolMenuSize,toolMenuEpoch;
+ LinearLayout objectControls,targetRadiusTextPanel;TextView objectCost,targetRadiusHint;Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;FrameLayout root=new FrameLayout(this),toolMenu,targetRadiusPanel;int toolMenuContext;long toolMenuSize,toolMenuEpoch;
  int safeLeft,safeTop,safeRight,safeBottom;
  File base;
  void hideSystemUi(){}
@@ -261,6 +274,10 @@ public class TouchCheck {
   tap(t,1000,500);Handler.advance(50);
   assert GameActivity.events.contains("button:true:1200:540"):GameActivity.events;
   clean();GameActivity.pickX=GameActivity.pickY=-1;noExtra(t);
+  t=layer(128,1|512,0);GameActivity.pickX=.5f;GameActivity.pickY=.5f;int swipeBefore=GameActivity.scrolls;
+  t.onTouchEvent(one(0,1000,500));t.onTouchEvent(one(2,1000,610));t.onTouchEvent(one(1,1000,610));
+  assert GameActivity.scrolls>swipeBefore&&GameActivity.scrollX==1000f/2400&&GameActivity.scrollY==500f/1080;
+  GameActivity.pickX=GameActivity.pickY=-1;noExtra(t);
   for(int kind:new int[]{9,41}){
    t=layer(128,kind,0);android.view.VelocityTracker.vy=-2400;
    t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,600,400));t.onTouchEvent(one(1,600,400));
@@ -382,7 +399,34 @@ public class TouchCheck {
   t=layer(128,2,1);t.onTouchEvent(one(0,600,500));t.onTouchEvent(two(5,1,600,500,1000,500));assert GameActivity.cameraContact;
   t.onTouchEvent(two(2,0,650,550,1200,700));t.onTouchEvent(two(6,1,650,550,1200,700));assert GameActivity.cameraContact;
   t.onTouchEvent(one(2,700,600));assert GameActivity.cameraContact;t.onTouchEvent(one(1,700,600));assert !GameActivity.cameraContact;noExtra(t);
-  t=layer(128,2,1);GameActivity.hitAt=(x,y)->x<.3?2:1;t.onTouchEvent(one(0,600,500));t.onTouchEvent(two(5,1,600,500,1000,500));assert !GameActivity.cameraContact;noExtra(t);
+  t=layer(128,2,1);GameActivity.hitAt=(x,y)->x<.3?2:1;t.onTouchEvent(one(0,600,500));t.onTouchEvent(two(5,1,600,500,1000,500));
+  assert GameActivity.cameraContact:"a world finger and a HUD finger pinch the camera";
+  int pinch=GameActivity.cameraCommands,pinchClicks=GameActivity.clicks;t.onTouchEvent(two(2,0,560,500,1200,500));assert GameActivity.cameraCommands>pinch;
+  t.onTouchEvent(two(6,1,560,500,1200,500));t.onTouchEvent(one(1,560,500));assert GameActivity.clicks==pinchClicks&&!GameActivity.cameraContact;noExtra(t);
+  // The pinch starts over the HUD (wants strip): the cursor leaves it for the world finger, nothing is pressed.
+  t=layer(128,2,1);GameActivity.hitAt=(x,y)->x<.3?2:1;GameActivity.events.clear();t.onTouchEvent(one(0,1000,500));assert !GameActivity.cameraContact;
+  pinch=GameActivity.cameraCommands;t.onTouchEvent(two(5,1,1000,500,600,500));assert GameActivity.cameraContact;
+  assert GameActivity.events.contains("move:600:500"):GameActivity.events;
+  t.onTouchEvent(two(2,0,1100,500,500,500));assert GameActivity.cameraCommands>pinch;
+  t.onTouchEvent(two(6,1,1100,500,500,500));t.onTouchEvent(one(1,1100,500));Handler.advance(500);
+  assert GameActivity.clicks==pinchClicks&&!GameActivity.events.contains("right:true")&&!GameActivity.cameraContact:GameActivity.events;noExtra(t);
+  // The Live HUD's transparent container (PAN_BACKGROUND) over the lot counts as world for the second finger too.
+  for(int first=0;first<2;first++){
+   t=layer(128,2,1);GameActivity.hitAt=(x,y)->x<.3?2:1|8192;float a=first==0?600:1000,b=first==0?1000:1100;
+   int warped=GameActivity.warps;t.onTouchEvent(one(0,a,500));assert first==0||GameActivity.warps==warped:"no hover on the container (its tooltip would stay)";
+   pinch=GameActivity.cameraCommands;t.onTouchEvent(two(5,1,a,500,b,700));assert GameActivity.cameraContact:"container finger "+first;
+   t.onTouchEvent(two(2,0,a-80,500,b+150,800));assert GameActivity.cameraCommands>pinch;
+   t.onTouchEvent(two(6,1,a-80,500,b+150,800));t.onTouchEvent(one(1,a-80,500));assert GameActivity.clicks==pinchClicks;noExtra(t);
+  }
+  // A real HUD button under both fingers is not a pinch.
+  t=layer(128,1,1);t.onTouchEvent(one(0,1000,500));pinch=GameActivity.cameraCommands;t.onTouchEvent(two(5,1,1000,500,1300,500));
+  t.onTouchEvent(two(2,0,900,500,1400,500));assert GameActivity.cameraCommands==pinch&&!GameActivity.cameraContact;noExtra(t);
+  // A HUD finger that already pressed (long press) keeps its own gesture.
+  t=layer(128,2,1);GameActivity.hitAt=(x,y)->x<.3?2:1;t.onTouchEvent(one(0,1000,500));Handler.advance(451);pinch=GameActivity.cameraCommands;
+  t.onTouchEvent(two(5,1,1000,500,600,500));t.onTouchEvent(two(2,0,1100,500,500,500));assert !GameActivity.cameraContact&&GameActivity.cameraCommands==pinch;noExtra(t);
+  // Modal UI (an open pie menu) never pinches.
+  t=layer(1|128,2,1);GameActivity.hitAt=(x,y)->x<.3?2:1;t.onTouchEvent(one(0,1000,500));pinch=GameActivity.cameraCommands;
+  t.onTouchEvent(two(5,1,1000,500,600,500));t.onTouchEvent(two(2,0,1100,500,500,500));assert GameActivity.cameraCommands==pinch;noExtra(t);
   t=layer(128,1,1);GameActivity.contactEvents.clear();t.onTouchEvent(one(0,600,500));assert !GameActivity.cameraContact;
   assert GameActivity.contactEvents.contains("pick:true")&&GameActivity.contactEvents.contains("warp:false");noExtra(t);
   TouchLayer old=layer(128,2,1);old.onTouchEvent(one(0,600,500));old.releaseAll();old.releaseLocal();
@@ -402,6 +446,20 @@ public class TouchCheck {
  }
  static void world(){
   tapsAndMenus();
+  TouchLayer targets=layer(128,2,1);int clicksBeforeChoice=GameActivity.clicks;
+  GameActivity.WorldTarget first=new GameActivity.WorldTarget(593,497,500,420,11,new byte[0]);
+  GameActivity.WorldTarget second=new GameActivity.WorldTarget(611,505,650,560,22,new byte[0]);
+  GameActivity.WorldTarget ground=new GameActivity.WorldTarget(600,500,600,500,-1,new byte[0]);
+  GameActivity.worldTargets=new GameActivity.WorldTarget[]{first,second,ground};
+  tap(targets,600,500);clean();
+  assert GameActivity.clicks==clicksBeforeChoice&&GameActivity.shownTargets.length==3;
+  GameActivity.events.clear();GameActivity.chooseTarget.accept(second);
+  assert GameActivity.events.contains("button:true:611:505")&&GameActivity.events.contains("button:false:611:505")&&!GameActivity.mouse;
+  int selected=GameActivity.clicks;
+  tap(targets,600,500);clean();GameActivity.confirmTarget=false;GameActivity.chooseTarget.accept(first);
+  assert GameActivity.clicks==selected;GameActivity.confirmTarget=true;
+  tap(targets,600,500);clean();GameActivity.layoutEpoch++;GameActivity.chooseTarget.accept(ground);
+  assert GameActivity.clicks==selected;noExtra(targets);GameActivity.worldTargets=null;
   for(int mode:new int[]{2,66,3,1026,4,64}){
    TouchLayer back=layer(mode,1,0);GameActivity.events.clear();back.back();
    int expected=mode==2?0x70:27;assert GameActivity.events.get(0).equals("key:"+expected+":true");
@@ -420,6 +478,26 @@ public class TouchCheck {
   t=layer(128,2,1);t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,800,550));assert !GameActivity.mouse;assert GameActivity.cameraCommands>0&&!GameActivity.keys[0x25];t.onTouchEvent(one(1,800,550));clean();
   // A tool change published while the prepress fence waits suppresses the old world click.
   t=layer(512,2,1);clicks=GameActivity.clicks;tap(t,600,500);GameActivity.onPick=()->{GameActivity.tool=2;GameActivity.generation++;};clean();assert GameActivity.clicks==clicks;
+ }
+ static void targetMenu(){
+  GameActivity a=new GameActivity();GameActivity.active=a;GameActivity.context=128;a.touch=layer(128,2,1);
+  GameActivity.WorldTarget object=new GameActivity.WorldTarget(600,500,650,450,22,new byte[0]);
+  GameActivity.WorldTarget ground=new GameActivity.WorldTarget(615,510,615,510,-1,new byte[0]);
+  GameActivity.WorldTarget[] targets={object,ground},selected={null};
+  boolean[] current={true};
+  GameActivity.actualChooseWorldTarget(targets,GameActivity.gameSize,()->current[0],target->selected[0]=target);
+  WorldTargetMenu first=a.targetMenu;
+  assert a.root.children.contains(first)&&first.isCurrent();
+  int clicks=GameActivity.clicks;tap(a.touch,400,300);clean();assert GameActivity.clicks==clicks;
+  first.click.click(first);assert a.targetMenu==null&&selected[0]==null&&!a.root.children.contains(first);
+  GameActivity.actualChooseWorldTarget(targets,GameActivity.gameSize,()->current[0],target->selected[0]=target);
+  WorldTargetMenu second=a.targetMenu;first.pick(ground);assert a.targetMenu==second&&selected[0]==null;
+  second.pick(object);assert selected[0]==object&&a.targetMenu==null;
+  GameActivity.actualChooseWorldTarget(targets,GameActivity.gameSize,()->current[0],target->selected[0]=target);
+  current[0]=false;a.targetMenu.pick(ground);assert selected[0]==object&&a.targetMenu==null;
+  current[0]=true;GameActivity.actualChooseWorldTarget(targets,GameActivity.gameSize,()->current[0],target->selected[0]=target);
+  a.onBackPressed();assert a.targetMenu==null&&selected[0]==object;
+  a.onDestroy();GameActivity.active=null;
  }
  static void directTools(){
   for(int mode:new int[]{256,512})for(int tool:new int[]{2,3,4,5,6}){
@@ -552,6 +630,28 @@ public class TouchCheck {
   for(int mode:new int[]{1,2,4,8,16,32,64,128,256|1,256|1024,512|16}){GameActivity.context=mode;a.refreshObjectControls();assert a.objectControls.visibility==8;}
   assert a.helpButton.description.equals(GameActivity.text(R.string.interface_settings));
   for(int mode:new int[]{2,2|64,2|128,2|256,2|512}){GameActivity.context=mode;a.refreshObjectControls();assert a.helpButton.visibility==0;}
+  GamePreferences.targetHint=false;
+  GameActivity.context=2;a.touch.syncContext(64);a.touch.syncContext(2);a.refreshObjectControls();
+  assert a.targetRadiusPanel.visibility==8&&a.targetRadiusTextPanel.visibility==8&&!GamePreferences.targetHint;
+  a.touch.syncContext(128);a.touch.syncContext(2);a.refreshObjectControls();
+  assert a.targetRadiusPanel.visibility==0&&a.targetRadiusTextPanel.visibility==0;
+  assert ((android.widget.TextView)a.targetRadiusTextPanel.children.get(0)).text.equals("Размер касания");
+  assert a.targetRadiusHint.visibility==0&&GamePreferences.targetHint;
+  a.refreshObjectControls();assert a.targetRadiusHint.visibility==0;
+  android.widget.SeekBar radius=(android.widget.SeekBar)a.targetRadiusPanel.children.get(0);
+  assert radius.rotation==-90&&radius.max==44&&radius.progress==12;
+  radius.listener.onProgressChanged(radius,44,true);
+  assert a.targetRadiusHint.visibility==8;
+  assert GamePreferences.targetRadius()==48&&radius.description.contains("96");
+  long oldSize=GameActivity.gameSize;GameActivity.gameSize=(540L<<32)|1200;
+  android.graphics.Canvas preview=new android.graphics.Canvas();a.touch.onDraw(preview);
+  assert preview.circles==2&&preview.circleR==96&&preview.circleX==1200&&preview.circleY==540;
+  GameActivity.gameSize=oldSize;GameActivity.context=128;a.touch.syncContext(128);a.refreshObjectControls();
+  assert a.targetRadiusPanel.visibility==8;
+  preview=new android.graphics.Canvas();a.touch.onDraw(preview);assert preview.circles==0;
+  TouchLayer selectedRadius=layer(128,2,1);tap(selectedRadius,600,500);clean();assert GameActivity.pickedRadius==48;
+  GameActivity.context=2;a.touch.syncContext(2);a.refreshObjectControls();assert a.targetRadiusHint.visibility==8;
+  GamePreferences.targetRadius(16);
   for(int mode:new int[]{0,1,4,8,16,32,64,128,256,512,2|1,2|16,2|1024}){GameActivity.context=mode;a.refreshObjectControls();assert a.helpButton.visibility==8;}
   GameActivity.context=2;a.refreshObjectControls();a.helpButton.performClick();assert a.settingsDialog!=null;
   a.refreshObjectControls();assert a.helpButton.visibility==8;a.settingsDialog.dismiss();a.refreshObjectControls();assert a.helpButton.visibility==0;
@@ -560,6 +660,49 @@ public class TouchCheck {
   GameActivity.context=256;tap(a.touch,600,500);a.settingsDialog=new android.app.AlertDialog();a.refreshObjectControls();assert a.objectControls.visibility==8;
   clicks=GameActivity.clicks;a.touch.setBlocked(true);a.placeButton.listener.click(null);a.rotateButton.listener.click(null);assert GameActivity.clicks==clicks;
   a.settingsDialog=null;a.onDestroy();GameActivity.active=null;
+ }
+ static void pieDismiss(){
+  // Off-item taps in an open pie click the native point outside the menu (the original closes there).
+  TouchLayer t=layer(128,1|16384,1);GameActivity.events.clear();GameActivity.pickX=.1f;GameActivity.pickY=.2f;int warps=GameActivity.warps;
+  t.onTouchEvent(one(0,1900,400));assert GameActivity.warps==warps&&!GameActivity.events.contains("move:240:216"):"no hover over the menu";
+  t.onTouchEvent(one(1,1900,400));Handler.advance(50);
+  assert GameActivity.events.contains("button:true:240:216")&&!GameActivity.events.contains("key:27:true"):GameActivity.events;
+  Handler.advance(200);noExtra(t);
+  t=layer(128,1|16384,1);GameActivity.events.clear();t.onTouchEvent(one(0,1900,400));Handler.advance(600);t.onTouchEvent(one(1,1900,400));Handler.advance(200);
+  assert GameActivity.events.contains("button:true:240:216")&&!GameActivity.events.contains("right:true"):"a slow off-item tap closes, never right-clicks: "+GameActivity.events;noExtra(t);
+  t=layer(128,1|16384,1);GameActivity.events.clear();t.onTouchEvent(one(0,1900,400));t.onTouchEvent(one(2,1990,400));t.onTouchEvent(one(1,1990,400));Handler.advance(200);
+  for(String e:GameActivity.events)assert e.equals("pick"):"a drag from off-item space sends nothing: "+GameActivity.events;noExtra(t);
+  // A slow tap on a pie item still selects: no right press (it cancels the menu), left click on release.
+  t=layer(1|128,1|32768,1);GameActivity.events.clear();GameActivity.pickX=.25f;GameActivity.pickY=.5f;
+  t.onTouchEvent(one(0,600,540));Handler.advance(800);assert !GameActivity.events.contains("right:true"):GameActivity.events;
+  t.onTouchEvent(one(1,600,540));Handler.advance(50);
+  assert GameActivity.events.contains("button:true:600:540")&&!GameActivity.events.contains("right:true"):GameActivity.events;
+  Handler.advance(200);noExtra(t);
+  // A dragged finger on an item neither selects nor closes.
+  t=layer(1|128,1|32768,1);GameActivity.events.clear();t.onTouchEvent(one(0,600,540));t.onTouchEvent(one(2,700,540));t.onTouchEvent(one(1,700,540));Handler.advance(200);
+  for(String e:GameActivity.events)assert !e.startsWith("button")&&!e.startsWith("right")&&!e.startsWith("key"):GameActivity.events;noExtra(t);
+  // A held original button stays pressed (left) and is released over it; a finger moved away releases off it.
+  t=layer(128,1|65536,1);GameActivity.events.clear();GameActivity.pickX=.25f;GameActivity.pickY=.5f;
+  t.onTouchEvent(one(0,640,560));Handler.advance(800);
+  assert GameActivity.mouse&&GameActivity.events.contains("button:true:600:540")&&!GameActivity.events.contains("right:true"):GameActivity.events;
+  t.onTouchEvent(one(1,640,560));assert !GameActivity.mouse&&GameActivity.events.contains("button:false:600:540"):GameActivity.events;
+  Handler.advance(200);noExtra(t);
+  t=layer(128,1|65536,1);GameActivity.events.clear();t.onTouchEvent(one(0,640,560));Handler.advance(800);
+  t.onTouchEvent(one(2,1200,800));t.onTouchEvent(one(1,1200,800));
+  assert !GameActivity.mouse&&GameActivity.events.contains("button:false:1200:800"):GameActivity.events;Handler.advance(200);noExtra(t);
+  t=layer(128,1|65536|128,1);int cheats=GameActivity.cheatRequests;GameActivity.events.clear();t.onTouchEvent(one(0,640,560));Handler.advance(800);t.onTouchEvent(one(1,640,560));
+  assert GameActivity.cheatRequests==cheats+1&&!GameActivity.events.contains("button:true:600:540"):"the ... button keeps its hold";Handler.advance(200);noExtra(t);
+  GameActivity.pickX=.1f;GameActivity.pickY=.2f;
+  // Outside a menu a hold is still the original right click.
+  t=layer(128,1,1);GameActivity.events.clear();t.onTouchEvent(one(0,600,540));Handler.advance(800);t.onTouchEvent(one(1,600,540));Handler.advance(200);
+  assert GameActivity.events.contains("right:true")&&!GameActivity.events.contains("button:true:600:540"):GameActivity.events;noExtra(t);
+  GameActivity.pickX=.1f;GameActivity.pickY=.2f;
+  // Back with an open pie clicks outside it too; without a pie it stays Escape.
+  t=layer(1|128,1|16384,1);GameActivity.events.clear();t.back();Handler.advance(200);
+  assert GameActivity.events.contains("button:true:240:216")&&!GameActivity.events.contains("key:27:true"):GameActivity.events;noExtra(t);
+  t=layer(128,1,1);GameActivity.events.clear();t.back();Handler.advance(200);
+  assert GameActivity.events.contains("key:27:true")&&!GameActivity.events.contains("button:true:240:216"):GameActivity.events;noExtra(t);
+  GameActivity.pickX=GameActivity.pickY=-1;
  }
  static void radialMenu(){
   GameActivity a=new GameActivity();GameActivity.active=a;GameActivity.context=256;GameActivity.tool=1;
@@ -787,7 +930,22 @@ public class TouchCheck {
   TouchLayer town=layer(64,2,0);GameActivity.cameraDx=GameActivity.cameraDy=0;int commands=GameActivity.cameraCommands;GameActivity.events.clear();
   town.onTouchEvent(one(0,500,500));town.onTouchEvent(one(2,740,608));
   assert GameActivity.cameraCommands==commands+1&&Math.abs(GameActivity.cameraDx-.1f)<.0001f&&Math.abs(GameActivity.cameraDy-.1f)<.0001f;
+  for(int[] origin:new int[][]{{600,300},{1400,600}}){
+   town=layer(64,2,0);GameActivity.cameraDx=GameActivity.cameraDy=0;
+   int x=origin[0],y=origin[1];
+   town.onTouchEvent(one(0,x,y));town.onTouchEvent(one(2,x+200,y+90));town.onTouchEvent(one(1,x+240,y+108));clean();
+   assert Math.abs(GameActivity.cameraDx-.1f)<.0001f&&Math.abs(GameActivity.cameraDy-.1f)<.0001f;
+  }
   town.onTouchEvent(one(1,740,608));clean();assert GameActivity.events.stream().noneMatch(s->s.startsWith("key:"));
+  for(int kind:new int[]{1,8193}){
+   TouchLayer live=layer(128,kind,0);GameActivity.cameraDx=GameActivity.cameraDy=0;int clicks=GameActivity.clicks;
+   live.onTouchEvent(one(0,1000,500));live.onTouchEvent(one(2,1200,590));live.onTouchEvent(one(1,1240,608));clean();
+   float expected=kind==8193?.1f:0;
+   assert Math.abs(GameActivity.cameraDx-expected)<.0001f&&Math.abs(GameActivity.cameraDy-expected)<.0001f;
+   assert GameActivity.clicks==clicks;
+   live.onTouchEvent(one(0,1000,500));live.onTouchEvent(one(1,1000,500));clean();
+   assert GameActivity.clicks==clicks+1;
+  }
   town=layer(64,2,0);GameActivity.cameraPitch=GameActivity.cameraTurn=0;commands=GameActivity.cameraCommands;
   town.onTouchEvent(one(0,500,500));town.onTouchEvent(two(5,1,500,500,700,500));
   town.onTouchEvent(two(2,0,500,480,700,520));assert GameActivity.cameraCommands==commands+1&&Math.abs(GameActivity.cameraTurn-(float)Math.atan2(40,200))<.0001f&&GameActivity.cameraPitch==0;noExtra(town);
@@ -1017,7 +1175,7 @@ public class TouchCheck {
   android.view.Display display=new android.view.Display(m,m,new android.view.Display.Mode(2400,1080,59.94f),new android.view.Display.Mode(2400,1080,120),new android.view.Display.Mode(2400,1080,40),new android.view.Display.Mode(1920,1080,144),new android.view.Display.Mode(2400,1080,25));
   assert GameActivity.displayRates(display).equals("40,60,120");
  }
- public static void main(String[] args)throws Exception {touchUx();world();navigationMouseMoves();cameraContacts();directTools();ui();multi();contextHold();widgetSwipes();cancelTap();settingsChord();floorGestures();gestureSafety();actualActivity();radialMenu();controller();objectPreview();objectRotation();catalogDrag();areaFill();commandHandoff();platform();System.out.println("Native-first touch PASS: guarded objectpreview/buttons/commit-once, kind6click-only, camera/tap2 distinction, remaining finger/rejoined pinch, UI hold right click and balanced cancellation, natural yaw, Escape order, pinned UI, Town0, CAS model/pan/3xzoom, batched motion, chooser swipes, three-finger floors, no gesture clicks, full text/scale, held-object twist/fill serial, Activity ownership, safe insets/rotation, QA profile validation and display rates");}
+ public static void main(String[] args)throws Exception {touchUx();world();targetMenu();navigationMouseMoves();cameraContacts();pieDismiss();directTools();ui();multi();contextHold();widgetSwipes();cancelTap();settingsChord();floorGestures();gestureSafety();actualActivity();radialMenu();controller();objectPreview();objectRotation();catalogDrag();areaFill();commandHandoff();platform();System.out.println("Native-first touch PASS: guarded objectpreview/buttons/commit-once, kind6click-only, camera/tap2 distinction, mixed HUD/world pinches, pie off-item dismissal and slow item taps, held original buttons, remaining finger/rejoined pinch, UI hold right click and balanced cancellation, natural yaw, Escape order, pinned UI, Town0, CAS model/pan/3xzoom, batched motion, chooser swipes, three-finger floors, no gesture clicks, full text/scale, held-object twist/fill serial, Activity ownership, safe insets/rotation, QA profile validation and display rates");}
 }
 '''
 
@@ -1034,8 +1192,8 @@ def main():
     assert 'root.addView(surface' in activity and 'root.addView(touch' in activity
     assert 'touch.pollCommands();' in activity, 'command polls reuse the existing Activity context timer'
     native=NATIVE
-    for signature in ['static void touchObjectControlsChanged(','private Button objectButton(',
-                      'private void createObjectControls(','private void refreshObjectControls(',
+    for signature in ['static final class WorldTarget','static void touchObjectControlsChanged(','private Button objectButton(',
+                      'private void createObjectControls(','private android.graphics.drawable.GradientDrawable objectControlBackground(','private TextView targetRadiusText(','private void positionTargetRadiusControls(','private void refreshObjectControls(',
                       'private boolean toolMenuValid(','private void closeToolMenu(','private void showToolMenu(',
                       'private void applySafeInsets(','static String userdataName(','static String displayRates(',
                       'private boolean ownsInput(','private void submitScale(','private void showTouchSettings(','private void showTimeHint(',
@@ -1043,6 +1201,21 @@ def main():
                       'public void onWindowFocusChanged(','public void onBackPressed(','public void surfaceCreated(',
                       'public void surfaceDestroyed(','protected void onPause(','protected void onResume(','protected void onDestroy(']:
         native+=method(activity,signature)+'\n'
+    for signature in ['private void closeTargetMenu(', 'private boolean inputOverlayOpen(']:
+        native+=method(activity,signature)+'\n'
+    native+=method(activity,'static void chooseWorldTarget(').replace('chooseWorldTarget(', 'actualChooseWorldTarget(')+'\n'
+    STUBS['org/sims2/port/WorldTargetMenu.java']='''package org.sims2.port;
+import android.content.Context;import android.graphics.Rect;import android.widget.FrameLayout;
+import java.util.function.BooleanSupplier;import java.util.function.BiConsumer;
+final class WorldTargetMenu extends FrameLayout {
+ private final BooleanSupplier current;
+ private final BiConsumer<WorldTargetMenu,GameActivity.WorldTarget> select;
+ WorldTargetMenu(Context c,int width,int height,Rect area,long size,GameActivity.WorldTarget[] targets,BooleanSupplier current,
+                 BiConsumer<WorldTargetMenu,GameActivity.WorldTarget> select){super(c);this.select=select;this.current=current;}
+ boolean isCurrent(){return current.getAsBoolean();}
+ void pick(GameActivity.WorldTarget target){select.accept(this,target);}
+}
+'''
     start=activity.index('if (active != null && active != this)');end=activity.index('active = this;',start)+len('active = this;')
     native+='void claim(){'+activity[start:end]+'}\n}\n'
     STUBS['org/sims2/port/GamepadLayer.java']='package org.sims2.port;class GamepadLayer{void release(){}void setEnabledInput(boolean b){}'+method((ROOT/'android/app/src/org/sims2/port/GamepadLayer.java').read_text(), 'static float normalize(')+'}'

@@ -45,10 +45,20 @@ final class TouchLayer extends View {
     private boolean cancelTap;
     private boolean objectTwist,catalogDrag,singleCamera,tapMoved,floorSwipe,floorDone;
     private int pointer=-1,second=-1,originKind,context,originContext,tool;
-    private int optionReturnContext=LIVE;
+    private int optionReturnContext;
     private int originFillKind,originWidth,originHeight,commandKind;
     private boolean scrollHorizontal,widgetSwipe,chooserPaged;
     static final int MORE_BUTTON=128,SWIPE_HORIZONTAL=256,SWIPE_VERTICAL=512;
+    private static final int PAN_BACKGROUND=8192;
+    /** An open pie menu would select the item nearest the tap's direction; the native pick moves
+     *  this tap outside the menu, where the original closes it. The finger never hovers the menu. */
+    private static final int PIE_DISMISS=16384;
+    /** A tap on an open pie menu's item. A right press cancels the menu (A05C818D), so no long
+     *  press; the menu selects on button up, so a slow tap still selects. */
+    private static final int PIE_ITEM=32768;
+    /** An original button (cGZWinBtn). A right press does nothing on it, so a hold keeps it pressed. */
+    private static final int HOLD_BUTTON=65536;
+    private boolean heldButton;
     private long token,originToken,chordTime;
     private long originSize,originEpoch;
     private int commandSerial;
@@ -56,6 +66,8 @@ final class TouchLayer extends View {
     private Click pending;
     private Preview preview;
     private final Paint timePaint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint targetAreaPaint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private int targetAreaRadius;
     private boolean timeVisible;
     private int timeSpeed;
     private static final String[] TIME_LABELS={"Ⅱ","1×","2×","3×"};
@@ -68,6 +80,10 @@ final class TouchLayer extends View {
         if((originKind&65)==65&&(originContext&(BUY|BUILD))!=0&&stableOrigin()){
             consumed=true;
             GameActivity.nativeTouchCatalogInfo(downX/originWidth,downY/originHeight,originContext,originSize,originEpoch);
+        }
+        if(!consumed&&(originKind&HOLD_BUTTON)!=0&&(originKind&(4|16))==0&&stableOrigin()){
+            // An original button held like a mouse button: it acts on release over it (and repeats while held).
+            consumed=true;startCapture(downX,downY);heldButton=true;
         }
         if(!consumed&&(originKind&3)==1&&(originKind&(4|16))==0&&stableOrigin()){
             consumed=true;pending=new Click(downX,downY,originKind,originContext,originToken);
@@ -106,6 +122,13 @@ final class TouchLayer extends View {
         if(preview!=null&&preview.expected!=value)preview=null;
         if(token!=value&&(fillArmed||(held&&(originKind&3)==2)||(pending!=null&&(pending.kind&3)==2&&(!pending.down||pending.capturesWorld()))||(cameraContact&&pointer>=0)))releaseAll();
         token=value;tool=(int)value;
+    }
+    boolean optionsInLot(int mode){
+        int world=mode&(TOWN|LIVE|BUY|BUILD);
+        return ((world!=0?world:optionReturnContext)&(LIVE|BUY|BUILD))!=0;
+    }
+    void showTargetArea(int radius){
+        if(targetAreaRadius!=radius){targetAreaRadius=radius;invalidate();}
     }
     void setBlocked(boolean value){if(value){swipeNotice=null;releaseAll();}blocked=retired||value;GameActivity.touchObjectControlsChanged();}
     void pollCommands(){
@@ -170,7 +193,7 @@ final class TouchLayer extends View {
             for(int vk:keys.keySet())GameActivity.nativeKey(vk,false);
             if(escape)GameActivity.nativeKey(ESC,false);
         }
-        keys.clear();pending=null;preview=null;held=heldWorld=dragging=camera=uiPan=false;
+        keys.clear();pending=null;preview=null;held=heldWorld=heldButton=dragging=camera=uiPan=false;
         timeVisible=false;invalidate();
         pointer=second=-1;consumed=multi=longPressed=false;
         chordPossible=stream=fillArmed=cancelTap=objectTwist=catalogDrag=singleCamera=widgetSwipe=chooserPaged=floorSwipe=floorDone=false;chordPoints.clear();scrollRest=0;
@@ -182,6 +205,21 @@ final class TouchLayer extends View {
         if(commandSerial!=0){releaseAll();GameActivity.touchNotice(GameActivity.text(R.string.wait_command));return;}
         if(fillArmed){releaseAll();GameActivity.touchNotice(GameActivity.text(R.string.fill_disarmed));return;}
         handler.removeCallbacksAndMessages(null);
+        // An open pie closes on Escape, but then loses the next click: close it as a click outside it does.
+        int pieMode=GameActivity.nativeTouchContext();
+        if((pieMode&LIVE)!=0&&(pieMode&(OPTIONS|TEXT_FOCUS|LOADING))==0&&getWidth()>0&&getHeight()>0){
+            // A one-pixel target: an enlarged one would snap the corner onto a nearby HUD button.
+            float[] p=GameActivity.nativeTouchUiPick(.5f/getWidth(),.5f/getHeight(),1.5f/getWidth());
+            if(p!=null&&((int)p[0]&PIE_DISMISS)!=0&&!retired&&!blocked){
+                if(held)GameActivity.nativeMouseButton(0,false);
+                if(pending!=null&&pending.down)GameActivity.nativeMouseButton(pending.button,false);
+                for(int vk:keys.keySet())GameActivity.nativeKey(vk,false);
+                clear(false,false);
+                originSize=GameActivity.nativeTouchGameSize();originEpoch=GameActivity.nativeTouchLayoutEpoch();
+                pending=new Click(p[1]*getWidth(),p[2]*getHeight(),1,pieMode,GameActivity.nativeTouchToolToken());
+                pending.press.run();return;
+            }
+        }
         // F5 only opens Options; return with the original world-mode shortcut.
         int mode=GameActivity.nativeTouchContext();final int backKey;boolean clearCatalog=false;
         if((mode&(OPTIONS|MODAL|TEXT_FOCUS))==OPTIONS){
@@ -277,6 +315,17 @@ final class TouchLayer extends View {
         final Preview placement;
         final Runnable press,release;
         boolean capturesWorld(){return(kind&3)==2&&(mode&(BUY|BUILD))!=0&&(int)expected>=2;}
+        boolean worldMatches(){
+            return !retired&&getWidth()==width&&getHeight()==height&&GameActivity.nativeTouchContext()==mode
+                    &&GameActivity.nativeTouchToolToken()==expected&&GameActivity.nativeTouchGameSize()==size
+                    &&GameActivity.nativeTouchLayoutEpoch()==epoch;
+        }
+        float worldScale(){return Math.min(width/(float)(int)size,height/(float)(int)(size>>>32));}
+        void pointTarget(GameActivity.WorldTarget target){
+            float scale=worldScale();
+            GameActivity.nativeMouseMove((target.x*scale+(width-(int)size*scale)*.5f)/width,
+                    (target.y*scale+(height-(int)(size>>>32)*scale)*.5f)/height,false);
+        }
         Click(float x,float y,int kind,int mode,long expected){
             this(x,y,kind,mode,expected,null);
         }
@@ -301,12 +350,20 @@ final class TouchLayer extends View {
                 }
                 else if((GameActivity.nativeTouchContext()&~TEXT_FOCUS)!=(mode&~TEXT_FOCUS)){pending=null;return;}
                 if(worldTap){
-                    long target=GameActivity.nativeTouchTarget(x/getWidth(),y/getHeight(),18*density/getWidth());
-                    if(target==-1||GameActivity.nativeTouchContext()!=mode||GameActivity.nativeTouchToolToken()!=expected||GameActivity.nativeTouchGameSize()!=size
-                            ||GameActivity.nativeTouchLayoutEpoch()!=epoch){pending=null;return;}
-                    int w=(int)size,h=(int)(size>>>32);float scale=Math.min(width/(float)w,height/(float)h);
-                    GameActivity.nativeMouseMove(((int)target*scale+(width-w*scale)*.5f)/width,
-                            ((int)(target>>>32)*scale+(height-h*scale)*.5f)/height,false);
+                    GameActivity.WorldTarget[] targets=GameActivity.nativeTouchTargets(x/width,y/height,GamePreferences.targetRadius());
+                    if(targets==null||targets.length==0||!worldMatches()){pending=null;return;}
+                    if(targets.length>1){
+                        pending=null;
+                        GameActivity.chooseWorldTarget(targets,size,this::worldMatches,target->{
+                            if(worldMatches()&&GameActivity.nativeTouchConfirmTarget(target.x,target.y,target.key)&&worldMatches()){
+                                pointTarget(target);
+                                GameActivity.nativeMouseButton(0,true);
+                                GameActivity.nativeMouseButton(0,false);
+                            }else GameActivity.touchNotice(GameActivity.text(R.string.target_changed));
+                        });
+                        return;
+                    }
+                    pointTarget(targets[0]);
                 }else point(x,y);
                 GameActivity.nativeMouseButton(button,true);down=true;handler.postDelayed(release,90);
             };
@@ -502,11 +559,16 @@ final class TouchLayer extends View {
             timeSpeed=(originKind>>>11)&3;timeVisible=false;invalidate();
             if(stopOnly){cameraContact(false);consumed=true;return true;}
             if((originKind&3)==0){consumed=true;return true;}
+            // No warp or long press: cursor motion alone would highlight a pie item by direction.
+            if((originKind&PIE_DISMISS)!=0)return true;
             if((originKind&3)==2&&!navigation()&&(tool<2||token==0)){consumed=true;GameActivity.touchNotice(GameActivity.text(R.string.choose_tool));return true;}
             // Navigation has explicit finger coordinates; mouse motion would run object-interaction tests.
-            if((originKind&3)!=2||!navigation()||(originContext&CAS)!=0)warp(downX,downY);
+            // The HUD's transparent container (wants strip) pans like the lot; hovering it would leave a tooltip open.
+            boolean hudBackground=(originKind&PAN_BACKGROUND)!=0&&navigation()&&(originContext&CAS)==0;
+            if(((originKind&3)!=2||!navigation()||(originContext&CAS)!=0)&&!hudBackground)warp(downX,downY);
             if((originKind&3)==2&&tool==2&&(originContext==BUY||originContext==BUILD))previewObject(downX,downY);
-            handler.postDelayed(longPress,450);GameActivity.touchObjectControlsChanged();return true;
+            if((originKind&PIE_ITEM)==0)handler.postDelayed(longPress,450);
+            GameActivity.touchObjectControlsChanged();return true;
         }
         if(a==MotionEvent.ACTION_POINTER_DOWN){
             timeVisible=false;invalidate();
@@ -542,7 +604,21 @@ final class TouchLayer extends View {
             second=id;
             cancelTap=(originContext&(BUY|BUILD))!=0&&(originKind&3)==2&&(h&3)==2
                     &&tool>=2&&originToken!=0&&chordPossible&&e.getEventTime()-chordTime<=220;
-            if((originKind&3)==2&&(h&3)==2&&cameraAllowed()&&((c&TEXT_FOCUS)==0||(c&CAS)!=0)){camera=true;if(!navigation()||(originContext&CAS)!=0)warp(downX,downY);}
+            // One finger on the world is enough: a pinch often starts over the HUD (wants, tabs).
+            // The HUD finger has sent nothing yet: no press, capture, drag or long press.
+            // The Live HUD's transparent container covers part of the lot (around the wants panel).
+            boolean originWorld=(originKind&3)==2||(originKind&PAN_BACKGROUND)!=0&&navigation();
+            boolean secondWorld=(h&3)==2||(h&3)==1&&(h&PAN_BACKGROUND)!=0&&navigation();
+            boolean uiFirst=(originKind&3)==1&&secondWorld&&(originKind&PIE_DISMISS)==0;
+            boolean mixed=(c&(CAS|TEXT_FOCUS))==0&&(originContext&CAS)==0&&pending==null&&!held
+                    &&(uiFirst||originWorld&&(h&3)==1);
+            if(((originKind&3)==2&&(h&3)==2||mixed)&&cameraAllowed()&&((c&TEXT_FOCUS)==0||(c&CAS)!=0)){
+                camera=true;
+                // The first finger hovered a HUD element; leave it as a mouse would, or its tooltip stays.
+                // A held catalog object would follow the cursor, so only navigation tools move it.
+                if(uiFirst){if(navigation()&&(h&3)==2)point(e.getX(idx),e.getY(idx));}
+                else if(!navigation()||(originContext&CAS)!=0)warp(downX,downY);
+            }
             else if((c&CAS)!=0&&(originKind&3)==1&&(h&3)==1)uiPan=true;
             else{cameraContact(false);consumed=true;if(!cancelTap)return true;}
             cameraContact(camera&&(c&CAS)==0);
@@ -572,6 +648,10 @@ final class TouchLayer extends View {
             if(!dragging&&Math.hypot(x-gestureX,y-gestureY)>threshold){
                 dragging=true;chordPossible=false;handler.removeCallbacks(longPress);
                 scrollHorizontal=Math.abs(x-gestureX)>Math.abs(y-gestureY);
+                if((originKind&PAN_BACKGROUND)!=0&&navigation()){
+                    if(!stableOrigin()){releaseAll();return true;}
+                    originKind=2;cameraContact(true);
+                }
                 if(widgetSwipe||((originKind&3)==2&&navigation()&&(originContext&CAS)==0)){lastX=gestureX;lastY=gestureY;}
                 if((originKind&3)==1){if(!widgetSwipe&&(originKind&4)!=0)startCapture(downX,downY);}
                 else if(tool==6){consumed=true;return true;}
@@ -584,7 +664,7 @@ final class TouchLayer extends View {
                     scrollRest+=(horizontal?x-lastX:y-lastY)/density;
                     float step=horizontal?64:40;
                     int steps=Math.max(-8,Math.min(8,(int)Math.copySign((int)(Math.abs(scrollRest)/step+.5f),scrollRest)));
-                    if(steps!=0&&!chooserPaged&&GameActivity.nativeTouchScroll(downX/originWidth,downY/originHeight,
+                    if(steps!=0&&!chooserPaged&&GameActivity.nativeTouchScroll(gestureX/originWidth,gestureY/originHeight,
                             steps,originContext,originSize,originEpoch)){
                         chooserPaged=originContext==CHOOSER;
                         scrollRest-=steps*step;timeSpeed=Math.max(0,Math.min(3,timeSpeed+steps));
@@ -626,6 +706,9 @@ final class TouchLayer extends View {
                 chordPoints.clear();chordPoints.put(pointer,new float[]{downX,downY});
                 return true;
             }
+            if(a==MotionEvent.ACTION_UP&&id==pointer&&
+                    (singleCamera||dragging&&!held&&!consumed&&!multi&&(originKind&3)==2&&navigation()&&(originContext&CAS)==0)
+                    &&stableOrigin())pan(e.getX(idx)-lastX,e.getY(idx)-lastY);
             if(singleCamera){singleCamera=false;consumed=true;}
             if(objectTwist){objectTwist=false;consumed=true;}
             if(camera||uiPan){camera=uiPan=false;consumed=true;}
@@ -640,10 +723,13 @@ final class TouchLayer extends View {
                     else GameActivity.touchNotice(GameActivity.text(R.string.fill_changed));
                 }
                 else if(held){
-                    point(e.getX(idx),(originContext&CAS)!=0&&(originKind&3)==2?downY:e.getY(idx));
-                    GameActivity.nativeMouseButton(0,false);held=heldWorld=false;
+                    // A still finger releases a held button over it (an enlarged target may lie outside it).
+                    if(heldButton&&!tapMoved)point(downX,downY);
+                    else point(e.getX(idx),(originContext&CAS)!=0&&(originKind&3)==2?downY:e.getY(idx));
+                    GameActivity.nativeMouseButton(0,false);held=heldWorld=heldButton=false;
                 }
-                else if(!consumed&&!longPressed&&!multi&&(!tapMoved&&e.getEventTime()-chordTime<450||tool==2&&(originKind&3)==2)&&(!dragging||(tool==2&&(originKind&3)==2))){
+                else if(!consumed&&!longPressed&&!multi&&(!tapMoved&&(e.getEventTime()-chordTime<450||(originKind&(PIE_ITEM|PIE_DISMISS))!=0)
+                        ||tool==2&&(originKind&3)==2)&&(!dragging||(tool==2&&(originKind&3)==2))){
                     if((originKind&3)==1)click(downX,downY);
                     else if(tool==2&&(originContext==BUY||originContext==BUILD))previewObject(e.getX(idx),e.getY(idx));
                     else click(downX,downY);
@@ -656,6 +742,20 @@ final class TouchLayer extends View {
         return true;
     }
     @Override protected void onDraw(Canvas canvas){
+        if(targetAreaRadius>0){
+            long size=GameActivity.nativeTouchGameSize();
+            int w=(int)size,h=(int)(size>>>32);
+            if(w>0&&h>0){
+                float x=getWidth()*.5f,y=getHeight()*.5f;
+                float radius=targetAreaRadius*Math.min(getWidth()/(float)w,getHeight()/(float)h);
+                float stroke=Math.min(4*density,radius*.85f);
+                targetAreaPaint.setStyle(Paint.Style.STROKE);
+                targetAreaPaint.setStrokeWidth(stroke);targetAreaPaint.setColor(0xff10151f);
+                canvas.drawCircle(x,y,radius,targetAreaPaint);
+                targetAreaPaint.setStrokeWidth(stroke*.5f);targetAreaPaint.setColor(0xffeff8ff);
+                canvas.drawCircle(x,y,radius,targetAreaPaint);
+            }
+        }
         if(swipeNotice!=null){
             float cx=getWidth()*.5f,top=24*density,half=Math.min(180*density,getWidth()*.5f-16*density);
             timePaint.setColor(0xee14232d);canvas.drawRoundRect(cx-half,top,cx+half,top+48*density,10*density,10*density,timePaint);

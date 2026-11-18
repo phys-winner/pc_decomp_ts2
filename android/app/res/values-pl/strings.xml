@@ -91,4 +91,11 @@
   <string name="swipe_collar">Obroża</string>
   <string name="swipe_coat">Umaszczenie i znaczenia</string>
   <string name="swipe_body">Budowa ciała</string>
+  <string name="choose_target">Wybierz cel</string>
+  <string name="target_ground">Ziemia</string>
+  <string name="target_object">Obiekt %1$d</string>
+  <string name="target_changed">Cel się przesunął. Dotknij ponownie.</string>
+    <string name="target_area_diameter">Średnica obszaru dotknięcia: %1$d px</string>
+    <string name="target_area_label">Rozmiar dotknięcia</string>
+    <string name="target_area_hint">Suwak zmienia obszar wyszukiwania przedmiotów wokół punktu dotknięcia. Okrąg pokazuje jego rozmiar.</string>
 </resources>

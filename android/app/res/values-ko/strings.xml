@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">스와이프로 UI 조작</string>
   <string name="time_controls">시간 조작</string>
   <string name="time_swipe_hint">시계나 속도 버튼 위를 스와이프하세요. 오른쪽으로 밀면 빨라지고, 왼쪽으로 밀면 느려지다가 일시 정지됩니다. 중앙 눈금에 선택한 속도가 표시됩니다.</string>
+  <string name="choose_target">대상 선택</string>
+  <string name="target_ground">땅</string>
+  <string name="target_object">물건 %1$d</string>
+  <string name="target_changed">대상이 움직였습니다. 다시 터치하세요.</string>
 </resources>

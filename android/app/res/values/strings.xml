@@ -91,4 +91,11 @@
   <string name="swipe_collar">Collar</string>
   <string name="swipe_coat">Coat colors and markings</string>
   <string name="swipe_body">Body shape</string>
+  <string name="choose_target">Choose a target</string>
+  <string name="target_ground">Ground</string>
+  <string name="target_object">Object %1$d</string>
+  <string name="target_changed">The target moved. Tap again.</string>
+    <string name="target_area_diameter">Tap area diameter: %1$d px</string>
+    <string name="target_area_label">Tap size</string>
+    <string name="target_area_hint">Move the slider to change how far from a tap the game looks for objects. The circle shows the search area.</string>
 </resources>

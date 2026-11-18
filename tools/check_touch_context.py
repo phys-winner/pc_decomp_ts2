@@ -37,17 +37,22 @@ static int strcmp(const char *a,const char *b) { while(*a && *a==*b){++a;++b;}re
 static const char *strstr(const char *s,const char *n) { for(;*s;++s){const char *a=s,*b=n;while(*a && *a==*b){++a;++b;}if(!*b)return s;}return NULL; }
 static size_t strlen(const char *s) { size_t n=0;while(s[n])++n;return n; }
 static int strncmp(const char *a,const char *b,size_t n) { while(n--){if(*a!=*b)return(uint8_t)*a-(uint8_t)*b;if(!*a)return 0;++a;++b;}return 0; }
-static void *memcpy(void *d,const void *s,size_t n) { uint8_t *o=d;const uint8_t *i=s;while(n--)*o++=*i++;return d; }
-static void *memset(void *d,int c,size_t n) { uint8_t *o=d;while(n--)*o++=(uint8_t)c;return d; }
+void *memcpy(void *d,const void *s,size_t n) { uint8_t *o=d;const uint8_t *i=s;while(n--)*o++=*i++;return d; }
+void *memset(void *d,int c,size_t n) { uint8_t *o=d;while(n--)*o++=(uint8_t)c;return d; }
 static float tanf(float x) { return x; }
 static float expf(float x) { return 1+x; }
 static float sinf(float x) { return x; }
 static float cosf(float x) { (void)x;return 1; }
 static float sqrtf(float x) { (void)x;return 1; }
+static double fmax(double x,double y) { return x>y?x:y; }
+static double fabs(double x) { return x<0?-x:x; }
+static long lround(double x) { return (long)(x<0?x-.5:x+.5); }
 #define atomic_load(p) __c11_atomic_load(p,5)
 #define atomic_store(p,v) __c11_atomic_store(p,v,5)
 #define atomic_fetch_add(p,v) __c11_atomic_fetch_add(p,v,5)
+#define atomic_exchange(p,v) __c11_atomic_exchange(p,v,5)
 #define isfinite(v) __builtin_isfinite(v)
+#define INFINITY __builtin_inff()
 #define VOID_HOST_H
 #include "sims2_settings.h"
 typedef unsigned pthread_mutex_t;
@@ -79,7 +84,7 @@ static uint32_t words[8192];
 #define GPTR(a) ((uint8_t *)words+(uint32_t)(a))
 #define MEM32(a) words[(uint32_t)(a)/4]
 #define MEM8(a) (*(uint8_t *)GPTR(a))
-static unsigned touch_modal_depth,touch_mode_flags;
+static unsigned touch_modal_depth,touch_mode_flags,ui_pie_depth;
 static unsigned touch_input_flags;
 static uint32_t touch_mode_owner;
 static _Atomic unsigned touch_context;
@@ -111,12 +116,16 @@ static void ui_fit(int enter,int full_height) { (void)full_height;if(enter)++fit
 static int ui_fit_linger;
 static const char *fit_owner_name(const uint32_t *owner) { (void)owner; return ""; }
 int16_t void_input_key_state(uint32_t key){(void)key;return 0;}
+static void void_input_mouse_warp(int x,int y) { (void)x;(void)y;bad=1; }
+static void void_input_mouse_wheel(int delta) { (void)delta;bad=1; }
 static uint32_t void_galloc(uint32_t size){(void)size;return 0;}
 static void void_gfree(uint32_t pointer){(void)pointer;}
 static int screen_w,screen_h,surface_w,surface_h;
 static void void_input_screen_size(int *w,int *h) { *w=screen_w;*h=screen_h; }
 void s2_game_resolution(int *w,int *h) { *w=screen_w;*h=screen_h; }
 static void s2_ui_scale_requested(int scale){(void)scale;}
+static double ui_applied_factor=1;
+double s2_ui_factor(void) { return ui_applied_factor; }
 static _Atomic int ui_scale=200;
 int s2_ui_scale(void){return 200;}
 int s2_ui_scale_apply(int scale){(void)scale;return 0;}
@@ -133,7 +142,7 @@ int s2_catalog_clear_owner(uint32_t serial){return serial==1;}
 static void sub_A0972F48(void);
 static void sub_A0972F48_lifted(void) {
     ++modal_calls;
-    if(!(s2_touch_context() & S2_TOUCH_MODAL) || !fit_depth)bad=2;
+    if(!(s2_touch_context() & S2_TOUCH_MODAL) || (ui_pie_depth ? fit_depth!=0 : fit_depth==0))bad=2;
     if(nest_modal){nest_modal=0;sub_A0972F48();}
     g_eax=0x1234;
 }
@@ -160,6 +169,8 @@ static void void_input_cursor(uint32_t *x,uint32_t *y) { *x=cursor_x;*y=cursor_y
 static int ANativeWindow_getWidth(void *p) { (void)p;return surface_w; }
 static int ANativeWindow_getHeight(void *p) { (void)p;return surface_h; }
 static float fminf(float a,float b) { return a<b?a:b; }
+static float fmaxf(float a,float b) { return a>b?a:b; }
+static void (*void_dispatch_find(uint32_t va))(void) { (void)va;return NULL; }
 static long lroundf(float value) { return (long)(value+.5f); }
 '''
     prelude = prelude.replace('#define MEM32(a) words[(uint32_t)(a)/4]', '''
@@ -179,6 +190,7 @@ static uint32_t *checked_word(uint32_t address) {
               '\n'.join(line for line in settings.splitlines() if any(line.startswith('void sub_' + a + '(void)') for a in modes)) + '\n' +
               function(settings, 'static void ui_owner_fit(') + function(settings, 'static int ui_modal_gen(') + function(settings, 'static int ui_story_window(') + function(settings, 'static int ui_modal_fits(') +
               function(settings, 'void sub_A0972F48(void)') +
+              function(settings, 'uint32_t s2_ui_pick(') +
               '\n'.join(line for line in touch.splitlines() if not line.startswith('#include')) +
               function(android, 'JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeTouchToolToken(') +
               function(android, 'JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeTouchCursor(') +
@@ -233,7 +245,12 @@ __declspec(dllexport) int owners(void) {
         ui_owner_fit(owner[i],200+i,0);
         if(s2_touch_context() || fit_depth)return 4;
     }
-    return bad || modal_calls!=10;
+    g_esp=0x800;MEM32(g_esp+4)=0x900;MEM32(0x900)=0xA0DDA24Cu;
+    ui_fit_linger=2;
+    sub_A0972F48();
+    if(ui_pie_depth || touch_modal_depth || s2_touch_context() || fit_depth || ui_fit_linger!=2)return 5;
+    ui_fit_linger=0;MEM32(g_esp+4)=0;
+    return bad || modal_calls!=11;
 }
 __declspec(dllexport) int pick(void) {
     logs=0;  /* owners() logged its [fit] transitions */
@@ -246,12 +263,11 @@ __declspec(dllexport) int pick(void) {
     MEM32(0x144)=0x200;MEM32(0x200)=0x400;MEM32(0x4BC)=0x12345678;
     MEM32(0x358)=0x200;
     g_eax=0xAB;g_ecx=0xCD;g_esp=0xEF;
-    camera_anchor.valid=1;
     s2_touch_request_pick(700,500);thread_id=2;s2_touch_pump();
-    if(calls || !pick_pending || !camera_anchor.valid)return 14;
+    if(calls || !pick_pending)return 14;
     thread_id=1;
     s2_touch_request_pick(1,2);s2_touch_request_pick(700,500);s2_touch_pump();
-    if(calls!=1 || logs<=logged || bad || lock_depth || camera_anchor.valid)return 3;
+    if(calls!=1 || logs<=logged || bad || lock_depth)return 3;
     logged=logs;
     if(g_eax!=0xAB || g_ecx!=0xCD || g_esp!=0xEF)return 4;
     s2_touch_pump();if(calls!=1)return 5;

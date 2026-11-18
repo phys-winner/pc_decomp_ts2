@@ -82,6 +82,7 @@ NATIVE_OVERRIDES = (
     "sub_A08BB970",   # map high-resolution glyph pixels into their original logical ink rectangle
     "sub_A090A94E",   # release weak-keyed glyph copies before original font destruction
     "sub_A09713BE",   # window-manager UI scale, including pointer coordinates (sims2_settings.c)
+    "sub_A05CA399",   # clamp the pie menu in logical coordinates (sims2_settings.c)
     "sub_A05E01E5",   # original CAS paint keeps the bounded native window pan before child painting
     "sub_A0972F48",   # modal dialogs: temporarily fit fixed layouts (sims2_settings.c)
     "sub_A0648ADF",   # options categories: temporarily fit fixed layouts (sims2_settings.c)

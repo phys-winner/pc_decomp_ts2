@@ -63,6 +63,7 @@ public final class LauncherActivity extends Activity {
     private boolean filesExpanded, texturesExpanded;
     private String promptedFiles;
     private boolean checking, touching;
+    private int touchSequence;
     private final Set<Integer> refreshPending = new LinkedHashSet<>();
     private boolean initializing = true, autoLaunchPending, playRequestedPending, finishAfterLaunch;
     private TextureBackend textures;
@@ -160,15 +161,20 @@ public final class LauncherActivity extends Activity {
 
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
-        if (action == MotionEvent.ACTION_DOWN) touching = true;
+        if (action == MotionEvent.ACTION_DOWN) { touching = true; ++touchSequence; }
         try {
             return super.dispatchTouchEvent(event);
         } finally {
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                touching = false;
-                int[] pending = refreshPending.stream().mapToInt(Integer::intValue).toArray();
-                refreshPending.clear();
-                if (pending.length != 0 && !finishAfterLaunch && !isFinishing() && !isDestroyed()) refresh(pending);
+                // ACTION_UP posts the click. Keep its view attached until that click runs.
+                final int sequence = touchSequence;
+                handler.post(() -> {
+                    if (sequence != touchSequence) return;
+                    touching = false;
+                    int[] pending = refreshPending.stream().mapToInt(Integer::intValue).toArray();
+                    refreshPending.clear();
+                    if (pending.length != 0 && !finishAfterLaunch && !isFinishing() && !isDestroyed()) refresh(pending);
+                });
             }
         }
     }
@@ -744,8 +750,8 @@ public final class LauncherActivity extends Activity {
             TextView play = ui.button(Texts.t(this, running ? Texts.RETURN : Texts.PLAY), Ui.PRIMARY, d.theme,
                 () -> { if (running && !initializing) Launch.resume(this, d); else play(d); });
             card.addView(ui.buttons(play));
-            Ui.enable(play, (initializing && present && access && busy == null && !Work.busy()) ||
-                (idle && (ready || running) && (running || gpu != null || !needsGpu(d))));
+            Ui.enable(play, (initializing && present && access && !finishAfterLaunch && busy == null && !Work.busy()) ||
+                (idle && (ready || running)));
             if (ready || running) ui.attention(play, true);
             if (idle && spec.distributions.size() > 1) card.setOnClickListener(v -> {
                 if (selected != d) {
@@ -772,17 +778,14 @@ public final class LauncherActivity extends Activity {
     }
 
     private void play(Spec.Distribution d) {
-        if (initializing && busy == null && !Work.busy()) {
+        if ((initializing || (gpu == null && needsGpu(d))) && !finishAfterLaunch && busy == null && !Work.busy()) {
             selected = d;
             autoLaunchPending = false;
             playRequestedPending = true;
+            if (!initializing) note(Texts.PLAY, Texts.t(this, Texts.R_CHECKING), false);
             return;
         }
         if (!idle()) return;
-        if (gpu == null && needsGpu(d)) {
-            note(Texts.PLAY, Texts.t(this, Texts.R_CHECKING), false);
-            return;
-        }
         if (selected != d) {
             note(Texts.PLAY, null, false);
             selected = d;

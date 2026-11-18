@@ -76,8 +76,20 @@ void s2_touch_request_pick(int x, int y);
  *512 vertical widget swipe,1024 valid time speed (bits 11-12: pause,1x,2x,3x). */
 int s2_touch_pick(int x, int y);
 int s2_touch_ui_pick(int x, int y, int side, uint64_t *point);
-/* Owner-thread scene pick; packed logical y:x, UINT64_MAX if input is no longer world-owned. */
-uint64_t s2_touch_target(int x, int y, int radius);
+/* The sparse scan and its densely sampled center fit within this bound. */
+enum { S2_WORLD_PICK_RADIUS = 48, S2_WORLD_TARGET_LIMIT = 1089 };
+typedef struct {
+    uint64_t key;
+    int x, y;
+    int anchor_x, anchor_y;
+    char name[256];
+} s2_world_target;
+typedef struct {
+    unsigned count;
+    s2_world_target items[S2_WORLD_TARGET_LIMIT];
+} s2_world_targets;
+int s2_touch_world_targets(int x, int y, int radius, s2_world_targets *targets);
+int s2_touch_world_confirm(int x, int y, uint64_t key);
 enum {
     S2_SLIDER_UNKNOWN, S2_SLIDER_IN_PROGRESS, S2_SLIDER_CHANGED, S2_SLIDER_LIMIT,
     S2_SLIDER_REJECTED, S2_SLIDER_CANCELLED, S2_SLIDER_BUSY, S2_SLIDER_FAILED

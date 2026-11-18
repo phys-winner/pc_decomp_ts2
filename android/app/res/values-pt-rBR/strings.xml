@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Controlar a interface deslizando</string>
   <string name="time_controls">Controle do tempo</string>
   <string name="time_swipe_hint">Deslize sobre o relógio ou os botões de velocidade: para a direita para acelerar e para a esquerda para desacelerar e pausar. A escala no centro mostra a velocidade escolhida.</string>
+  <string name="choose_target">Escolha um alvo</string>
+  <string name="target_ground">Chão</string>
+  <string name="target_object">Objeto %1$d</string>
+  <string name="target_changed">O alvo se moveu. Toque novamente.</string>
 </resources>

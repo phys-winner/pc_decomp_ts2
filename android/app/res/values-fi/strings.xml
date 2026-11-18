@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Käyttöliittymän pyyhkäisysäätimet</string>
   <string name="time_controls">Ajan hallinta</string>
   <string name="time_swipe_hint">Pyyhkäise kellon tai nopeuspainikkeiden yli: oikealle nopeuttaaksesi, vasemmalle hidastaaksesi ja keskeyttääksesi. Keskellä oleva asteikko näyttää valitun nopeuden.</string>
+  <string name="choose_target">Valitse kohde</string>
+  <string name="target_ground">Maa</string>
+  <string name="target_object">Esine %1$d</string>
+  <string name="target_changed">Kohde siirtyi. Napauta uudelleen.</string>
 </resources>

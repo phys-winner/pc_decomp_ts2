@@ -80,13 +80,14 @@ static uint32_t touch_cas_grid_proc(uint32_t p,uint32_t w){(void)p;(void)w;retur
 static int touch_cas_grid_apply(uint32_t p,uint32_t w,int a,unsigned c,uint64_t s,unsigned e){(void)p;(void)w;(void)a;(void)c;(void)s;(void)e;return 0;}
 int _fltused=0;
 static int touch_ui_button(uint32_t);
+static int s2_touch_rewards(void){return 0;}
 static double s2_ui_factor(void){return 1;}
 static uint32_t void_call_guest_this(uint32_t,uint32_t,int,const uint32_t *);
 static uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}
 int s2_catalog_info(uint32_t);
 void s2_catalog_track(uint32_t);
 '''
-    actual = touch[touch.index('static const uint32_t touch_swipe_ids'):touch.index('static int touch_swipe_group')] + '\n'.join(function(touch, signature) for signature in [
+    actual = function(touch, 'static int touch_live_hud_context(') + '\n' + touch[touch.index('static const uint32_t touch_swipe_ids'):touch.index('static int touch_swipe_group')] + '\n'.join(function(touch, signature) for signature in [
         'static const char *touch_type(uint32_t object)\n{', 'static int touch_ui_button(', 'static int touch_swipe_group(', 'static int touch_swipe_owner(', 'static uint32_t touch_vertical_band(', 'static int touch_time_index(', 'static unsigned touch_time_state(', 'static uint32_t touch_time_band(', 'static int touch_swipe_apply(', 'static int touch_grid_proc(',
         'static uint32_t touch_bound_catalog_proc(', 'static uint32_t touch_town_catalog_proc(', 'static unsigned touch_widget(',
         'static int touch_grid_apply(', 'static int touch_catalog_apply('])

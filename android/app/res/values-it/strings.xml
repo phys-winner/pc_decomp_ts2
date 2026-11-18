@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Controlli interfaccia con scorrimento</string>
   <string name="time_controls">Controllo del tempo</string>
   <string name="time_swipe_hint">Scorri sopra l’orologio o i pulsanti della velocità: a destra per accelerare, a sinistra per rallentare fino alla pausa. La scala al centro mostra la velocità scelta.</string>
+  <string name="choose_target">Scegli un bersaglio</string>
+  <string name="target_ground">Terreno</string>
+  <string name="target_object">Oggetto %1$d</string>
+  <string name="target_changed">Il bersaglio si è spostato. Tocca di nuovo.</string>
 </resources>

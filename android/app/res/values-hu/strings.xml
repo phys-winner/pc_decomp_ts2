@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Felület vezérlése csúsztatással</string>
   <string name="time_controls">Idővezérlés</string>
   <string name="time_swipe_hint">Húzd az ujjad az órán vagy a sebességgombokon: jobbra a gyorsításhoz, balra a lassításhoz és szüneteltetéshez. A középső skála mutatja a kiválasztott sebességet.</string>
+  <string name="choose_target">Válassz célpontot</string>
+  <string name="target_ground">Talaj</string>
+  <string name="target_object">Tárgy %1$d</string>
+  <string name="target_changed">A célpont elmozdult. Koppints újra.</string>
 </resources>

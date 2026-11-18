@@ -12,6 +12,7 @@ static float fixture_matrix[9];
 static unsigned context = S2_TOUCH_TOWN, barrier;
 static int screen_w = 1346, screen_h = 600, setters, pages, picker_reenter;
 unsigned s2_touch_context(void) { return context; }
+int s2_touch_rewards(void) { return 0; }
 uint32_t void_thread_id(void) { return 1; }
 void s2_touch_cancel_text(void) {}
 void s2_cheats_owner(unsigned value,unsigned manager){(void)value;(void)manager;}
@@ -63,6 +64,12 @@ static uint64_t test_now = 1000000000;
 static int test_clock_gettime(clockid_t which, struct timespec *now)
 {
     (void)which; now->tv_sec = test_now / 1000000000; now->tv_nsec = test_now % 1000000000; return 0;
+}
+double s2_ui_factor(void) { return 1; }
+uint32_t s2_ui_pick(uint32_t root, int x, int y)
+{
+    uint32_t point[] = {(uint32_t)x, (uint32_t)y};
+    return void_call_guest_this(MEM32(MEM32(root) + 0xBC), root, 2, point);
 }
 #define clock_gettime test_clock_gettime
 #include "../android/host/sims2_touch.c"
@@ -151,24 +158,20 @@ int main(void)
         assert(touch_camera_apply(.1f,0,0,0, 0,epoch,size));
         assert(fabsf(touch_float(camera+368)-(500-650*.828427125f*.1f))<.002f);
         if (mode != S2_TOUCH_TOWN) {
-            assert(camera_anchor.valid);
             for (unsigned transform = 0; transform < 3; ++transform) {
                 put(camera+196,0);put(camera+200,0);put(camera+224,650);put(camera+228,650);
                 put(camera+0x150,.3f);put(camera+0x154,.3f);
                 assert(touch_camera_apply(.01f,0,transform==0?.1f:0,
                     transform==1?.1f:0,transform==2?.1f:0,epoch,size));
-                assert(!camera_anchor.valid);
                 assert(touch_camera_apply(.01f,0,0,0,0,epoch,size));
-                assert(camera_anchor.valid);
             }
             put(camera+196,0);put(camera+200,0);put(camera+224,650);put(camera+228,650);
             ui_command_kind=pick_pending=0;
             assert(s2_touch_pan(.2f,.3f,.21f,.3f));
             assert(s2_touch_camera(0,0,.1f,0,0));
             assert(camera_request.dx>0 && camera_request.radians==.1f);
-            assert(touch_camera_apply_at(camera_request.dx,camera_request.dy,camera_request.radians,
-                camera_request.zoom,camera_request.pitch,epoch,size,camera_request.from_x,camera_request.from_y));
-            assert(!camera_anchor.valid);
+            assert(touch_camera_apply(camera_request.dx,camera_request.dy,camera_request.radians,
+                camera_request.zoom,camera_request.pitch,epoch,size));
             ui_command_kind=pick_pending=0;
             put(camera+196,0);put(camera+200,0);put(camera+224,650);put(camera+228,650);
         }
@@ -220,7 +223,6 @@ int main(void)
     ui_command_kind=pick_pending=0;
     assert(s2_touch_pan(.2f,.3f,.24f,.35f));assert(s2_touch_pan(.24f,.35f,.3f,.4f));
     assert(fabsf(camera_request.dx-.1f)<.00001f && fabsf(camera_request.dy-.1f)<.00001f);
-    assert(camera_request.from_x==.2f && camera_request.from_y==.3f);
     assert(!s2_touch_pan(NAN,.3f,.4f,.4f) && !s2_touch_pan(.2f,-.1f,.4f,.4f));
     assert(!s2_touch_pan(.2f,.3f,1.1f,.4f) && !s2_touch_pan(.2f,.3f,.2f,.3f));
     ui_command_kind=pick_pending=0;

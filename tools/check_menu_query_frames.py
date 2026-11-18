@@ -11,8 +11,14 @@ from check_virtual_query import function
 
 def main():
     text = (B.ROOT/'android/host/sims2_touch.c').read_text()
+    header = (B.ROOT/'android/host/sims2_settings.h').read_text()
+    world_types = header[header.index('enum { S2_WORLD_PICK_RADIUS'):header.index('int s2_touch_world_targets(')]
     prelude = r'''
 typedef unsigned uint32_t;
+typedef unsigned long long uint64_t;
+typedef unsigned long long size_t;
+#define NULL ((void *)0)
+void *memcpy(void *d, const void *s, size_t n);
 typedef long long time_t;
 struct timespec {time_t tv_sec;long long tv_nsec;};
 typedef int pthread_mutex_t,pthread_cond_t;
@@ -21,7 +27,8 @@ typedef int pthread_mutex_t,pthread_cond_t;
 enum {SLIDER_IDLE,SLIDER_QUEUED,SLIDER_STARTED};
 static pthread_mutex_t pick_lock;
 static pthread_cond_t pick_ready;
-static int pick_x,pick_y,pick_pending,pick_diagnostic,pick_result;
+static int pick_x,pick_y,pick_pending,pick_diagnostic,pick_result,pick_radius;
+static uint64_t pick_point,pick_world_key;
 static unsigned pick_serial,pick_done,pick_owner_context,query_zero_logs,slider_state,slider_serial,ui_command_kind,ui_command_started;
 static uint32_t pick_owner_root,pick_owner_hit;
 static int owner_ms,queued=1,depth,waits,clock_failed;
@@ -58,7 +65,9 @@ __declspec(dllexport) int check(void){
     with tempfile.TemporaryDirectory(prefix='sims2-menu-query-') as directory:
         out=Path(directory)
         source,obj,dll=out/'check.c',out/'check.obj',out/'check.dll'
-        source.write_text(prelude+function(text,'int s2_touch_pick(')+checks)
+        wrapper = next(line for line in text.splitlines() if line.startswith('int s2_touch_pick('))
+        source.write_text(prelude+world_types+'static s2_world_targets pick_world;\n'+
+                          function(text,'static int touch_query(')+wrapper+'\n'+checks)
         subprocess.run([str(B.CLANG),'--target=x86_64-pc-windows-msvc','-O2','-fno-builtin',
                         '-fno-stack-protector','-c',str(source),'-o',str(obj)],check=True)
         subprocess.run([str(B.CLANG.with_name('ld.lld.exe')),'-flavor','link','/dll','/noentry',

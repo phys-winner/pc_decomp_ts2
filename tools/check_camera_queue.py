@@ -9,21 +9,21 @@ from check_virtual_query import function
 OUT=Q.B.ROOT/'build/test/camera-queue'
 APPLY=r'''
 static unsigned camera_steps,camera_reenter;
-static int touch_camera_apply_at(float dx,float dy,float radians,float zoom,float pitch,unsigned epoch,uint64_t size,float from_x,float from_y){
+static int touch_camera_apply(float dx,float dy,float radians,float zoom,float pitch,unsigned epoch,uint64_t size){
  if(!touch_layout_matches(s2_touch_context(),size,epoch))return 0;
  if(lock_depth || message_depth || handler_active || ui_command_started!=S2_UI_CAMERA ||
-    epoch!=7 || size!=((uint64_t)540<<32|1212) || dy || radians || zoom || pitch || from_y!=.2f)bad=301;
+    epoch!=7 || size!=((uint64_t)540<<32|1212) || dy || radians || zoom || pitch)bad=301;
  if(!s2_touch_camera_hover_active())bad=306;
  ++camera_steps;
  if(camera_steps==1){
-  if(__builtin_fabsf(dx-.05f)>.00001f || from_x!=.1f)bad=302;
+  if(__builtin_fabsf(dx-.05f)>.00001f)bad=302;
   if(camera_reenter){
    unsigned previous=pick_serial;
-   if(!s2_touch_pan(.15f,.2f,.19f,.2f) || !s2_touch_pan(.19f,.2f,.22f,.2f))bad=303;
+   if(!s2_touch_pan(.15f,.2f,.19f,.2f) || !s2_touch_pan(.69f,.75f,.72f,.75f))bad=303;
    if(pick_serial==previous || !pick_pending || ui_command_kind!=S2_UI_CAMERA ||
-      __builtin_fabsf(camera_request.from_x-.15f)>.00001f || __builtin_fabsf(camera_request.dx-.07f)>.00001f)bad=304;
+      __builtin_fabsf(camera_request.dx-.07f)>.00001f)bad=304;
   }
- }else if(camera_steps!=2 || __builtin_fabsf(dx-.07f)>.00001f || from_x!=.15f)bad=305;
+ }else if(camera_steps!=2 || __builtin_fabsf(dx-.07f)>.00001f)bad=305;
  g_eax=17;g_ecx=18;g_flag_a=19;
  return 1;
 }
@@ -84,7 +84,7 @@ def main():
     original=Q.source
     def source():
         text=original().rsplit(Q.CHECK,1)[0]
-        old=function(text,'static int touch_camera_apply_at(')
+        old=function(text,'static int touch_camera_apply(')
         text=text.replace(old,APPLY,1)
         setup=Q.CHECK[:Q.CHECK.index('uint32_t selftest(void){')]
         return text+setup+CHECK

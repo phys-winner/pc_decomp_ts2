@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">ปัดเพื่อควบคุมส่วนติดต่อ</string>
   <string name="time_controls">การควบคุมเวลา</string>
   <string name="time_swipe_hint">ปัดบนนาฬิกาหรือปุ่มความเร็ว: ไปทางขวาเพื่อเร่งเวลา ไปทางซ้ายเพื่อลดความเร็วจนหยุดชั่วคราว แถบตรงกลางจะแสดงความเร็วที่เลือก</string>
+  <string name="choose_target">เลือกเป้าหมาย</string>
+  <string name="target_ground">พื้น</string>
+  <string name="target_object">วัตถุ %1$d</string>
+  <string name="target_changed">เป้าหมายเคลื่อนที่แล้ว แตะอีกครั้ง</string>
 </resources>

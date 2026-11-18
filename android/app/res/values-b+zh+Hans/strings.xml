@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">滑动操作界面控件</string>
   <string name="time_controls">时间控制</string>
   <string name="time_swipe_hint">在时钟或速度按钮上滑动：向右加速，向左减速直至暂停。中央刻度会显示所选速度。</string>
+  <string name="choose_target">选择目标</string>
+  <string name="target_ground">地面</string>
+  <string name="target_object">物品 %1$d</string>
+  <string name="target_changed">目标已移动。请再次轻触。</string>
 </resources>

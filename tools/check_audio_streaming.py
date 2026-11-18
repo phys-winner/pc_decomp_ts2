@@ -279,12 +279,14 @@ AAUDIO_HARNESS = r'''
 #define AAUDIO_FORMAT_PCM_I16 1
 #define AAUDIO_PERFORMANCE_MODE_NONE 10
 #define AAUDIO_PERFORMANCE_MODE_LOW_LATENCY 12
+#define AAUDIO_STREAM_STATE_DISCONNECTED 13
+#define AAUDIO_ERROR_DISCONNECTED -899
 #define __ATOMIC_RELAXED 0
 #define __atomic_load_n(pointer,order) (*(pointer))
 #define PTHREAD_MUTEX_INITIALIZER 0
 typedef int pthread_mutex_t;
 typedef int32_t aaudio_result_t;
-typedef struct {int closed,started,paused,prefilled,mode,size,capacity,burst,xruns;int64_t written,read;} AAudioStream;
+typedef struct {int closed,started,paused,prefilled,mode,size,capacity,burst,xruns,disconnected;int64_t written,read;} AAudioStream;
 typedef struct {int unused;} AAudioStreamBuilder;
 static int lock_depth,audio_paused,opens,closes,starts,stops,builder_deletes;
 static uint64_t pause_generation;
@@ -346,6 +348,21 @@ static aaudio_result_t AAudioStream_close(AAudioStream *s) {
 static aaudio_result_t AAudioStream_requestStop(AAudioStream *s) {
     assert(lock_depth==1 && s && !s->closed);stops++;return 0;
 }
+static int AAudioStream_getState(AAudioStream *s) {
+    assert(lock_depth==1 && s && !s->closed);
+    return s->disconnected ? AAUDIO_STREAM_STATE_DISCONNECTED : 0;
+}
+static int AAudioStream_getDeviceId(AAudioStream *s) {assert(s && !s->closed);return 7;}
+static int AAudioStream_getSharingMode(AAudioStream *s) {assert(s && !s->closed);return 1;}
+static int AAudioStream_getPerformanceMode(AAudioStream *s) {assert(s && !s->closed);return s->mode;}
+static int AAudioStream_getSampleRate(AAudioStream *s) {assert(s && !s->closed);return 48000;}
+static int AAudioStream_getChannelCount(AAudioStream *s) {assert(s && !s->closed);return 2;}
+static unsigned diag_lines;
+static char last_diag[640];
+static void audio_log_enqueue(const char *line) {
+    ++diag_lines;
+    snprintf(last_diag,sizeof last_diag,"%s",line);
+}
 static int32_t AAudioStream_getXRunCount(AAudioStream *s) {assert(s && !s->closed);return s->xruns;}
 static int64_t AAudioStream_getFramesWritten(AAudioStream *s) {assert(s && !s->closed);return s->written;}
 static int64_t AAudioStream_getFramesRead(AAudioStream *s) {assert(s && !s->closed);return s->read;}
@@ -359,7 +376,7 @@ static aaudio_result_t AAudioStream_setBufferSizeInFrames(AAudioStream *s,int fr
     s->size=frames<s->capacity?frames:s->capacity;return s->size;
 }
 static aaudio_result_t AAudioStream_write(AAudioStream *s,const void *data,int32_t frames,int64_t timeout) {
-    assert(lock_depth==1 && s && !s->closed && !s->paused);
+    assert(lock_depth==1 && s && !s->closed && !s->paused && !s->disconnected);
     assert(timeout>=0 && timeout<=20000000 && frames>0);
     assert(s->started ? timeout>0 : timeout==0);
     if(!s->started) {
@@ -442,6 +459,14 @@ int main(void) {
     assert(!level_reports);
     for(int i=0;i<1000;i++) {reset_script(frames);void_audio_output(frames,480);}
     assert(level_reports==1);
+    /* When the state already reports the disconnect, submit the whole chunk to the new stream. */
+    int opened=opens,closed=closes;
+    uint64_t dropped=audio_dropped_frames;
+    assert(stream);
+    stream->disconnected=1;reset_script(frames);
+    assert(void_audio_output(frames,480)==480 && opens==opened+1 && closes==closed+1);
+    assert(write_calls==1 && accepted_count==960 && !memcmp(accepted,frames,sizeof frames));
+    assert(audio_dropped_frames==dropped);
     assert(logs>0 && stops==closes && !lock_depth);
     puts("PASS actual AAudio: exact partial suffix, zero timeout, bounded failure, accepted-only samples, reconnect and foreground ownership");
     return 0;
@@ -460,13 +485,104 @@ def directsound_headers():
     return {"buffer_type.h": types, "sound_functions.h": functions}
 
 
+def android_audio_headers():
+    source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
+    globals_ = source[source.index("static AAudioStream *stream;"):source.index("/* The mixer produces events")]
+    events = source[source.index("enum {\n    AUDIO_OPENED"):source.index("static void audio_report(")]
+    functions = "\n".join(function(source, signature) for signature in (
+        "static void audio_report(", "static void audio_close_stream(", "static void audio_close_failed(",
+        "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
+    return {"android_audio.h": globals_ + events + functions}
+
+
 class SoundStreamingTest(unittest.TestCase):
-    def test_aaudio_recovers_underruns_even_when_every_write_succeeds(self):
+    def test_audio_diagnostics_capture_failures_and_limit_repeated_reports(self):
+        harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
+int main(void) {
+    int16_t frames[960]={0};
+    frames[200]=-12345;
+    reset_script(frames);void_audio_output(frames,480);
+    assert(strstr(last_diag,"event=started") && strstr(last_diag,"device=7"));
+    reset_script(frames);results[0]=100;results[1]=-899;result_count=2;void_audio_output(frames,480);
+    assert(strstr(last_diag,"event=write code=-899") && strstr(last_diag,"pcm_frames=480 accepted=100 peak=12345"));
+    assert(strstr(last_diag,"dropped_frames=380") && !stream && diag_lines==2);
+    reset_script(frames);results[0]=-899;result_count=1;void_audio_output(frames,480);
+    assert(diag_lines==2 && !stream);
+    now_ns+=5000000000LL;
+    reset_script(frames);results[0]=-899;result_count=1;void_audio_output(frames,480);
+    assert(strstr(last_diag,"event=write code=-899 suppressed=1") && strstr(last_diag,"dropped_frames=1340"));
+    reset_script(frames);void_audio_output(frames,480);
+    stream->disconnected=1;reset_script(frames);void_audio_output(frames,480);
+    assert(strstr(last_diag,"event=route-disconnected code=-899") && strstr(last_diag,"state=13"));
+    assert(stream && write_calls==1 && accepted_count==960);
+    puts("PASS audio diagnostics: stream format, partial error PCM counters, cooldown and route recovery");
+    return 0;
+}
+'''
+        compile_probe("aaudio-diagnostics", harness, android_audio_headers())
+
+    def test_audio_log_rotation_has_a_combined_16_mb_limit(self):
         source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
-        globals_ = source[source.index("static AAudioStream *stream;"):source.index("static void audio_close_stream(")]
-        functions = "\n".join(function(source, signature) for signature in (
-            "static void audio_close_stream(", "static void audio_close_failed(",
-            "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
+        queue = source[source.index("#define AUDIO_LOG_SEGMENT_BYTES"):source.index("static void audio_log_append(")]
+        prelude = r'''
+#include <assert.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <windows.h>
+#define atomic_load_explicit __c11_atomic_load
+#define atomic_store_explicit __c11_atomic_store
+#define memory_order_relaxed __ATOMIC_RELAXED
+#define memory_order_acquire __ATOMIC_ACQUIRE
+#define memory_order_release __ATOMIC_RELEASE
+static char data_dir[512]="build/tests/aaudio-log-cap";
+typedef unsigned sem_t;
+static int sem_post(sem_t *count) { ++*count;return 0; }
+static int sem_wait(sem_t *count) {
+    if (*count) { --*count;return 0; }
+    errno=EINVAL;return -1;
+}
+static int replace(const char *from,const char *to) {
+    return MoveFileExA(from,to,MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+}
+#define rename replace
+'''
+        check = r'''
+static void seed(const char *path,long length) {
+    FILE *f=fopen(path,"wb");assert(f && !fseek(f,length-1,SEEK_SET));
+    assert(fputc('#',f)=='#' && !fclose(f));
+}
+static long length(const char *path) {
+    FILE *f=fopen(path,"rb");assert(f && !fseek(f,0,SEEK_END));long size=ftell(f);fclose(f);return size;
+}
+int main(void) {
+    const char *current="build/tests/aaudio-log-cap/sims2.audio.log";
+    const char *previous="build/tests/aaudio-log-cap/sims2.audio.1.log";
+    seed(current,7999996);seed(previous,8000000);
+    audio_log_append("abc\n");
+    assert(length(current)==8000000 && length(previous)==8000000);
+    audio_log_append("latest\n");
+    assert(length(current)==7 && length(previous)==8000000);
+    FILE *f=fopen(previous,"rb");char ending[5];assert(f && !fseek(f,-4,SEEK_END));
+    assert(fgets(ending,sizeof ending,f) && !strcmp(ending,"abc\n"));fclose(f);
+    audio_log_enabled=1;
+    for (unsigned i=0;i<AUDIO_LOG_QUEUE_COUNT+1;i++) audio_log_enqueue("evt\n");
+    assert(audio_log_ready==AUDIO_LOG_QUEUE_COUNT && length(current)==7);
+    audio_log_worker(NULL);
+    assert(length(current)==7+4*AUDIO_LOG_QUEUE_COUNT &&
+           atomic_load_explicit(&audio_log_head,memory_order_relaxed)==atomic_load_explicit(&audio_log_tail,memory_order_relaxed));
+    audio_log_enqueue("end\n");audio_log_worker(NULL);
+    assert(length(current)==11+4*AUDIO_LOG_QUEUE_COUNT);
+    assert(!remove(current) && !remove(previous));
+    puts("PASS audio log: bounded producer queue and exactly 16,000,000 bytes across two rotating files");
+    return 0;
+}
+'''
+        functions = "\n".join(function(source, name) for name in (
+            "static void audio_log_append(", "static void *audio_log_worker(", "static void audio_log_enqueue("))
+        compile_probe("aaudio-log-cap", "\n".join((prelude, queue, functions, check)), {}, compiler_override=CLANG)
+
+    def test_aaudio_recovers_underruns_even_when_every_write_succeeds(self):
         harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
 int main(void) {
     audio_normal_output=0;   /* the low-latency recovery a build can start with */
@@ -513,14 +629,9 @@ int main(void) {
     return 0;
 }
 '''
-        compile_probe("aaudio-underrun-recovery", harness, {"android_audio.h": globals_ + functions})
+        compile_probe("aaudio-underrun-recovery", harness, android_audio_headers())
 
     def test_aaudio_normal_queue_tunes_latency_and_primes_before_start(self):
-        source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
-        globals_ = source[source.index("static AAudioStream *stream;"):source.index("static void audio_close_stream(")]
-        functions = "\n".join(function(source, signature) for signature in (
-            "static void audio_close_stream(", "static void audio_close_failed(",
-            "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
         harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
 int main(void) {
     int16_t frames[960]={0};
@@ -532,22 +643,18 @@ int main(void) {
     stream->xruns=1;reset_script(frames);void_audio_output(frames,480);
     assert(stream->size==1440 && !audio_errors && audio_normal_output);
     pthread_mutex_lock(&audio_lock);audio_close_stream();pthread_mutex_unlock(&audio_lock);
-    hardware_burst=2048;hardware_size=hardware_capacity=4096;prime_result=1920;
+    hardware_burst=1026;hardware_size=hardware_capacity=2052;prime_result=1920;
+    unsigned previous_primes=prime_calls;
     reset_script(frames);void_audio_output(frames,480);
-    assert(stream && stream->size==2048 && stream->prefilled==2048);
+    assert(stream && stream->size==2052 && stream->prefilled==2052 && prime_calls==previous_primes+2);
     assert(accepted_count==960 && !audio_errors && !lock_depth);
     puts("PASS normal AAudio: excess queue shrinks, partial silence fills before start, burst-sized prime, underrun grows queue");
     return 0;
 }
 '''
-        compile_probe("aaudio-normal-latency", harness, {"android_audio.h": globals_ + functions})
+        compile_probe("aaudio-normal-latency", harness, android_audio_headers())
 
     def test_aaudio_zero_progress_falls_back_once_without_replaying_pcm(self):
-        source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
-        globals_ = source[source.index("static AAudioStream *stream;"):source.index("static void audio_close_stream(")]
-        functions = "\n".join(function(source, signature) for signature in (
-            "static void audio_close_stream(", "static void audio_close_failed(",
-            "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
         harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
 static void zero_chunk(const int16_t *frames) {
     reset_script(frames);memset(results,0,sizeof results);result_count=128;
@@ -593,14 +700,9 @@ int main(void) {
     return 0;
 }
 '''
-        compile_probe("aaudio-zero-progress-recovery", harness, {"android_audio.h": globals_ + functions})
+        compile_probe("aaudio-zero-progress-recovery", harness, android_audio_headers())
 
     def test_aaudio_discards_previous_foreground_generation(self):
-        source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
-        globals_ = source[source.index("static AAudioStream *stream;"):source.index("static void audio_close_stream(")]
-        functions = "\n".join(function(source, signature) for signature in (
-            "static void audio_close_stream(", "static void audio_close_failed(",
-            "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
         harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
 int main(void) {
     int16_t frames[960];for(int i=0;i<960;i++) frames[i]=(int16_t)(i-480);
@@ -635,7 +737,7 @@ int main(void) {
     return 0;
 }
 '''
-        compile_probe("aaudio-foreground-generation", harness, {"android_audio.h": globals_ + functions})
+        compile_probe("aaudio-foreground-generation", harness, android_audio_headers())
 
     def test_pause_generation_keeps_short_and_duplicate_transitions(self):
         source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
@@ -716,21 +818,11 @@ int main(void) {
         compile_probe("sound-refill-resample", harness, directsound_headers())
 
     def test_aaudio_reports_queue_shortfall(self):
-        source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
-        globals_ = source[source.index("static AAudioStream *stream;"):source.index("static void audio_close_stream(")]
-        functions = "\n".join(function(source, signature) for signature in (
-            "static void audio_close_stream(", "static void audio_close_failed(",
-            "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
         harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + AAUDIO_WANTED_MAIN
-        compile_probe("aaudio-queue-shortfall", harness, {"android_audio.h": globals_ + functions})
+        compile_probe("aaudio-queue-shortfall", harness, android_audio_headers())
 
     def test_aaudio_partial_writes_and_lifecycle(self):
-        source = (ROOT / "android/host/android_main.c").read_text(encoding="utf8")
-        globals_ = source[source.index("static AAudioStream *stream;"):source.index("static void audio_close_stream(")]
-        functions = "\n".join(function(source, signature) for signature in (
-            "static void audio_close_stream(", "static void audio_close_failed(",
-            "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
-        compile_probe("aaudio-streaming", AAUDIO_HARNESS, {"android_audio.h": globals_ + functions})
+        compile_probe("aaudio-streaming", AAUDIO_HARNESS, android_audio_headers())
 
 
 if __name__ == "__main__":

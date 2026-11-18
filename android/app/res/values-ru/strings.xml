@@ -91,4 +91,11 @@
   <string name="swipe_collar">Ошейник</string>
   <string name="swipe_coat">Окрас и отметины</string>
   <string name="swipe_body">Телосложение</string>
+  <string name="choose_target">Выберите цель</string>
+  <string name="target_ground">Земля</string>
+  <string name="target_object">Предмет %1$d</string>
+  <string name="target_changed">Цель сместилась. Коснитесь ещё раз.</string>
+    <string name="target_area_diameter">Диаметр области касания: %1$d пикс.</string>
+    <string name="target_area_label">Размер касания</string>
+    <string name="target_area_hint">Ползунок меняет область поиска предметов вокруг точки касания. Круг показывает её размер.</string>
 </resources>

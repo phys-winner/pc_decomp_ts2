@@ -40,4 +40,8 @@
   <string name="ui_swipe_controls">Interface bedienen met vegen</string>
   <string name="time_controls">Tijd bedienen</string>
   <string name="time_swipe_hint">Veeg over de klok of de snelheidsknoppen: naar rechts om te versnellen, naar links om te vertragen en te pauzeren. De schaal in het midden toont de gekozen snelheid.</string>
+  <string name="choose_target">Kies een doel</string>
+  <string name="target_ground">Grond</string>
+  <string name="target_object">Voorwerp %1$d</string>
+  <string name="target_changed">Het doel is verplaatst. Tik opnieuw.</string>
 </resources>

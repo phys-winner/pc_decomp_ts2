@@ -16,6 +16,17 @@ public final class GamePreferences implements PortHooks {
     static void uiSwipeControls(boolean enabled){if(controls!=null)controls.edit().putBoolean("ui_swipe_controls",enabled).apply();}
     static boolean timeHintShown(){return controls==null||controls.getBoolean("time_swipe_hint_shown",false);}
     static void markTimeHintShown(){if(controls!=null)controls.edit().putBoolean("time_swipe_hint_shown",true).apply();}
+    static final int MIN_TARGET_RADIUS=4, MAX_TARGET_RADIUS=48;
+    private static final int DEFAULT_TARGET_RADIUS=16;
+    static int targetRadius(){
+        int radius=controls==null?DEFAULT_TARGET_RADIUS:controls.getInt("world_target_radius",DEFAULT_TARGET_RADIUS);
+        return Math.max(MIN_TARGET_RADIUS,Math.min(MAX_TARGET_RADIUS,radius));
+    }
+    static void targetRadius(int radius){
+        if(controls!=null)controls.edit().putInt("world_target_radius",radius).apply();
+    }
+    static boolean targetRadiusHintShown(){return controls==null||controls.getBoolean("world_target_radius_hint_shown",false);}
+    static void markTargetRadiusHintShown(){if(controls!=null)controls.edit().putBoolean("world_target_radius_hint_shown",true).apply();}
     static final String[] CODES={"english","french","german","italian","spanish","swedish","finnish","dutch","danish","brazilian","czech","japanese","koreana","russian","schinese","tchinese","polish","thai","norwegian","portuguese","hungarian"};
     static Locale gameLocale(String selection,Locale system){
         if("system".equals(selection))selection=systemLanguage(system);

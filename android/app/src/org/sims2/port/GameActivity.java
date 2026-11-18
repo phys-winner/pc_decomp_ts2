@@ -43,7 +43,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static native int nativeTouchHitKind(float x,float y);
     static native float[] nativeTouchUiPick(float x,float y,float diameter);
     static native long nativeTouchSwipeFeedback();
-    static native long nativeTouchTarget(float x,float y,float radius);
+    static native WorldTarget[] nativeTouchTargets(float x,float y,int radius);
+    static native boolean nativeTouchConfirmTarget(int x,int y,long key);
     static native long nativeTouchToolToken();
     static native long nativeTouchCursor();
     static native int nativeTouchObjectCost();
@@ -91,6 +92,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private float preferredRefreshRate;
     private static GameActivity active;
     private AlertDialog settingsDialog,textDialog,cheatDialog;
+    private WorldTargetMenu targetMenu;
     private int cheatSerial;
     private boolean cheatCatalogRequest;
     private int cheatMenuContext;
@@ -100,6 +102,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private TextView objectCost;
     private LinearLayout objectControls;
     private Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;
+    private FrameLayout targetRadiusPanel;
+    private LinearLayout targetRadiusTextPanel;
+    private TextView targetRadiusHint;
     private FrameLayout toolMenu;
     private int toolMenuContext;
     private long toolMenuSize,toolMenuEpoch;
@@ -117,6 +122,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         touch.syncContext(nativeTouchContext());touch.syncToolToken(nativeTouchToolToken());
         touch.pollCommands();
         if(toolMenu!=null&&!toolMenuValid())closeToolMenu();
+        if(targetMenu!=null&&!targetMenu.isCurrent())closeTargetMenu();
         refreshObjectControls();
         showTimeHint();
         int status=nativeUpscaleStatus();if(status!=0&&status!=upscaleStatus){upscaleStatus=status;touchNotice(text(R.string.upscale_fallback,status));}
@@ -131,6 +137,43 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static void touchTextRequested(float x,float y){if(active!=null)active.showTextEditor(x,y);}
     static void touchObjectControlsChanged(){if(active!=null)active.refreshObjectControls();}
     static void touchCheatsRequested(){if(active!=null)active.showCheats();}
+    static final class WorldTarget {
+        final int x,y,anchorX,anchorY;
+        final long key;
+        final byte[] name;
+        WorldTarget(int x,int y,int anchorX,int anchorY,long key,byte[] name){
+            this.x=x;this.y=y;this.anchorX=anchorX;this.anchorY=anchorY;this.key=key;this.name=name;
+        }
+    }
+    static void chooseWorldTarget(WorldTarget[] targets,long gameSize,java.util.function.BooleanSupplier current,
+            java.util.function.Consumer<WorldTarget> choose){
+        GameActivity activity=active;
+        if(activity==null||!activity.started||!activity.hasWindowFocus()||activity.inputOverlayOpen()||!current.getAsBoolean())return;
+        int width=activity.root.getWidth(),height=activity.root.getHeight();
+        android.graphics.Rect safeArea=new android.graphics.Rect(activity.safeLeft,activity.safeTop,
+                width-activity.safeRight,height-activity.safeBottom);
+        WorldTargetMenu menu=new WorldTargetMenu(activity,width,height,safeArea,gameSize,targets,current,(source,target)->{
+            if(activity.targetMenu!=source)return;
+            boolean valid=active==activity&&source.isCurrent();
+            activity.closeTargetMenu();
+            if(valid)choose.accept(target);
+        });
+        menu.setOnClickListener(v->{if(activity.targetMenu==v)activity.closeTargetMenu();});
+        activity.targetMenu=menu;
+        activity.touch.setBlocked(true);
+        if(activity.gamepad!=null)activity.gamepad.setEnabledInput(false);
+        activity.root.addView(menu,new FrameLayout.LayoutParams(-1,-1));
+    }
+    private void closeTargetMenu(){
+        if(targetMenu==null)return;
+        root.removeView(targetMenu);targetMenu=null;
+        if(active==this&&started){
+            boolean enabled=hasWindowFocus()&&!inputOverlayOpen();
+            touch.setBlocked(!enabled);
+            if(gamepad!=null)gamepad.setEnabledInput(enabled);
+        }
+    }
+    private boolean inputOverlayOpen(){return settingsDialog!=null||textDialog!=null||cheatUi()||targetMenu!=null;}
 
     private boolean cheatUi(){return cheatDialog!=null||cheatSerial!=0||toolMenu!=null;}
     private boolean cheatRussian(){return "ru".equals(strings.getResources().getConfiguration().getLocales().get(0).getLanguage());}
@@ -138,7 +181,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private boolean cheatMenuValid(){return active==this&&started&&nativeTouchContext()==cheatMenuContext&&
             nativeTouchGameSize()==cheatMenuSize&&nativeTouchLayoutEpoch()==cheatMenuEpoch;}
     private void showCheats(){
-        if(active!=this||!started||settingsDialog!=null||textDialog!=null||cheatUi()||textSerial!=0)return;
+        if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
         cheatMenuContext=nativeTouchContext();cheatMenuSize=nativeTouchGameSize();cheatMenuEpoch=nativeTouchLayoutEpoch();
         touch.setBlocked(true);if(gamepad!=null)gamepad.setEnabledInput(false);
         cheatCatalogRequest=true;handleCheatReceipt(nativeCheatsRequest(null));
@@ -233,10 +276,32 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         button.setMinHeight(0);button.setMinimumHeight(0);
         float density=getResources().getDisplayMetrics().density;
         button.setPadding(Math.round(12*density),0,Math.round(12*density),0);
+        button.setBackground(objectControlBackground(density));
+        return button;
+    }
+    private android.graphics.drawable.GradientDrawable objectControlBackground(float density){
         android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();
         background.setColor(Color.rgb(200,211,239));background.setCornerRadius(22*density);
-        background.setStroke(Math.max(1,Math.round(density)),Color.rgb(101,126,169));button.setBackground(background);
-        return button;
+        background.setStroke(Math.max(1,Math.round(density)),Color.rgb(101,126,169));
+        return background;
+    }
+    private TextView targetRadiusText(int resource,float density){
+        TextView view=new TextView(this);
+        view.setText(text(resource));view.setTextSize(14);view.setTextColor(Color.rgb(35,60,112));
+        int side=Math.round(12*density),vertical=Math.round(8*density);
+        view.setPadding(side,vertical,side,vertical);
+        view.setBackground(objectControlBackground(density));
+        return view;
+    }
+    private void positionTargetRadiusControls(float density){
+        FrameLayout.LayoutParams slider=(FrameLayout.LayoutParams)targetRadiusPanel.getLayoutParams();
+        slider.rightMargin=safeRight+Math.round(8*density);
+        slider.topMargin=safeTop+Math.round(64*density);
+        targetRadiusPanel.setLayoutParams(slider);
+        FrameLayout.LayoutParams textLayout=(FrameLayout.LayoutParams)targetRadiusTextPanel.getLayoutParams();
+        textLayout.rightMargin=slider.rightMargin+slider.width+Math.round(8*density);
+        textLayout.topMargin=slider.topMargin;
+        targetRadiusTextPanel.setLayoutParams(textLayout);
     }
     private void createObjectControls(FrameLayout root){
         float density=getResources().getDisplayMetrics().density;
@@ -258,6 +323,45 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams helpLayout=new FrameLayout.LayoutParams(Math.round(52*density),Math.round(48*density),android.view.Gravity.RIGHT|android.view.Gravity.TOP);
         helpLayout.rightMargin=helpLayout.topMargin=Math.round(8*density);root.addView(helpButton,helpLayout);
         helpButton.setOnClickListener(v->{if(active==this&&started)showTouchSettings();});
+        targetRadiusPanel=new FrameLayout(this);
+        targetRadiusPanel.setClipChildren(false);
+        targetRadiusPanel.setBackground(objectControlBackground(density));
+        targetRadiusPanel.setVisibility(View.GONE);
+        int sliderLength=Math.round(144*density),sliderWidth=Math.round(52*density);
+        SeekBar radius=new SeekBar(this);
+        radius.setRotation(-90);
+        radius.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        radius.setMax(GamePreferences.MAX_TARGET_RADIUS-GamePreferences.MIN_TARGET_RADIUS);
+        int savedRadius=GamePreferences.targetRadius();
+        radius.setProgress(savedRadius-GamePreferences.MIN_TARGET_RADIUS);
+        radius.setContentDescription(text(R.string.target_area_diameter,2*savedRadius));
+        radius.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar bar,int progress,boolean user){
+                if(!user)return;
+                int selected=progress+GamePreferences.MIN_TARGET_RADIUS;
+                GamePreferences.targetRadius(selected);
+                bar.setContentDescription(text(R.string.target_area_diameter,2*selected));
+                targetRadiusHint.setVisibility(View.GONE);
+                touch.showTargetArea(selected);
+            }
+            public void onStartTrackingTouch(SeekBar bar){targetRadiusHint.setVisibility(View.GONE);}
+            public void onStopTrackingTouch(SeekBar bar){}
+        });
+        targetRadiusPanel.addView(radius,new FrameLayout.LayoutParams(sliderLength,sliderWidth,android.view.Gravity.CENTER));
+        int sliderGravity=android.view.Gravity.RIGHT|android.view.Gravity.TOP;
+        root.addView(targetRadiusPanel,new FrameLayout.LayoutParams(sliderWidth,sliderLength,sliderGravity));
+        targetRadiusTextPanel=new LinearLayout(this);
+        targetRadiusTextPanel.setOrientation(LinearLayout.VERTICAL);
+        targetRadiusTextPanel.setGravity(android.view.Gravity.RIGHT);
+        targetRadiusTextPanel.setVisibility(View.GONE);
+        targetRadiusTextPanel.addView(targetRadiusText(R.string.target_area_label,density),new LinearLayout.LayoutParams(-2,-2));
+        targetRadiusHint=targetRadiusText(R.string.target_area_hint,density);
+        targetRadiusHint.setVisibility(View.GONE);
+        LinearLayout.LayoutParams hintLayout=new LinearLayout.LayoutParams(Math.round(248*density),-2);
+        hintLayout.topMargin=Math.round(6*density);
+        targetRadiusTextPanel.addView(targetRadiusHint,hintLayout);
+        root.addView(targetRadiusTextPanel,new FrameLayout.LayoutParams(-2,-2,sliderGravity));
+        positionTargetRadiusControls(density);
         toolsButton=objectButton(text(R.string.tools_menu),"…");
         toolsButton.setContentDescription(text(R.string.tools_menu));toolsButton.setVisibility(View.GONE);
         FrameLayout.LayoutParams toolsLayout=new FrameLayout.LayoutParams(Math.round(52*density),Math.round(48*density),android.view.Gravity.RIGHT|android.view.Gravity.BOTTOM);
@@ -277,7 +381,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         refreshObjectControls();
     }
     private void showToolMenu(){
-        if(active!=this||!started||settingsDialog!=null||textDialog!=null||cheatUi()||textSerial!=0)return;
+        if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
         toolMenuContext=nativeTouchContext();toolMenuSize=nativeTouchGameSize();toolMenuEpoch=nativeTouchLayoutEpoch();
         if(!toolMenuValid())return;
         touch.setBlocked(true);if(gamepad!=null)gamepad.setEnabledInput(false);
@@ -311,13 +415,22 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
     private void refreshObjectControls(){
         if(objectControls==null||touch==null)return;
-        boolean visible=active==this&&started&&settingsDialog==null&&textDialog==null&&!cheatUi()&&touch.objectControlsVisible();
+        boolean visible=active==this&&started&&!inputOverlayOpen()&&touch.objectControlsVisible();
         objectControls.setVisibility(visible?View.VISIBLE:View.GONE);
-        boolean help=active==this&&started&&settingsDialog==null&&textDialog==null&&!cheatUi()&&
-                (nativeTouchContext()&(TouchLayer.OPTIONS|TouchLayer.MODAL|TouchLayer.LOADING|TouchLayer.TEXT_FOCUS))==TouchLayer.OPTIONS;
-        helpButton.setVisibility(help?View.VISIBLE:View.GONE);
         int mode=nativeTouchContext();
-        boolean tools=active==this&&started&&settingsDialog==null&&textDialog==null&&!cheatUi()&&(mode==TouchLayer.BUY||mode==TouchLayer.BUILD);
+        boolean help=active==this&&started&&!inputOverlayOpen()&&
+                (mode&(TouchLayer.OPTIONS|TouchLayer.MODAL|TouchLayer.LOADING|TouchLayer.TEXT_FOCUS))==TouchLayer.OPTIONS;
+        helpButton.setVisibility(help?View.VISIBLE:View.GONE);
+        boolean targetArea=help&&hasWindowFocus()&&touch.optionsInLot(mode);
+        targetRadiusPanel.setVisibility(targetArea?View.VISIBLE:View.GONE);
+        targetRadiusTextPanel.setVisibility(targetArea?View.VISIBLE:View.GONE);
+        if(!targetArea)targetRadiusHint.setVisibility(View.GONE);
+        else if(!GamePreferences.targetRadiusHintShown()){
+            targetRadiusHint.setVisibility(View.VISIBLE);
+            GamePreferences.markTargetRadiusHintShown();
+        }
+        touch.showTargetArea(targetArea?GamePreferences.targetRadius():0);
+        boolean tools=active==this&&started&&!inputOverlayOpen()&&(mode==TouchLayer.BUY||mode==TouchLayer.BUILD);
         toolsButton.setVisibility(tools?View.VISIBLE:View.GONE);
         int cost=visible?nativeTouchObjectCost():-1;
         objectCost.setText(cost>=0?"§ "+cost:"");objectCost.setVisibility(cost>=0?View.VISIBLE:View.GONE);
@@ -347,6 +460,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
         if(left==safeLeft&&top==safeTop&&right==safeRight&&bottom==safeBottom)return;
         safeLeft=left;safeTop=top;safeRight=right;safeBottom=bottom;
+        closeTargetMenu();
         if(touch!=null)touch.releaseAll();
         FrameLayout.LayoutParams layout=(FrameLayout.LayoutParams)objectControls.getLayoutParams();
         layout.leftMargin=left;layout.rightMargin=right+Math.round(8*getResources().getDisplayMetrics().density);
@@ -354,6 +468,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams helpLayout=(FrameLayout.LayoutParams)helpButton.getLayoutParams();
         helpLayout.leftMargin=left;helpLayout.rightMargin=right+Math.round(8*getResources().getDisplayMetrics().density);
         helpLayout.topMargin=top+Math.round(8*getResources().getDisplayMetrics().density);helpLayout.bottomMargin=bottom;helpButton.setLayoutParams(helpLayout);
+        positionTargetRadiusControls(getResources().getDisplayMetrics().density);
         FrameLayout.LayoutParams toolsLayout=(FrameLayout.LayoutParams)toolsButton.getLayoutParams();
         toolsLayout.rightMargin=right+Math.round(8*getResources().getDisplayMetrics().density);
         toolsLayout.bottomMargin=bottom+Math.round(8*getResources().getDisplayMetrics().density);toolsButton.setLayoutParams(toolsLayout);
@@ -393,6 +508,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         catch(android.system.ErrnoException e){android.util.Log.w("Sims2","System language: "+e);}
         if (active != null && active != this) {
             active.controlHandler.removeCallbacks(active.updateControls);
+            active.closeTargetMenu();
             active.cancelTextSession();
             if (active.touch != null) { touch.takePendingCommand(active.touch); active.touch.releaseAll(); active.touch.releaseLocal(); }
         }
@@ -486,7 +602,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
     private void showTimeHint(){
         if(active!=this||!started||!firstFrame||!hasWindowFocus()||nativeTouchContext()!=TouchLayer.LIVE
-                ||settingsDialog!=null||textDialog!=null||cheatUi()||textSerial!=0
+                ||inputOverlayOpen()||textSerial!=0
                 ||!GamePreferences.uiSwipeControls()||GamePreferences.timeHintShown())return;
         AlertDialog.Builder builder=new AlertDialog.Builder(this,R.style.PortDialog);
         TextView help=new TextView(builder.getContext());help.setText(text(R.string.time_swipe_hint));help.setTextColor(Color.BLACK);
@@ -500,7 +616,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         settingsDialog.show();GamePreferences.markTimeHintShown();
     }
     private void showTouchSettings(){
-        if(active!=this||!started||settingsDialog!=null||textDialog!=null||cheatUi()||textSerial!=0)return;
+        if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
         touch.setBlocked(true);
         desiredScale=Math.max(100,Math.min(300,nativeTouchUiScale()));lastSubmittedScale=desiredScale;scaleRequested=false;
         AlertDialog.Builder builder=new AlertDialog.Builder(this,R.style.PortDialog);
@@ -536,7 +652,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         settingsDialog.getWindow().getDecorView().setForceDarkAllowed(false);
     }
     private void showTextEditor(float x,float y){
-        if(active!=this||!started||textDialog!=null||settingsDialog!=null||cheatUi()||textSerial!=0)return;
+        if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
         // Read fences the completed UI click and captures this field's full value and identity.
         byte[] original=nativeTouchReadText(x,y);if(original==null)return;
         textDraft=new String(original,StandardCharsets.UTF_8);
@@ -598,38 +714,44 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
     @Override public void onWindowFocusChanged(boolean hasFocus){
         super.onWindowFocusChanged(hasFocus);
-        if(gamepad!=null)gamepad.setEnabledInput(hasFocus&&active==this&&settingsDialog==null&&textDialog==null&&!cheatUi());
+        if(!hasFocus)closeTargetMenu();
+        if(gamepad!=null)gamepad.setEnabledInput(hasFocus&&active==this&&!inputOverlayOpen());
         if(active!=this&&active!=null){if(touch!=null)touch.releaseLocal();return;}
-        if(touch!=null){if(started)touch.setBlocked(!hasFocus||settingsDialog!=null||textDialog!=null||cheatUi());else touch.releaseLocal();}
+        if(touch!=null){if(started)touch.setBlocked(!hasFocus||inputOverlayOpen());else touch.releaseLocal();}
         if(hasFocus&&active==this)hideSystemUi();
     }
-    @Override public void onBackPressed(){if(!started){Launch.openLauncher(this,launch.distribution());finish();return;}if(toolMenu!=null){closeToolMenu();return;}if(active==this&&cheatUi()){nativeCheatsCancel();if(cheatDialog!=null)cheatDialog.dismiss();return;}if(active==this)touch.back();hideSystemUi();}
+    @Override public void onBackPressed(){if(!started){Launch.openLauncher(this,launch.distribution());finish();return;}if(targetMenu!=null){closeTargetMenu();return;}if(toolMenu!=null){closeToolMenu();return;}if(active==this&&cheatUi()){nativeCheatsCancel();if(cheatDialog!=null)cheatDialog.dismiss();return;}if(active==this)touch.back();hideSystemUi();}
     @Override public void surfaceCreated(SurfaceHolder holder){
         if(!started||active!=this)return;Surface surface=holder.getSurface();
         if(android.os.Build.VERSION.SDK_INT>=30)surface.setFrameRate(preferredRefreshRate,Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
         nativeSurface(surface);
     }
-    @Override public void surfaceChanged(SurfaceHolder holder,int format,int w,int h){if(started&&ownsInput()&&touch!=null)touch.releaseAll();}
-    @Override public void surfaceDestroyed(SurfaceHolder holder){if(started&&ownsInput()){cancelTextSession();if(touch!=null)touch.releaseAll();nativeSurface(null);}}
+    @Override public void surfaceChanged(SurfaceHolder holder,int format,int w,int h){if(started&&ownsInput()&&touch!=null){closeTargetMenu();touch.releaseAll();}}
+    @Override public void surfaceDestroyed(SurfaceHolder holder){if(started&&ownsInput()){closeTargetMenu();cancelTextSession();if(touch!=null)touch.releaseAll();nativeSurface(null);}}
     @Override protected void onPause(){
         controlHandler.removeCallbacks(updateControls);
+        closeTargetMenu();
         if(gamepad!=null)gamepad.setEnabledInput(false);
         if(started){if(ownsInput()){nativeCheatsCancel();cancelTextSession();touch.releaseAll();nativePause(true);}else touch.releaseLocal();}
         super.onPause();
     }
     @Override protected void onResume(){
         super.onResume();hideSystemUi();
-        if(gamepad!=null)gamepad.setEnabledInput(active==this&&hasWindowFocus()&&settingsDialog==null&&textDialog==null&&!cheatUi());
+        if(gamepad!=null)gamepad.setEnabledInput(active==this&&hasWindowFocus()&&!inputOverlayOpen());
         if(started&&active==this){nativeTouchCameraContact(false);nativePause(false);controlHandler.removeCallbacks(updateControls);controlHandler.post(updateControls);}
     }
     @Override protected void onDestroy(){
         controlHandler.removeCallbacks(updateControls);
+        closeTargetMenu();
         if(cheatDialog!=null){AlertDialog previous=cheatDialog;cheatDialog=null;previous.dismiss();}
         if(gamepad!=null){gamepad.release();((android.hardware.input.InputManager)getSystemService(Context.INPUT_SERVICE)).unregisterInputDeviceListener(gamepad);}
         if(touch!=null){if(started&&ownsInput()){nativeCheatsCancel();cancelTextSession();touch.releaseAll();}else touch.releaseLocal();}
         if(active==this)active=null;super.onDestroy();
     }
-    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event){return started&&active==this&&hasWindowFocus()&&gamepad!=null&&gamepad.key(event)||super.dispatchKeyEvent(event);}
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event){
+        if(targetMenu!=null&&targetMenu.handlePadKey(event))return true;
+        return started&&active==this&&hasWindowFocus()&&gamepad!=null&&gamepad.key(event)||super.dispatchKeyEvent(event);
+    }
     @Override public boolean dispatchGenericMotionEvent(android.view.MotionEvent event){return started&&active==this&&hasWindowFocus()&&gamepad!=null&&gamepad.motion(event)||super.dispatchGenericMotionEvent(event);}
     @Override public boolean dispatchTouchEvent(android.view.MotionEvent event){if(gamepad!=null)gamepad.hidePointer();return super.dispatchTouchEvent(event);}
 }

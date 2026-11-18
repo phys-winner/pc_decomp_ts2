@@ -1,142 +1,281 @@
-"""Exercise production small-target selection against deterministic visible pick regions."""
-import ctypes
-import _ctypes
-from contextlib import ExitStack
+"""Exercise production lot targeting without an Android or scene-graph dependency."""
 from pathlib import Path
-import subprocess
-import tempfile
 
-from build_android import CLANG, ROOT
+from audio_probe import CLANG, compile_probe
 from check_virtual_query import function
 
-PRELUDE = r'''
-typedef unsigned int uint32_t;
-typedef unsigned long long uint64_t;
-typedef unsigned char uint8_t;
-#define NULL ((void *)0)
-#define S2_TOUCH_LIVE 128
-#define isfinite(v) __builtin_isfinite(v)
-#define API __declspec(dllexport)
-int _fltused;
-static uint32_t memory[0x10000/4],g_esp=0x9000,win_manager=0x1000,tool_handler=0x3000,scene_window=0x2100,lot_camera=0xa000;
-#define GPTR(a) ((uint8_t *)memory+(uint32_t)(a))
+
+PRELUDE = r"""
+#include <assert.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include "sims2_settings.h"
+
+static uint32_t memory[16384], g_esp = 0x9000, win_manager = 0x1000, tool_handler = 0x3000, scene_window = 0x2100;
+static uint8_t *guest_ptr(uint32_t p) {
+    return (uint8_t *)memory + (p == 0xA10CC288u ? 0x1100 : p);
+}
+#define GPTR(a) guest_ptr(a)
 #define MEM32(a) (*(uint32_t *)GPTR(a))
-static unsigned context=128,epoch=3,calls,ui,mutation,writable=1;
-static unsigned target_logs=32;
-static void void_log(const char *s,...){(void)s;}
-static int boxes[4][4],render_boxes[4][4],active[4],children[4],siblings[4],has_bounds[4],parents[4],object_node[4];
-static void *memset(void *p,int c,uint64_t n){uint8_t *b=p;while(n--)*b++=(uint8_t)c;return p;}
-static void *memcpy(void *p,const void *s,uint64_t n){uint8_t *b=p;const uint8_t *a=s;while(n--)*b++=*a++;return p;}
-static float touch_float(uint32_t a){float v;memcpy(&v,GPTR(a),4);return v;}
-static float tanf(float v){(void)v;return 1;}
-static int touch_camera_basis(uint32_t c,float d,float eye[3],float matrix[9]){
- (void)c;(void)d;memset(eye,0,12);memset(matrix,0,36);matrix[0]=matrix[4]=matrix[8]=1;return 1;
+static unsigned context, queries, stale_after, ground, overlay;
+static unsigned unavailable, tested;
+static uint32_t handset_base;
+static uint16_t handset_base_id;
+static long elapsed_ns, test_cost_ns, pick_cost_ns;
+static int pick_radius;
+static int center_offscreen;
+static int boxes[3][4];
+static int void_vm_readable(uint32_t p, size_t n) {
+    return (p == 0xA10CC288u && n == 4) || (p >= 0x1000 && (uint64_t)p + n <= sizeof memory);
 }
-static int strcmp(const char *a,const char *b){while(*a&&*a==*b){++a;++b;}return *a-*b;}
-static const char *touch_type(uint32_t p){(void)p;return "";}
-static int void_vm_readable(uint32_t p,uint32_t n){return p>=0x1000&&(uint64_t)p+n<=sizeof memory;}
-static int void_vm_writable(uint32_t p,uint32_t n){return writable&&void_vm_readable(p,n);}
-static unsigned s2_touch_context(void){return context;}
-static unsigned s2_touch_layout_epoch(void){return epoch;}
-static uint32_t s2_touch_owner_manager(void){return win_manager;}
-static void void_input_screen_size(int *w,int *h){*w=*h=200;}
-static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int n,const uint32_t *args){
- ++calls;if(mutation&&calls==mutation)context=1;
- if(self==0x2000&&n==2)return ui&&args[0]>=103?0x2200:scene_window;
- if(self>=0x7000&&self<0x7400){
-  unsigned i=(self-0x7000)/0x100;
-  if(va==6)return parents[i]?0x7000+0x100*(parents[i]-1):0;
-  if(va==7){if(n!=1||args[0]!=0xFA1C39EDu)__builtin_trap();return object_node[i];}
-  if(va==1)return children[i]?0x7000+0x100*(children[i]-1):0;
-  if(va==2)return siblings[i]?0x7000+0x100*(siblings[i]-1):0;
-  if(va==3)return has_bounds[i];if(va==4)return 0;
-  if(va!=5||n!=1)__builtin_trap();
-  float box[6]={(float)render_boxes[i][0]-100,100,99-(float)render_boxes[i][3],(float)render_boxes[i][2]-99,100,100-(float)render_boxes[i][1]};
-  memcpy(GPTR(args[0]),box,24);return args[0];
- }
- if(va!=0xA078D789u||self!=0x4000||n!=5||args[2]||args[4]||args[3]!=0x8fe0)__builtin_trap();
- int x=args[0],y=args[1];
- for(unsigned i=0;i<4;++i)if(active[i]&&x>=boxes[i][0]&&x<=boxes[i][2]&&y>=boxes[i][1]&&y<=boxes[i][3])return 0x7000+i*0x100;
- return 0;
+static int void_vm_writable(uint32_t p, size_t n) { return void_vm_readable(p, n); }
+#define CLOCK_MONOTONIC 1
+static int clock_gettime(int clock, struct timespec *out) {
+    assert(clock == CLOCK_MONOTONIC);
+    *out = (struct timespec){ .tv_nsec = elapsed_ns };
+    return 0;
 }
-'''
-CHECK = r'''
-API void reset(void){
- memset(memory,0,sizeof memory);memset(active,0,sizeof active);memset(children,0,sizeof children);memset(siblings,0,sizeof siblings);memset(parents,0,sizeof parents);context=128;epoch=3;calls=ui=mutation=0;writable=1;
- win_manager=0x1000;tool_handler=0x3000;g_esp=0x9000;
- MEM32(0x1044)=0x2000;MEM32(0x2000)=0x5000;MEM32(0x3020)=0x4000;MEM32(0x4000)=0xA0DE9374u;
- MEM32(0xa134)=0x3fc90fdb;MEM32(0xa0fc)=0x3f800000;MEM32(0xa0e0)=0x42c80000;
- for(unsigned i=0;i<4;++i){MEM32(0x7000+i*0x100)=0x6000;has_bounds[i]=object_node[i]=1;}
- MEM32(0x6064)=7;MEM32(0x6088)=6;
- MEM32(0x609c)=1;MEM32(0x6094)=2;MEM32(0x60c0)=3;MEM32(0x6118)=4;MEM32(0x6120)=5;
+unsigned s2_touch_context(void) { return context; }
+unsigned s2_touch_layout_epoch(void) { return 1; }
+static const char *touch_type(uint32_t p) { (void)p; return ""; }
+static void void_input_screen_size(int *w, int *h) { *w = *h = 200; }
+uint32_t s2_ui_pick(uint32_t root, int x, int y) {
+    assert(root == 0x2000 && x >= 0 && x < 200 && y >= 0 && y < 200);
+    elapsed_ns += pick_cost_ns;
+    if (++queries == stale_after) context = S2_TOUCH_OPTIONS;
+    return overlay && x > 104 ? 0x2200 : scene_window;
 }
-API void bounds(unsigned n,int x,int y,int xx,int yy){render_boxes[n][0]=x;render_boxes[n][1]=y;render_boxes[n][2]=xx;render_boxes[n][3]=yy;}
-API void box(unsigned n,int x,int y,int xx,int yy){active[n]=1;boxes[n][0]=x;boxes[n][1]=y;boxes[n][2]=xx;boxes[n][3]=yy;bounds(n,x,y,xx,yy);}
-API void branch(unsigned n,unsigned child,unsigned sibling){children[n]=child;siblings[n]=sibling;if(child)has_bounds[n]=0;}
-API void attachment(unsigned n,unsigned parent,unsigned object){parents[n]=parent;object_node[n]=object;}
-API void anchor(unsigned n,int x,int y){bounds(n,x,y,x-1,y-1);has_bounds[n]=1;}
-API void change(unsigned c,unsigned u,unsigned w,unsigned m){context=c;ui=u;writable=w;mutation=m;}
-API uint64_t resolve(int x,int y,int radius){
- touch_small_target(0x4000,0x2000,&x,&y,radius);
- if(g_esp!=0x9000)__builtin_trap();
- return(uint64_t)(uint32_t)y<<32|(uint32_t)x;
+static int touch_query(int x, int y, int radius, uint64_t *point, uint64_t key, s2_world_targets *out) {
+    assert(x == 100 && y == 100 && !point && !key && out);
+    pick_radius = radius;
+    return 2;
 }
-API unsigned queries(void){return calls;}
-'''
+static void mock_method(void) {}
+static void (*void_dispatch_find(uint32_t fn))(void) { return fn >= 6 && fn <= 18 ? mock_method : NULL; }
+static uint32_t void_call_guest_this(uint32_t fn, uint32_t self, int n, const uint32_t *args) {
+    if (fn == 0xA078D789u) {
+        assert(self == 0x4000 && n == 5 && !args[2] && args[3] == 0x8fc0 && !args[4]);
+        int x = (int)args[0], y = (int)args[1];
+        for (unsigned i = 0; i < 3; ++i)
+            if (x >= boxes[i][0] && x <= boxes[i][2] && y >= boxes[i][1] && y <= boxes[i][3])
+                return 0x7000 + 16 * i;
+        return 0;
+    }
+    if (fn == 0xA068C4C1u) {
+        assert(self == 0x4000 && n == 3 && args[2] == 0x8fc0);
+        return ground;
+    }
+    if (fn == 1) {
+        assert(n == 1 && args[0] == 0x8fc0);
+        return 0xa000 + 16 * ((self - 0x7000) / 16);
+    }
+    if (fn == 2) return 0;
+    if (fn == 3) return self == 0xa020 ? 0xa000 : self;
+    if (fn == 4) return (self - 0xa000) / 16 + 1;
+    if (fn == 0xA0144F5Bu || fn == 0xA0141455u) return 0;
+    if (fn == 5) {
+        assert(n == 1 && args[0] == 0x8fd0);
+        memcpy(GPTR(args[0] + 4), self == 0xa000 ? "One" : "Two", 4);
+        return 1;
+    }
+    if (fn == 6) {
+        assert(n == 1 && args[0] == 0x8fc0 && self != 0x7120);
+        const float empty[] = {0, 0, 0, 0, 0, 0};
+        const float first[] = {15, 18, 2, 25, 26, 6};
+        const float second[] = {33, 38, 1, 39, 44, 9};
+        const float extension[] = {23, 20, 2, 29, 28, 8};
+        const float *bounds = self == 0x7100 ? first : self == 0x7110 ? second : self == 0x7130 ? extension : empty;
+        memcpy(GPTR(args[0]), bounds, sizeof empty);
+        return args[0];
+    }
+    if (fn == 7) {
+        assert(n == 0);
+        if (self == 0x7000 || self == 0x7020) return 0x7200;
+        if (self == 0x7010) return 0x7110;
+        return self == 0x7200 ? 0x7100 : 0;
+    }
+    if (fn == 8) {
+        assert(n == 0);
+        return self == 0x7100 ? 0x7120 : self == 0x7120 ? 0x7130 : 0;
+    }
+    if (fn == 9) {
+        assert(n == 1);
+        if (args[0] == 0x1C585E30u) return self >= 0x7100 && self <= 0x7130;
+        assert(args[0] == 0xFA1C39EDu);
+        return self == 0x7120;
+    }
+    if (fn == 11) { assert(self == 0xB800 && n == 0); return 0xB810; }
+    if (fn == 12) { assert(self == 0xB810 && n == 0); return 0xB820; }
+    if (fn == 13) { assert(self == 0xB800 && n == 0); return 0xB830; }
+    if (fn == 14) {
+        assert(self == 0xB830 && n == 2 && args[0] == 0xB820);
+        ++tested;
+        elapsed_ns += test_cost_ns;
+        return !(unavailable & (1u << ((args[1] - 0xA000) / 16)));
+    }
+    if (fn == 15) { assert(n == 0); return 0xA100 + self - 0xA000; }
+    if (fn == 16) { assert(n == 0 && self == 0xA010); return handset_base; }
+    if (fn == 18) { assert(n == 1 && self == 0xA010 && !args[0]); return handset_base_id; }
+    if (fn == 0xA041B670u) {
+        assert(n == 1 && args[0] == 201);
+        return self == 0xA110 ? 0x6C734DB3u : 0x6C734D8Cu;
+    }
+    if (fn == 17) return self;
+    if (fn == 0xA05BD6B6u) {
+        assert(n == 2 && self == 0x6200 && args[0] == 0x8fc0 && args[1] == 0x8fd8);
+        float center[3];
+        memcpy(center, GPTR(args[1]), sizeof center);
+        assert((center[0] == 22 && center[1] == 23 && center[2] == 5) ||
+               (center[0] == 36 && center[1] == 41 && center[2] == 5));
+        MEM32(args[0]) = center_offscreen ? 200 : 100 + (int)center[0];
+        MEM32(args[0] + 4) = 20 + (int)center[1];
+        return args[0];
+    }
+    if (fn == 0xA0149D00u) return 3;
+    assert(fn == 0xA01ACD4Fu);
+    return self + 4;
+}
+"""
 
 
-def main():
-    source = (ROOT / 'android/host/sims2_touch.c').read_text()
-    actual = ''.join(function(source, s) for s in ('static uint32_t touch_target_node(', 'static int touch_target_bounds(', 'static void touch_small_target('))
-    with tempfile.TemporaryDirectory(prefix='s2-small-targets-') as folder, ExitStack() as cleanup:
-        base = Path(folder)
-        c, obj, dll = base / 'check.c', base / 'check.obj', base / 'check.dll'
-        c.write_text(PRELUDE + actual + CHECK)
-        subprocess.run([str(CLANG), '--target=x86_64-pc-windows-msvc', '-O2', '-fno-builtin', '-fno-stack-protector', '-c', str(c), '-o', str(obj)], check=True)
-        subprocess.run([str(CLANG.with_name('ld.lld.exe')), '-flavor', 'link', '/dll', '/noentry', '/out:' + str(dll), str(obj)], check=True)
-        lib = ctypes.CDLL(str(dll))
-        cleanup.callback(_ctypes.FreeLibrary, lib._handle)
-        lib.resolve.restype = ctypes.c_uint64
-        def resolve(x=100, y=100, radius=12):
-            point = lib.resolve(x, y, radius)
-            return point & 0xffffffff, point >> 32
-        for width, height in [(1, 1), (3, 5), (7, 8)]:
-            lib.reset(); lib.box(0, 106, 98, 105 + width, 97 + height)
-            target = resolve()
-            assert 106 <= target[0] <= 105 + width and 98 <= target[1] <= 97 + height, (width, height, target)
-            if width >= 3 and height >= 3:
-                assert 106 < target[0] < 105 + width and 98 < target[1] < 97 + height, 'avoid the original action handler\'s inactive rim'
-            assert lib.queries() < 1000
-        for width, height in [(50, 50), (60, 2), (2, 60), (18, 18)]:
-            lib.reset(); lib.box(0, 106, 98, 105 + width, 97 + height)
-            assert resolve() == (100, 100), (width, height)
-        lib.reset(); lib.box(0, 99, 99, 160, 160)
-        assert resolve() == (100, 100) and lib.queries() == 2, 'an exact hit always wins'
-        lib.reset(); lib.box(0, 106, 98, 108, 102);lib.bounds(1,106,98,108,102);lib.bounds(2,140,70,180,130)
-        lib.branch(0,2,0);lib.branch(1,0,3)
-        assert resolve()==(100,100), 'all model pieces exclude the tiny mouse of a large computer'
-        lib.reset(); lib.box(0,106,98,108,102);lib.bounds(3,140,70,180,130)
-        lib.attachment(0,2,1);lib.attachment(1,3,0);lib.attachment(2,0,1)
-        lib.branch(2,2,0);lib.branch(1,1,0);lib.branch(0,0,4)
-        assert resolve()==(100,100), 'an animated part is measured with the outer object and its other pieces'
-        lib.reset();lib.box(0,106,98,108,102);lib.bounds(1,106,98,108,102)
-        lib.branch(0,2,0);lib.anchor(0,190,190)
-        assert resolve()==(107,100), 'a distant invisible object origin does not enlarge the model'
-        lib.reset();lib.box(0,106,98,108,102);lib.anchor(0,106,100)
-        assert resolve()==(100,100), 'an origin without visible geometry is not a small target'
-        lib.reset(); lib.box(0, 106, 98, 108, 102); lib.box(1, 94, 108, 96, 110)
-        assert resolve()[0] >= 106, 'nearest small target wins'
-        lib.reset(); lib.box(0, 106, 98, 108, 102); lib.change(128, 1, 1, 0)
-        assert resolve() == (100, 100), 'UI retains input ownership'
-        lib.reset(); lib.box(0, 0, 98, 2, 102)
-        assert resolve(5, 100)[0] <= 2, 'screen boundary stays in range'
-        for context, writable, radius in [(1, 1, 12), (256, 1, 12), (128, 0, 12), (128, 1, 0), (128, 1, 49)]:
-            lib.reset(); lib.box(0, 106, 98, 108, 102); lib.change(context, 0, writable, 0)
-            assert resolve(radius=radius) == (100, 100) and lib.queries() == 0
-        lib.reset(); lib.box(0, 106, 98, 108, 102); lib.change(128, 0, 1, 3)
-        assert resolve() == (100, 100), 'owner callbacks cannot retarget stale input'
-    print('PASS small targets: projected whole-model bounds including disconnected pieces, tiny regions, exact-hit priority, nearest selection, large/long exclusions, UI/screen boundaries, owner/context/scratch validation and stack preservation')
+CHECK = r"""
+static void reset(void) {
+    memset(memory, 0, sizeof memory);
+    memset(boxes, -1, sizeof boxes);
+    queries = stale_after = overlay = 0; ground = 1; context = S2_TOUCH_LIVE; center_offscreen = 0;
+    unavailable = tested = 0; handset_base = 0;
+    handset_base_id = 0;
+    elapsed_ns = test_cost_ns = pick_cost_ns = 0;
+    MEM32(0x1044) = 0x2000; MEM32(0x3020) = 0x4000; MEM32(0x4000) = 0xA0DE9374u;
+    MEM32(0x4004) = 0x6200; MEM32(0x6200) = 0xA0DD8CB8u; MEM32(0x620c) = 0x6300;
+    for (unsigned i = 0; i < 3; ++i) {
+        MEM32(0x7000 + 16 * i) = 0x5000;
+        MEM32(0x7100 + 16 * i) = 0x5000;
+        MEM32(0xa000 + 16 * i) = 0xb000;
+    }
+    MEM32(0x7130) = 0x5000;
+    MEM32(0x51e8) = 1; MEM32(0xb188) = 2; MEM32(0xb1e0) = 3;
+    MEM32(0xb0bc) = 4; MEM32(0xb4a8) = 5;
+    MEM32(0x5120) = 6; MEM32(0x509c) = 7; MEM32(0x5098) = 8; MEM32(0x5064) = 9;
+    /* This resource node has a different method in the bounds slot. */
+    MEM32(0x7200) = 0x5400;
+    MEM32(0x5520) = 10; MEM32(0x549c) = 7; MEM32(0x5498) = 8; MEM32(0x5464) = 9;
+}
+static void box(unsigned i, int x, int y) {
+    boxes[i][0] = boxes[i][2] = x;
+    boxes[i][1] = boxes[i][3] = y;
+}
+static int scan(s2_world_targets *out, int x, int y, int radius, uint64_t key) {
+    out->count = 0;
+    int ok = touch_world_scan(win_manager, 0x4000, 0x2000, x, y, radius, key, out);
+    assert(g_esp == 0x9000);
+    return ok;
+}
+int main(void) {
+    s2_world_targets out;
+    reset();
+    assert(s2_touch_world_targets(100, 100, 50, &out) && pick_radius == S2_WORLD_PICK_RADIUS);
+    assert(s2_touch_world_targets(100, 100, 0, &out) && pick_radius == 1);
+    assert(scan(&out, 100, 100, 16, 0) && queries < 220);
+    queries = 0;
+    box(0, 124, 100);
+    box(1, 124, 124);
+    assert(scan(&out, 100, 100, 32, 0) && queries < 390);
+    assert(out.count == 1 && out.items[0].x == 124 && out.items[0].y == 100);
+    reset();
+    box(0, 148, 100);
+    box(1, 140, 140);
+    assert(scan(&out, 100, 100, S2_WORLD_PICK_RADIUS, 0) && queries < 475);
+    assert(out.count == 1 && out.items[0].x == 148 && out.items[0].y == 100);
+    reset();
+    box(0, 106, 100);
+    assert(scan(&out, 100, 100, 4, 0) && out.count == 1 && out.items[0].key == UINT64_MAX);
+    reset();
+
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1);
+    assert(out.items[0].key == UINT64_MAX && out.items[0].x == 100 && out.items[0].y == 100);
+    assert(scan(&out, 100, 100, 12, UINT64_MAX));
+    box(0, 106, 100);
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1);
+    uint64_t first = out.items[0].key;
+    assert(first && first != UINT64_MAX && out.items[0].x == 106);
+    box(2, 104, 100);
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].key == first && out.items[0].x == 104);
+
+    box(1, 100, 100);
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 3);
+    assert(out.items[2].key == UINT64_MAX);
+    assert(out.items[2].anchor_x == out.items[2].x && out.items[2].anchor_y == out.items[2].y);
+    assert(out.items[0].x == 100 && out.items[1].x == 104);
+    assert(out.items[0].anchor_x == 136 && out.items[0].anchor_y == 61);
+    assert(out.items[1].anchor_x == 122 && out.items[1].anchor_y == 43);
+    assert(out.items[0].key != out.items[1].key);
+    assert(!strcmp(out.items[0].name, out.items[0].key == first ? "One" : "Two"));
+    assert(!strcmp(out.items[1].name, out.items[1].key == first ? "One" : "Two"));
+    assert(scan(&out, 104, 100, 12, first));
+    assert(!scan(&out, 100, 100, 12, first));
+    center_offscreen = 1;
+    assert(scan(&out, 100, 100, 12, 0) && out.items[0].anchor_x == 100 && out.items[1].anchor_x == 104);
+
+    ground = 0;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 2);
+    overlay = 1; box(2, 106, 103);
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].x == 100);
+    reset(); box(0, 0, 0);
+    assert(scan(&out, 4, 4, 12, 0) && out.count == 1 && out.items[0].x == 0 && out.items[0].y == 0);
+    reset(); ground = 0;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && !out.items[0].key);
+    reset(); stale_after = 3;
+    assert(!scan(&out, 100, 100, 12, 0) && !out.count && queries == 3);
+    reset(); box(0, 106, 100); box(1, 100, 100); box(2, 104, 100);
+    MEM32(0xA10CC288u) = 0xB800;
+    MEM32(0xB800) = 0xBA00; MEM32(0xB810) = 0xBB00; MEM32(0xB830) = 0xBC00;
+    MEM32(0xBA00 + 104) = 11; MEM32(0xBB00 + 156) = 12;
+    MEM32(0xBA00 + 60) = 13; MEM32(0xBC00 + 72) = 14;
+    unavailable = 2; pick_cost_ns = 2000000;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].key == first && tested == 2);
+    pick_cost_ns = 0;
+    unavailable = 3;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].key == UINT64_MAX);
+    unavailable = 0;
+    MEM32(0xB100) = 15; MEM32(0xB11C) = 16;
+    MEM32(0xA100) = MEM32(0xA110) = 0xA0DC3B30u;
+    handset_base = 0xA000;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].key == first && out.items[0].x == 104);
+    handset_base = 0;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 3);
+    MEM32(0xB03C) = 18; handset_base_id = 1;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].key == first);
+    handset_base_id = 9;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 3);
+    handset_base_id = 0;
+    handset_base = 0xA000; unavailable = 1;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 1 && out.items[0].x == 100);
+    unavailable = 0;
+    MEM32(0xB1E0) = 17; MEM32(0xA120) = 0xA0DC3B30u;
+    assert(scan(&out, 100, 100, 12, 0) && out.count == 3);
+    assert(out.items[0].x == 104 && out.items[1].x == 106 && out.items[2].key == UINT64_MAX);
+    test_cost_ns = 120000000; tested = 0;
+    assert(scan(&out, 100, 100, 12, 0) && tested == 1 && out.count == 1 && out.items[0].x == 100);
+    puts("PASS live tap radius, native action filtering and budget, paired handsets, independent phones, ground order, model centers and stale selection");
+    return 0;
+}
+"""
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "android/host/sims2_touch.c").read_text(encoding="utf-8")
+    actual = "\n".join(function(source, sig) for sig in (
+        "int s2_touch_world_targets(", "static int touch_world_owner(",
+        "static uint64_t touch_world_object(", "static void touch_world_name(", "static uint32_t touch_scene_method(",
+        "static uint32_t touch_world_member(", "static uint32_t touch_world_guid(", "static int touch_world_phone_base(",
+        "static int touch_world_phone_duplicate(",
+        "static void touch_world_bounds(", "static void touch_world_anchor(", "static int touch_world_scan(",
+    ))
+    compile_probe("small-targets", PRELUDE + actual + CHECK, {
+        "sims2_settings.h": (root / "android/host/sims2_settings.h").read_text(encoding="utf-8"),
+    }, compiler_override=CLANG)
