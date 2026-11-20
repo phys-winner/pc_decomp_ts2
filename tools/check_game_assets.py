@@ -25,10 +25,12 @@ import java.nio.file.*;
 import java.util.zip.*;
 import android.content.res.AssetManager;
 public class AssetsCheck {
- static byte[] archive(String path,String value)throws Exception{
+ static byte[] archive(String... files)throws Exception{
   ByteArrayOutputStream bytes=new ByteArrayOutputStream();
   try(ZipOutputStream zip=new ZipOutputStream(bytes)){
-   zip.putNextEntry(new ZipEntry(path));zip.write(value.getBytes("UTF-8"));zip.closeEntry();
+   for(int i=0;i<files.length;i+=2){
+    zip.putNextEntry(new ZipEntry(files[i]));zip.write(files[i+1].getBytes("UTF-8"));zip.closeEntry();
+   }
   }
   return bytes.toByteArray();
  }
@@ -40,8 +42,12 @@ public class AssetsCheck {
   assert new String(Files.readAllBytes(data.toPath()),"UTF-8").equals("first");
   assert GameAssets.prepare(assets,files).equals(root)&&assets.opened==1;
   assets.version=new String(new char[64]).replace('\0','b');
-  assets.zip=archive("overlay/new.package","second");GameAssets.prepare(assets,files);
+  assets.zip=archive("overlay/new.package","second", "overlay/EP9/TSBin/Sims2EP9.exe","exe",
+                     "overlay/EP9/TSBin/ijl15.dll","dll");
+  GameAssets.prepare(assets,files);
   assert !data.exists()&&new File(root,"overlay/new.package").isFile();
+  assert new String(Files.readAllBytes(root.toPath().resolve("overlay/EP9/TSBin/Sims2EP9.exe")),"UTF-8").equals("exe");
+  assert new String(Files.readAllBytes(root.toPath().resolve("overlay/EP9/TSBin/ijl15.dll")),"UTF-8").equals("dll");
   assets.version=new String(new char[64]).replace('\0','c');
   assets.zip=archive("overlay/../../escaped","bad");
   try{GameAssets.prepare(assets,files);throw new AssertionError("Traversal accepted");}catch(IOException expected){}

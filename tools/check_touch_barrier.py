@@ -75,6 +75,7 @@ void void_wait_broadcast(void){}
 void void_input_cursor(uint32_t *x,uint32_t *y){*x=700;*y=500;}
 uint32_t void_window_main(void){return main_window;}
 unsigned s2_touch_context(void){return context|input_context;}
+uint32_t s2_touch_modal_window(void){return 0;}
 int s2_touch_rewards(void){return 0;}
 void s2_touch_input_context(unsigned f){input_context=f;}
 int void_vm_readable(uint32_t a,uint32_t n){return a>=0x10000 && (uint64_t)a+n<=0x30000;}
@@ -133,8 +134,16 @@ uint32_t void_call_guest(uint32_t va,int n,const uint32_t *args,int pops){
         if(nested){
             nested=0;
             if(mode==3)s2_touch_request_pick(700,500);
-            drive();
-            if(picker_calls || !touch_barrier_deferred || !message_depth)bad=6;
+            if(mode==5){
+                unsigned previous=void_begin_modal_messages();
+                context=S2_TOUCH_MODAL|S2_TOUCH_LIVE;
+                drive();
+                if(picker_calls!=1 || touch_barrier_deferred)bad=16;
+                void_end_modal_messages(previous);
+            }else{
+                drive();
+                if(picker_calls || !touch_barrier_deferred || !message_depth)bad=6;
+            }
         }
         MEM32(tool_handler+0x20)=0x16000;
         if(mode==4)context=S2_TOUCH_MODAL|S2_TOUCH_LIVE;
@@ -146,7 +155,7 @@ uint32_t void_call_guest_this(uint32_t va,uint32_t self,int n,const uint32_t *ar
     if(va==0xA067AD3Au){if(n||args)bad=210;return 80;}
     ++picker_calls;
     if(va!=0x13572468 || self!=0x12000 || n!=2 || args[0]!=700 || args[1]!=500 ||
-        handler_active || message_depth || lock_depth)bad=7;
+        message_depth!=modal_message_depth || (handler_active && mode!=5) || lock_depth)bad=7;
     g_eax=1;g_ecx=2;g_edx=3;g_ebx=4;g_esp=5;g_ebp=6;g_esi=7;g_edi=8;
     g_fs_base=9;g_cur_func=10;g_flag_k=FK_TEST;g_flag_a=11;g_flag_b=12;g_flag_cf=1;
     g_mxcsr=0;g_fpu_cw=0x7F;void_fpu_cmp=3;g_fp_bias=0;
@@ -157,7 +166,7 @@ uint32_t void_call_guest_this(uint32_t va,uint32_t self,int n,const uint32_t *ar
 static void reset(void){
     memset(queues,0,sizeof queues);queue_count=0;pending_count=0;
     thread=window.thread=1;context=S2_TOUCH_LIVE;input_context=0;mode=1;filter=nested=handler_active=0;
-    message_depth=touch_barrier_deferred=0;pick_pending=pick_done=pick_serial=0;
+    message_depth=touch_barrier_deferred=modal_message_depth=0;pick_pending=pick_done=pick_serial=0;
     waits=picker_calls=guest_calls=timer_calls=bad=0;
     memset(&g_m,0,sizeof g_m);g_stp=g_stbuf+X87_CENTRE;g_fp_bias=3;
     g_eax=0xAA;g_ecx=0xBB;g_edx=0xCC;g_ebx=0xDD;g_esp=0x28000;g_ebp=0x29000;g_esi=0xEE;g_edi=0xFF;
@@ -203,6 +212,8 @@ uint32_t selftest(void){
     MEM32(0x24000)=1;MEM32(0x24004)=0x113;MEM32(0x24008)=7;MEM32(0x2400C)=0x12340000;
     REQUIRE(!dispatch_message(0x24000));REQUIRE(timer_calls==1 && picker_calls==1 && !bad);++cases;
     reset();mode=4;pend(0x202,0,0);REQUIRE(!s2_touch_pick(700,500) && picker_calls==1 && !bad);++cases;
+    reset();mode=5;nested=1;typed(0x13000,0x13100,0x13200,0x13300,".?AVcGZWinBtn@@");
+    pend(0x202,0,0);REQUIRE(s2_touch_pick(700,500)==1 && picker_calls==1 && !modal_message_depth && !bad);++cases;
     reset();context=0;REQUIRE(!s2_touch_pick(700,500) && picker_calls==1 && !bad);++cases;
     reset();context=0;typed(0x13000,0x13100,0x13200,0x13300,".?AVcGZWinBtn@@");
     REQUIRE(s2_touch_pick(700,500)==1 && picker_calls==1 && !bad);++cases;
@@ -228,11 +239,12 @@ def main():
               u.index('static void timers_post_due(void);')]
     state += i[i.index('typedef struct { uint32_t msg, wparam, lparam; } pending_t;'):
                i.index('void void_input_screen_size(')]
-    state += 'static __thread unsigned message_depth, touch_barrier_deferred;\n'
+    state += 'static __thread unsigned message_depth, touch_barrier_deferred, modal_message_depth;\n'
     actual = ''.join(function(core, s) for s in ('void void_regs_save(', 'void void_regs_load('))
     actual += '\n'.join(line for line in touch.splitlines() if not line.startswith('#include'))
     actual += ''.join(function(u, s) for s in ('static queue_t *queue_for(', 'static void queue_push(',
         'void void_post_message(', 'static int matches(', 'static int queue_take(', 'static void store_msg(',
+        'unsigned void_begin_modal_messages(', 'void void_end_modal_messages(',
         'static void message_returned(', 'static uint32_t send_message(', 'static uint32_t dispatch_message('))
     actual += ''.join(function(i, s) for s in ('static void pend(', 'int void_input_touch_barrier(', 'void void_input_pump('))
     # Bodies appear later than callbacks in the original files; retain declarations.

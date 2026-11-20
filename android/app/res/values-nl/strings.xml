@@ -44,4 +44,5 @@
   <string name="target_ground">Grond</string>
   <string name="target_object">Voorwerp %1$d</string>
   <string name="target_changed">Het doel is verplaatst. Tik opnieuw.</string>
+  <string name="floor_swipe_hint">Veeg met drie vingers omhoog of omlaag om van verdieping te wisselen.</string>
 </resources>

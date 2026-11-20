@@ -135,6 +135,13 @@ static void scan_overlay(const char *host_dir, const char *win_dir)
 
 void void_files_overlay(const char *dir) { scan_overlay(dir, "C:\\Games\\The Sims 2 Legacy"); }
 
+const char *void_overlay_path(const char *windows_path)
+{
+    for (int i = 0; i < overlay_count; ++i)
+        if (!strcasecmp(windows_path, overlays[i].win)) return overlays[i].host;
+    return NULL;
+}
+
 /* Normalize a Windows path to "C:\a\b" (no trailing separator, no . or ..).
  * Returns 0 if it cannot be represented. */
 static int normalize(const char *in, char *out, size_t cap)
@@ -287,11 +294,11 @@ static char *to_host_uncounted(const char *windows_path, int *parent_exists, cha
     char norm[1024];
     if (!windows_path || !normalize(windows_path, norm, sizeof norm)) return NULL;
     if (normalized_out) snprintf(normalized_out, 1024, "%s", norm);
-    for (int i = 0; i < overlay_count; ++i) {
-        if (strcasecmp(norm, overlays[i].win)) continue;
+    const char *overlay = void_overlay_path(norm);
+    if (overlay) {
         if (parent_exists) *parent_exists = 1;
         if (type) *type = DT_REG;
-        return strdup(overlays[i].host);
+        return strdup(overlay);
     }
     const mount_t *best = NULL;
     size_t best_len = 0;
@@ -493,13 +500,13 @@ static void file_destroy(void_object *o)
     free(f->host_path);
 }
 
-static uint32_t file_handle(int fd, const char *host_path, int std_stream)
+static uint32_t file_handle(int fd, char *host_path, int std_stream)
 {
     void_object *o = void_object_new(VOID_OBJ_FILE, sizeof(file_t));
     file_t *f = (file_t *)o->data;
     f->fd = fd;
     f->std_stream = std_stream;
-    f->host_path = host_path ? strdup(host_path) : NULL;
+    f->host_path = host_path;
     if (f->host_path) { f->file_next = live_files; live_files = f; }
     o->destroy = file_destroy;
     o->signaled = 1;
@@ -510,6 +517,25 @@ static file_t *file_get(uint32_t h)
 {
     void_object *o = void_handle_get(h, VOID_OBJ_FILE);
     return o ? (file_t *)o->data : NULL;
+}
+
+/* File operations that yield the guest machine keep the descriptor alive through CloseHandle. */
+static void release_file_operation(void_object **o)
+{
+    void_object_release(*o);
+}
+
+static uint64_t file_path_key(const char *path)
+{
+    size_t root = strlen(data_root);
+    const char *name = strrchr(path, '/');
+    if (root && name && !strncmp(path, data_root, root) && path[root] == '/') {
+        const char *extension = strrchr(name, '.');
+        /* DBPF saves and their compaction files go through the descriptor, not block write-back. */
+        if ((extension && !strcasecmp(extension, ".package")) ||
+            !strncasecmp(name + 1, "TempDBSegmentPackedFile_", sizeof "TempDBSegmentPackedFile_" - 1)) return 0;
+    }
+    return void_readcache_key(path);
 }
 
 /* For each package it uses the game opens up to four handles: one for
@@ -538,58 +564,68 @@ static int files_lazy_open(void)
  * Returns 0, or -1 with errno set. */
 static int file_open_now(file_t *f, uint32_t h)
 {
-    if (f->zip_entry) {
-        if ((f->lazy_flags & O_ACCMODE) == O_RDONLY) { errno = EACCES; return -1; }
+    while (f->zip_entry) {
+        if (!f->host_path || (f->lazy_flags & O_ACCMODE) == O_RDONLY) { errno = EACCES; return -1; }
         const zm_entry *entry = f->zip_entry;
+        char *path = strdup(f->host_path);
+        if (!path) { errno = ENOMEM; return -1; }
         void_blocking_begin();
         pthread_mutex_lock(&zip_copy_lock);
         struct stat st;
         int copied = 0;
-        if (stat(f->host_path, &st)) {
+        if (stat(path, &st)) {
             char parent[2048];
-            snprintf(parent, sizeof parent, "%s", f->host_path);
+            snprintf(parent, sizeof parent, "%s", path);
             char *slash = strrchr(parent, '/');
             if (slash) { *slash = 0; mkdirs(parent); }
-            copied = s2_zip_copy(entry, f->host_path);
+            copied = s2_zip_copy(entry, path);
         }
         int error = errno;
         pthread_mutex_unlock(&zip_copy_lock);
         void_blocking_end();
-        if (copied) { errno = error; return -1; }
+        if (copied) { free(path); errno = error; return -1; }
         for (file_t *other = live_files; other; other = other->file_next)
-            if (!strcmp(other->host_path, f->host_path)) other->zip_entry = NULL;
-        dircache_created(f->host_path, 0);
-        void_readcache_changed(f->host_path);
+            if (!strcmp(other->host_path, path)) other->zip_entry = NULL;
+        dircache_created(path, 0);
+        void_readcache_changed(path);
+        free(path);
     }
-    if (!f->lazy) return 0;
-    VSTAT_BEGIN(start);
-    void_blocking_begin();
-    int fd = open(f->host_path, f->lazy_flags, 0664);
-    int e = errno;
-    void_blocking_end();
-    VSTAT_END(start, VS_OPEN, 0);
-    IOTRACE("M %08X %08X %llu %s\n", h, (unsigned)f->lazy_flags, (unsigned long long)((void_stat_now() - start) / 1000),
-        f->host_path ? f->host_path : "");
-    if (!f->lazy) {                    /* another thread opened it meanwhile */
-        if (fd >= 0) close(fd);
-        return 0;
-    }
-    if (fd < 0) {
-        VLOG("[void] deferred open of %s failed: %s", f->host_path, strerror(e));
-        errno = e;
-        return -1;
-    }
-    if (f->lazy_pos && lseek(fd, f->lazy_pos, SEEK_SET) < 0) {
-        e = errno;
-        close(fd);
-        errno = e;
-        return -1;
-    }
-    f->fd = fd;
-    f->lazy = 0;
-    if ((f->lazy_flags & O_ACCMODE) != O_RDONLY) {
-        f->writable = 1;
-        dircache_writer(f->host_path, 1);
+    while (f->lazy) {
+        if (!f->host_path) { errno = EBADF; return -1; }
+        char *path = strdup(f->host_path);
+        if (!path) { errno = ENOMEM; return -1; }
+        int flags = f->lazy_flags;
+        VSTAT_BEGIN(start);
+        void_blocking_begin();
+        int fd = open(path, flags, 0664);
+        int e = errno;
+        void_blocking_end();
+        VSTAT_END(start, VS_OPEN, 0);
+        IOTRACE("M %08X %08X %llu %s\n", h, (unsigned)flags,
+            (unsigned long long)((void_stat_now() - start) / 1000), path);
+        int same_path = f->host_path && !strcmp(path, f->host_path);
+        free(path);
+        if (!f->lazy || !same_path) {
+            if (fd >= 0) close(fd);
+            continue;
+        }
+        if (fd < 0) {
+            VLOG("[void] deferred open of %s failed: %s", f->host_path, strerror(e));
+            errno = e;
+            return -1;
+        }
+        if (f->lazy_pos && lseek(fd, f->lazy_pos, SEEK_SET) < 0) {
+            e = errno;
+            close(fd);
+            errno = e;
+            return -1;
+        }
+        f->fd = fd;
+        f->lazy = 0;
+        if ((flags & O_ACCMODE) != O_RDONLY) {
+            f->writable = 1;
+            dircache_writer(f->host_path, 1);
+        }
     }
     return 0;
 }
@@ -631,11 +667,12 @@ static off_t lazy_seek(file_t *f, int64_t distance, int whence)
 
 int void_file_host_fd(uint32_t h)
 {
-    file_t *f = file_get(h);
+    void_object *object __attribute__((cleanup(release_file_operation))) = void_handle_acquire(h, VOID_OBJ_FILE);
+    file_t *f = object ? object->data : NULL;
     if (f) file_flush(f);
     if (f && file_open_now(f, h)) return -1;
     if (f) void_readcache_flush_key(f->path_key);
-    return f ? f->fd : -1;
+    return f && void_handle_get(h, VOID_OBJ_FILE) == object ? f->fd : -1;
 }
 
 static uint32_t std_handles[3];
@@ -697,8 +734,7 @@ static uint32_t create_file_uncounted(const char *path, uint32_t access, uint32_
         int virtual_dir = fd < 0 && !s2_zip_stat(host, &st) && S_ISDIR(st.st_mode);
         uint32_t h = fd >= 0 || virtual_dir ? file_handle(fd, host, 0) : WIN_INVALID_HANDLE;
         if (h != WIN_INVALID_HANDLE) { file_get(h)->is_dir = 1; file_get(h)->lazy = virtual_dir; }
-        else void_set_last_error(void_errno_to_win32(errno));
-        free(host);
+        else { void_set_last_error(void_errno_to_win32(errno)); free(host); }
         return h;
     }
     int write = (access & (GENERIC_WRITE_ | FILE_WRITE_DATA_ | FILE_APPEND_DATA_ | 0x10000000u)) != 0;
@@ -733,11 +769,10 @@ static uint32_t create_file_uncounted(const char *path, uint32_t access, uint32_
         uint32_t h = file_handle(-1, host, 0);
         file_t *f = file_get(h);
         f->zip_entry = archived;
-        f->path_key = void_readcache_key(host);
+        f->path_key = file_path_key(host);
         f->cached_reads = (oflags & O_ACCMODE) != O_WRONLY;
         f->lazy = 1;
         f->lazy_flags = oflags;
-        free(host);
         void_set_last_error(disposition == OPEN_ALWAYS_ ? ERROR_ALREADY_EXISTS_ : 0);
         return h;
     }
@@ -783,7 +818,7 @@ static uint32_t create_file_uncounted(const char *path, uint32_t access, uint32_
             if (!strcmp(other->host_path, host)) other->zip_entry = NULL;
     if (flags & FILE_FLAG_DELETE_ON_CLOSE_) f->delete_on_close = 1;
     if (!exists) dircache_created(host, 0);
-    f->path_key = void_readcache_key(host);
+    f->path_key = file_path_key(host);
     f->cached_reads = (oflags & O_ACCMODE) != O_WRONLY;
     f->lazy = lazy;
     f->lazy_flags = oflags;
@@ -796,7 +831,6 @@ static uint32_t create_file_uncounted(const char *path, uint32_t access, uint32_
     if (name && !strcasecmp(name + 1, "savedProps.txt"))
         void_log("[settings] save whitelist %s -> %s", path, host);
     VLOG("[void] CreateFile(%s) -> %s handle %08X", path, host, h);
-    free(host);
     void_set_last_error((exists && (disposition == CREATE_ALWAYS_ || disposition == OPEN_ALWAYS_)) ? ERROR_ALREADY_EXISTS_ : 0);
     return h;
 }
@@ -836,15 +870,20 @@ static void console_write(file_t *f, const uint8_t *data, uint32_t n)
 WINAPI_EXPORT(K32, ReadFile, 5)
 {
     uint32_t h = ARG(0), buffer = ARG(1), size = ARG(2), read_out = ARG(3), overlapped = ARG(4);
-    file_t *f = file_get(h);
+    void_object *object __attribute__((cleanup(release_file_operation))) = void_handle_acquire(h, VOID_OBJ_FILE);
+    file_t *f = object ? object->data : NULL;
+    if ((read_out && !void_vm_writable(read_out, 4)) || (overlapped && !void_vm_writable(overlapped, 16))) {
+        void_set_last_error(998u); return 0;
+    }
     if (read_out) MEM32(read_out) = 0;
     if (!f || f->is_dir) { void_set_last_error(ERROR_INVALID_HANDLE_); return 0; }
     if (f->std_stream) return 1;
     if (size && !void_vm_writable(buffer, size)) { void_set_last_error(998u); return 0; }  /* ERROR_NOACCESS */
     if (f->zip_entry) {
+        const zm_entry *entry = f->zip_entry;
         uint64_t at = overlapped ? (uint64_t)MEM32(overlapped + 8) | ((uint64_t)MEM32(overlapped + 12) << 32) : (uint64_t)f->lazy_pos;
         void_blocking_begin();
-        long long got = s2_zip_read(f->zip_entry, GPTR(buffer), size, at);
+        long long got = s2_zip_read(entry, GPTR(buffer), size, at);
         int error = errno;
         void_blocking_end();
         if (got < 0) { void_set_last_error(void_errno_to_win32(error)); return 0; }
@@ -857,7 +896,7 @@ WINAPI_EXPORT(K32, ReadFile, 5)
     /* Another handle's buffered writes to this file come first. */
     for (file_t *d = dirty_files; d; d = d->wnext)
         if (d != f && d->wlen && d->path_key == f->path_key) file_flush(d);
-    if (f->cached_reads && size) {
+    if (f->path_key && f->cached_reads && size) {
         VSTAT_BEGIN(cached_start);
         off_t at = overlapped ? (off_t)MEM32(overlapped + 8) | ((off_t)MEM32(overlapped + 12) << 32)
                  : f->lazy ? f->lazy_pos : lseek(f->fd, 0, SEEK_CUR);
@@ -918,7 +957,12 @@ WINAPI_EXPORT(K32, ReadFile, 5)
 WINAPI_EXPORT(K32, WriteFile, 5)
 {
     uint32_t h = ARG(0), buffer = ARG(1), size = ARG(2), written_out = ARG(3), overlapped = ARG(4);
-    file_t *f = file_get(h);
+    void_object *object __attribute__((cleanup(release_file_operation))) = void_handle_acquire(h, VOID_OBJ_FILE);
+    file_t *f = object ? object->data : NULL;
+    if ((size && !void_vm_readable(buffer, size)) || (written_out && !void_vm_writable(written_out, 4)) ||
+        (overlapped && !void_vm_readable(overlapped, 16))) {
+        void_set_last_error(998u); return 0;
+    }
     if (written_out) MEM32(written_out) = 0;
     if (!f || f->is_dir) { void_set_last_error(ERROR_INVALID_HANDLE_); return 0; }
     if (f->std_stream) {
@@ -1067,7 +1111,8 @@ WINAPI_EXPORT(K32, FlushFileBuffers, 1)
 
 WINAPI_EXPORT(K32, SetEndOfFile, 1)
 {
-    file_t *f = file_get(ARG(0));
+    void_object *object __attribute__((cleanup(release_file_operation))) = void_handle_acquire(ARG(0), VOID_OBJ_FILE);
+    file_t *f = object ? object->data : NULL;
     if (!f) { void_set_last_error(ERROR_INVALID_HANDLE_); return 0; }
     if (f->wlen && file_flush(f)) { void_set_last_error(void_errno_to_win32(f->werr)); f->werr = 0; return 0; }
     if (file_open_now(f, ARG(0))) { void_set_last_error(void_errno_to_win32(errno)); return 0; }
@@ -1174,7 +1219,7 @@ static uint32_t delete_file(const char *path)
 WINAPI_EXPORT(K32, DeleteFileA, 1) { char *p = void_astr_utf8(ARG(0)); uint32_t r = delete_file(p); free(p); return r; }
 WINAPI_EXPORT(K32, DeleteFileW, 1) { char *p = void_wstr_utf8(ARG(0)); uint32_t r = delete_file(p); free(p); return r; }
 
-static uint32_t move_file(const char *from, const char *to)
+static uint32_t move_file(const char *from, const char *to, int replace)
 {
     files_flush_all();
     VSTAT_BEGIN(start);
@@ -1184,6 +1229,12 @@ static uint32_t move_file(const char *from, const char *to)
     struct moved_file { file_t *file; char *path; } *moved = NULL;
     size_t count = 0;
     if (a && b) {
+        int exists = !lstat(b, &st);
+        if (exists && (!replace || S_ISDIR(st.st_mode))) {
+            void_set_last_error(ERROR_ALREADY_EXISTS_);
+            goto done;
+        }
+        if (exists && !strcmp(a, b)) { ok = 1; goto done; }
         size_t prefix = strlen(a);
         for (file_t *f = live_files; f; f = f->file_next)
             if (!strncmp(f->host_path, a, prefix) && (!f->host_path[prefix] || f->host_path[prefix] == '/')) ++count;
@@ -1202,10 +1253,40 @@ static uint32_t move_file(const char *from, const char *to)
             ++i;
         }
         void_readcache_flush_all();
-        if (!stat(b, &st)) void_set_last_error(ERROR_ALREADY_EXISTS_);
-        else if (rename(a, b)) void_set_last_error(void_errno_to_win32(errno));
+        if (exists) {
+            /* Let a deferred reader keep the old destination's inode across an atomic replace. */
+            for (file_t *f = live_files; f; f = f->file_next) {
+                if (!f->lazy || f->zip_entry || strcmp(f->host_path, b)) continue;
+                int fd = open(b, f->lazy_flags, 0664);
+                if (fd < 0 || (f->lazy_pos && lseek(fd, f->lazy_pos, SEEK_SET) < 0)) {
+                    int error = errno;
+                    if (fd >= 0) close(fd);
+                    void_set_last_error(void_errno_to_win32(error));
+                    goto done;
+                }
+                f->fd = fd;
+                f->lazy = 0;
+                if ((f->lazy_flags & O_ACCMODE) != O_RDONLY) {
+                    f->writable = 1;
+                    dircache_writer(b, 1);
+                }
+            }
+        }
+        if (rename(a, b)) void_set_last_error(void_errno_to_win32(errno));
         else {
             ok = 1;
+            if (exists) {
+                for (file_t **link = &live_files; *link;) {
+                    file_t *f = *link;
+                    if (strcmp(f->host_path, b)) { link = &f->file_next; continue; }
+                    *link = f->file_next;
+                    if (f->writable) dircache_writer(b, -1);
+                    free(f->host_path);
+                    f->host_path = NULL;
+                    f->path_key = 0;
+                    f->cached_reads = f->writable = f->delete_on_close = 0;
+                }
+            }
             dircache_renamed(a, b);
             /* DBPF compaction keeps both old and new package handles alive across renames. */
             for (size_t i = 0; i < count; ++i) {
@@ -1213,13 +1294,14 @@ static uint32_t move_file(const char *from, const char *to)
                 free(f->host_path);
                 f->host_path = moved[i].path;
                 moved[i].path = NULL;
-                f->path_key = void_readcache_key(f->host_path);
+                f->path_key = file_path_key(f->host_path);
                 if (f->writable) dircache_writer(f->host_path, 1);
             }
             void_readcache_clear();
         }
-    }
+    } else void_set_last_error(ERROR_PATH_NOT_FOUND_);
 done:
+    IOTRACE("N %d %d %s -> %s\n", replace, ok, from ? from : "", to ? to : "");
     if (moved) for (size_t i = 0; i < count; ++i) free(moved[i].path);
     free(moved);
     free(a); free(b);
@@ -1230,7 +1312,7 @@ done:
 WINAPI_EXPORT(K32, MoveFileA, 2)
 {
     char *a = void_astr_utf8(ARG(0)), *b = void_astr_utf8(ARG(1));
-    uint32_t r = move_file(a, b);
+    uint32_t r = move_file(a, b, 0);
     free(a); free(b);
     return r;
 }
@@ -1238,7 +1320,7 @@ WINAPI_EXPORT(K32, MoveFileA, 2)
 WINAPI_EXPORT(K32, MoveFileW, 2)
 {
     char *a = void_wstr_utf8(ARG(0)), *b = void_wstr_utf8(ARG(1));
-    uint32_t r = move_file(a, b);
+    uint32_t r = move_file(a, b, 0);
     free(a); free(b);
     return r;
 }
@@ -1564,7 +1646,8 @@ WINAPI_EXPORT(K32, CreateFileMappingA, 6)
         unlink(path);
         if (ftruncate(fd, (off_t)size)) { close(fd); void_set_last_error(ERROR_NOT_ENOUGH_MEMORY_); return 0; }
     } else {
-        file_t *f = file_get(file);
+        void_object *object __attribute__((cleanup(release_file_operation))) = void_handle_acquire(file, VOID_OBJ_FILE);
+        file_t *f = object ? object->data : NULL;
         if (!f) { void_set_last_error(ERROR_INVALID_HANDLE_); return 0; }
         if (f->zip_entry && ((protect & 0xFFu) == 0x02u || (protect & 0xFFu) == 0x08u)) {
             zip_entry = f->zip_entry;
@@ -1581,10 +1664,20 @@ WINAPI_EXPORT(K32, CreateFileMappingA, 6)
             }
             fd = dup(f->fd);
             struct stat st;
-            fstat(fd, &st);
+            if (fd < 0 || fstat(fd, &st)) {
+                int error = errno;
+                if (fd >= 0) close(fd);
+                void_set_last_error(void_errno_to_win32(error));
+                return 0;
+            }
             if (!size) size = (uint64_t)st.st_size;
-            else if (size > (uint64_t)st.st_size && (protect & 0xFFu) == 0x04u) {
-                if (ftruncate(fd, (off_t)size)) { close(fd); void_set_last_error(ERROR_ACCESS_DENIED_); return 0; }
+            else if (size > (uint64_t)st.st_size) {
+                uint32_t page = protect & 0xFFu;
+                if (size > INT64_MAX || (page != 0x04u && page != 0x40u) || ftruncate(fd, (off_t)size)) {
+                    close(fd);
+                    void_set_last_error(ERROR_ACCESS_DENIED_);
+                    return 0;
+                }
             }
         }
     }
@@ -1618,13 +1711,14 @@ WINAPI_EXPORT(K32, MapViewOfFile, 5)
     int writable = (access & 2u) != 0 || (access & 1u) != 0;
     int shared = !(access & 1u);           /* FILE_MAP_COPY is private */
     if (m->zip_entry) {
+        const zm_entry *entry = m->zip_entry;
         if ((offset & (GUEST_GRANULARITY - 1)) || (writable && !(access & 1u))) {
             void_set_last_error(ERROR_ACCESS_DENIED_); return 0;
         }
         uint32_t va = void_vm_alloc(0, (uint32_t)size, 0x3000u, 0x04u);
         if (!va) return 0;
         void_blocking_begin();
-        long long got = s2_zip_read(m->zip_entry, GPTR(va), (size_t)size, offset);
+        long long got = s2_zip_read(entry, GPTR(va), (size_t)size, offset);
         void_blocking_end();
         if (got != (long long)size) { void_vm_unmap_file(va); void_set_last_error(ERROR_ACCESS_DENIED_); return 0; }
         uint32_t old;
@@ -1842,12 +1936,7 @@ WINAPI_EXPORT(K32, SetFileAttributesW, 2) { char *p = void_wstr_utf8(ARG(0)); ui
 static uint32_t move_file_ex(const char *from, const char *to, uint32_t flags)
 {
     if (!to) { void_set_last_error(ERROR_INVALID_PARAMETER_); return 0; }
-    if (flags & 1u) {                       /* MOVEFILE_REPLACE_EXISTING */
-        char *b = to_host(to, NULL, NULL);
-        if (b && !unlink(b)) { dircache_removed(b); void_readcache_changed(b); }
-        free(b);
-    }
-    return move_file(from, to);
+    return move_file(from, to, (flags & 1u) != 0);   /* MOVEFILE_REPLACE_EXISTING */
 }
 WINAPI_EXPORT(K32, MoveFileExW, 3)
 {

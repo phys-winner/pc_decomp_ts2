@@ -44,4 +44,5 @@
   <string name="target_ground">Mark</string>
   <string name="target_object">Föremål %1$d</string>
   <string name="target_changed">Målet har flyttats. Tryck igen.</string>
+  <string name="floor_swipe_hint">Svep uppåt eller nedåt med tre fingrar för att byta våning.</string>
 </resources>

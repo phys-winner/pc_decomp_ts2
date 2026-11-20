@@ -17,6 +17,7 @@ origins are recorded in [dependencies.json](dependencies.json).
 | adrenotools and linkernsbypass | BSD-2-Clause; pinned local runtime licenses copied into the APK. |
 | Android NDK libc++ | Apache-2.0 WITH LLVM-exception; NDK `NOTICE`, copied into the APK. |
 | Mesa Turnip community binary | See the distribution limitation below and the APK's `assets/licenses/turnip-mesa.txt`. |
+| Mesa PanVK (mali-panvk, patched Frostpunk build) | Pinned component notices in the APK's `assets/licenses/PanVK-JimVulkan-NOTICE.txt`. |
 
 The bundled launcher is a source snapshot of the common launcher used by this
 family of ports. Its source is retained in `android/launcher`; no separate

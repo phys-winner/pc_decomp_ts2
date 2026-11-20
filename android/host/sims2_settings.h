@@ -20,6 +20,7 @@ void s2_ui_scale_requested(int scale);
 void s2_ui_resized(void);
 /* The main thread's message pump: a fit that closed returns the UI to its scale. */
 void s2_fit_tick(void);
+void s2_fit_scene_attached(void);
 enum { S2_UI_SCALE = 1, S2_UI_CAS_PAN = 2, S2_UI_TEXT_READ = 3, S2_UI_TEXT_WRITE = 4, S2_UI_CAMERA = 5, S2_UI_CATALOG = 6, S2_UI_CHEAT = 7, S2_UI_CLEAR_CATALOG = 8 };
 /* Explicit gesture settings; queued on the existing owner-thread input fence. */
 int s2_touch_ui_command(unsigned kind, uint32_t value);
@@ -62,7 +63,10 @@ enum {
 };
 /* Published by the guest's real UI lifecycle hooks; zero means unknown. */
 unsigned s2_touch_context(void);
+/* Innermost original RunModal window; read on the window owner's thread. */
+uint32_t s2_touch_modal_window(void);
 int s2_touch_rewards(void);
+int s2_touch_photo(void);
 void s2_touch_input_context(unsigned flags);
 /* Confirmed native tool: 0 unknown, 1 navigation, 2 object, 3 geometry,
  * 4 immediate brush, 5 deletion. This does not assert transactional safety. */
@@ -101,6 +105,8 @@ uint64_t s2_touch_slider_status(unsigned serial);
 /* Explicit object rotation shares the existing command receipt; no purchase/save assertion. */
 unsigned s2_touch_layout_epoch(void);
 uint64_t s2_touch_swipe_feedback(void);
+void s2_touch_note_floor_button(void);
+int s2_touch_floor_button_used(void);
 uint64_t s2_touch_rotate_object(int x, int y, uint64_t tool, unsigned context, uint64_t size, unsigned epoch, int direction);
 /* Advisory exact native type: 1 FloorPattern, 2 Wallpaper; mutations recheck it. */
 int s2_touch_fill_kind(void);

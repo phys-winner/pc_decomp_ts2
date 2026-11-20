@@ -49,6 +49,7 @@ static _Atomic uint64_t shown_swipe;
 static _Atomic unsigned shown_swipe_context, shown_swipe_epoch;
 static _Atomic unsigned swipe_version;
 static unsigned swipe_sequence;
+static _Atomic int floor_button_used;
 static unsigned cas_pan_seen_epoch;
 static float cas_pan_y;
 static int cas_pan_selected;
@@ -93,6 +94,9 @@ uint64_t s2_touch_swipe_feedback(void)
 
 void s2_touch_camera_contact(int active) { atomic_store(&camera_contact, active != 0); }
 void s2_touch_camera_pointer_intent(void) { atomic_store(&camera_navigation_intent, 0); }
+
+void s2_touch_note_floor_button(void) { atomic_store(&floor_button_used, 1); }
+int s2_touch_floor_button_used(void) { return atomic_load(&floor_button_used); }
 
 void s2_touch_camera_hover_enable(int enabled)
 {
@@ -1322,6 +1326,8 @@ static uint32_t touch_pie_label(uint32_t row)
  * click; a right press (message 8, A05C818D) always cancels it. */
 static uint32_t touch_open_pie(uint32_t manager, uint32_t root)
 {
+    uint32_t modal = s2_touch_modal_window();
+    if (modal) return touch_pie_owner(modal);
     uint32_t capture = MEM32(manager + 0x34);
     if (capture) return touch_pie_owner(capture);
     /* Live mode opens the pie without mouse capture: find it among the visible windows. */
@@ -1795,7 +1801,11 @@ void sub_A05BDFD7(void)
 {
     uint32_t self = g_ecx, window = MEM32(g_esp + 4);
     sub_A05BDFD7_lifted();
-    if (g_eax & 0xFF) { scene_owner = self; scene_window = window; }
+    if (g_eax & 0xFF) {
+        scene_owner = self;
+        scene_window = window;
+        s2_fit_scene_attached();
+    }
     void_log("[touch] scene attach self=%08X type=%s window=%08X result=%08X", self, touch_type(self), window, g_eax);
 }
 

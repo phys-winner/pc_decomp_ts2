@@ -288,6 +288,7 @@ static void run_surface_upload(void *args)
     void *owned;
     size_t size;
     const void *gl_data = d3d_format_convert(s->fmt, data, a->x1 - a->x0, a->y1 - a->y0, a->pitch, &owned, &size, 1);
+    if (!gl_data) return;
     if (s->scale != 1.0f) {
         d3d_gl_upload_scaled(s, a->x0, a->y0, a->x1 - a->x0, a->y1 - a->y0, s->fmt->format, s->fmt->type, gl_data);
     } else {
@@ -353,17 +354,19 @@ int d3d_surface_read_rgba(d3d_surface *s, const uint32_t *rect, float *out)
         /* Decode the whole blocks covering the rect, then crop. */
         uint32_t bx = rect[0] & ~3u, by = rect[1] & ~3u;
         uint32_t bw = ((rect[2] + 3) & ~3u) - bx, bh = ((rect[3] + 3) & ~3u) - by;
-        float *tmp = (float *)malloc((size_t)bw * bh * 16);
-        d3d_format_decode(s->fmt, (const uint8_t *)GPTR(mem + (by / 4) * s->pitch + (bx / 4) * s->fmt->block_bytes),
-            bw, bh, s->pitch, tmp);
+        size_t size;
+        if (__builtin_mul_overflow((size_t)bw * 16, (size_t)bh, &size)) return 0;
+        float *tmp = (float *)malloc(size);
+        if (!tmp) return 0;
+        if (!d3d_format_decode(s->fmt, (const uint8_t *)GPTR(mem + (by / 4) * s->pitch + (bx / 4) * s->fmt->block_bytes),
+                bw, bh, s->pitch, tmp)) { free(tmp); return 0; }
         for (uint32_t y = 0; y < h; ++y)
             memcpy(out + (size_t)y * w * 4, tmp + ((size_t)(rect[1] - by + y) * bw + (rect[0] - bx)) * 4, (size_t)w * 16);
         free(tmp);
         return 1;
     }
-    d3d_format_decode(s->fmt, (const uint8_t *)GPTR(mem + rect[1] * s->pitch + rect[0] * (s->fmt->bits / 8)), w, h,
+    return d3d_format_decode(s->fmt, (const uint8_t *)GPTR(mem + rect[1] * s->pitch + rect[0] * (s->fmt->bits / 8)), w, h,
         s->pitch, out);
-    return 1;
 }
 
 /* Store logical RGBA into rect (x0, y0, x1, y1) of a surface: into its guest
@@ -585,6 +588,7 @@ static void texture_upload_gl(d3d_texture *t, uint32_t face, uint32_t level, uin
     void *owned;
     size_t size;
     const void *gl_data = d3d_format_convert(t->fmt, data, w, h, pitch, &owned, &size, (t->usage & D3DUSAGE_RENDERTARGET) != 0);
+    if (!gl_data) return;
     if (t->scale != 1.0f && t->target == GL_TEXTURE_2D && level == 0) {
         d3d_surface level0;
         memset(&level0, 0, sizeof level0);

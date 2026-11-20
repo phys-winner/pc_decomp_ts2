@@ -444,7 +444,7 @@ uint16_t d3d_float_to_half(float f);
 void d3d_gl_layout_to_rgba(GLenum format, GLenum type, const void *data, uint32_t count, float *out);
 void d3d_swizzle_rgba(const GLint sw[4], float *rgba, uint32_t count);
 void d3d_storage_swizzle(const d3d_format *f, uint32_t usage, GLint sw[4]);
-void d3d_format_decode(const d3d_format *f, const uint8_t *src, uint32_t width, uint32_t height, uint32_t pitch, float *rgba);
+int d3d_format_decode(const d3d_format *f, const uint8_t *src, uint32_t width, uint32_t height, uint32_t pitch, float *rgba);
 int d3d_format_encode(uint32_t d3d, const float *rgba, uint32_t count, uint8_t *out);
 void d3d_rgba_resample(const float *src, uint32_t w, uint32_t h, float *dst, uint32_t dw, uint32_t dh);
 /* d3d9_gl.c / d3d9_resource.c: a rect (x0, y0, x1, y1) of a surface as logical RGBA */

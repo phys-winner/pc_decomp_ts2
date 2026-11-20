@@ -44,4 +44,5 @@
   <string name="target_ground">Sol</string>
   <string name="target_object">Objet %1$d</string>
   <string name="target_changed">La cible a bougé. Touchez de nouveau.</string>
+  <string name="floor_swipe_hint">Balayez vers le haut ou le bas avec trois doigts pour changer d’étage.</string>
 </resources>

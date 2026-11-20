@@ -113,7 +113,7 @@ def source(touch_source, current):
     state = u[u.index('typedef struct { uint32_t hwnd, msg, wparam, lparam, time, x, y; } qmsg_t;'):
               u.index('static void timers_post_due(void);')]
     state += i[i.index('typedef struct { uint32_t msg, wparam, lparam; } pending_t;'):i.index('void void_input_screen_size(')]
-    state += 'static __thread unsigned message_depth,touch_barrier_deferred;\n'
+    state += 'static __thread unsigned message_depth,touch_barrier_deferred,modal_message_depth;\n'
     actual = ''.join(function(core, sig) for sig in ('void void_regs_save(', 'void void_regs_load('))
     actual += '\n'.join(line for line in touch.splitlines() if not line.startswith('#include'))
     actual += ''.join(function(u, sig) for sig in ('static queue_t *queue_for(', 'static void queue_push(',

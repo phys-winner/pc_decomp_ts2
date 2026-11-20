@@ -45,9 +45,11 @@ final class Texts {
         GOG_NOT_FOUND = 180, GOG_EDITION = 181, GOG_DESTINATION = 182, GOG_INSTALLING = 183, GROUP_PICK = 184,
         CHOOSE_GAME_FILES = 185, TURNIP_DOWNLOAD = 186, TURNIP_REPOS = 187, TURNIP_LOADING = 188,
         TURNIP_NO_RELEASES = 189, TURNIP_RELEASE = 190, TURNIP_NEWER = 191, TURNIP_OLDER = 192,
-        TURNIP_NO_NOTES = 193, TURNIP_NO_FILES = 194, TURNIP_CLEAN = 195, TEX_SAMPLE = 196;
+        TURNIP_NO_NOTES = 193, TURNIP_NO_FILES = 194, TURNIP_CLEAN = 195, TEX_SAMPLE = 196,
+        VERIFY_MD5 = 197, E_MD5_MISMATCH = 198, R_MALI = 199, PANVK_DRIVER = 200,
+        PANVK_HINT = 201, E_PANVK = 202, BROWSER_DRIVER = 203;
     /** The last id: the table has one row per id (the selfcheck verifies it). */
-    static final int LAST = TEX_SAMPLE;
+    static final int LAST = BROWSER_DRIVER;
 
     private static final String[][] TEXTS = {
         {"Play", "Играть", "Spielen", "Graj"},
@@ -400,6 +402,24 @@ final class Texts {
          "Проверен один пакет текстур. Все пакеты будут проверены при запуске конвертации.",
          "Ein Texturpaket geprüft. Alle Pakete werden erst bei der Konvertierung durchsucht.",
          "Sprawdzono jeden pakiet tekstur. Wszystkie pakiety zostaną sprawdzone po rozpoczęciu konwersji."},
+        {"Checking the archive's MD5…", "Проверка MD5 архива…",
+         "MD5-Prüfsumme des Archivs wird geprüft…", "Sprawdzanie sumy MD5 archiwum…"},
+        {"The archive's MD5 checksum does not match the checksum in its file name (%s).",
+         "Контрольная сумма MD5 архива не совпадает с указанной в имени файла (%s).",
+         "Die MD5-Prüfsumme des Archivs stimmt nicht mit der Prüfsumme im Dateinamen überein (%s).",
+         "Suma kontrolna MD5 archiwum nie zgadza się z sumą podaną w nazwie pliku (%s)."},
+        {"requires an ARM Mali or Immortalis GPU. Detected %1$s",
+         "требуется видеочип ARM Mali или Immortalis. Обнаружен %1$s",
+         "benötigt eine ARM Mali- oder Immortalis-GPU. Erkannt wurde %1$s",
+         "wymaga układu ARM Mali lub Immortalis. Wykryto %1$s"},
+        {"PanVK driver (%s)", "Драйвер PanVK (%s)", "PanVK-Treiber (%s)", "Sterownik PanVK (%s)"},
+        {"Choose a PanVK ZIP package or its .so library. The launcher checks the selected driver.",
+         "Выберите пакет PanVK в ZIP или библиотеку .so. Лаунчер проверит выбранный драйвер.",
+         "Wählen Sie ein PanVK-ZIP-Paket oder seine .so-Bibliothek. Der Launcher prüft den ausgewählten Treiber.",
+         "Wybierz pakiet PanVK ZIP lub jego bibliotekę .so. Program uruchamiający sprawdzi wybrany sterownik."},
+        {"Could not import the PanVK driver (%s)", "Не удалось импортировать драйвер PanVK (%s)",
+         "PanVK-Treiber konnte nicht importiert werden (%s)", "Nie udało się zaimportować sterownika PanVK (%s)"},
+        {"Choose a Vulkan driver", "Выберите драйвер Vulkan", "Vulkan-Treiber auswählen", "Wybierz sterownik Vulkan"},
     };
 
     private static int column = -1;
@@ -473,6 +493,7 @@ final class Texts {
         case Failure.CANCELLED: return t(context, E_CANCELLED);
         case Failure.REMOTE: return t(context, E_REMOTE);
         case Failure.CHANGED: return t(context, E_CHANGED);
+        case Failure.MD5_MISMATCH: return fmt(context, E_MD5_MISMATCH, f.detail);
         default: return fmt(context, E_IO, f.detail);
         }
     }

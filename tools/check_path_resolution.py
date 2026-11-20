@@ -18,7 +18,7 @@ globals_start = text.index('typedef struct { const char *win;')
 globals_end = text.index('const char *void_root_dir(', globals_start)
 overlay_start = text.index('typedef struct { char win[600];')
 overlay_end = text.index('\n', text.index('static int overlay_count;', overlay_start))
-start = text.index('static int normalize(')
+start = text.index('const char *void_overlay_path(')
 end = text.index('char *void_path_to_host(', start)
 code = r'''
 #define _GNU_SOURCE

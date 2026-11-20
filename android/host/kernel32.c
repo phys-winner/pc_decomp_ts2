@@ -12,6 +12,8 @@
 #include <wctype.h>
 
 #define K32 "kernel32.dll"
+#define QPC_HZ 10000000u
+#define TSC_HZ 3400000000u
 
 /* ----------------------------------------------------------------- time */
 uint64_t void_monotonic_ns(void)
@@ -21,13 +23,11 @@ uint64_t void_monotonic_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-/* The game's clock (GetTickCount, timeGetTime, QueryPerformanceCounter) runs
+/* The game's clock (GetTickCount, timeGetTime, QueryPerformanceCounter, RDTSC) runs
  * at `time_scale` times real time: 1 normally; a debugging session slows it
  * down to watch physics frame by frame (live "timescale <x>", VOID_TIME_SCALE).
- * Real time is the ARM generic timer read directly, without a lock until a
- * scale is set: the game's profiling scopes ask QueryPerformanceCounter
- * thousands of times a frame, and clock_gettime under the lock was 3% of the
- * main thread. */
+ * Use the kernel's monotonic clock on all cores. The game's profiling scopes
+ * query it thousands of times a frame, so keep the normal rate lock-free. */
 static pthread_mutex_t clock_lock = PTHREAD_MUTEX_INITIALIZER;
 static double time_scale = 1.0;
 static uint64_t anchor_real, anchor_game;
@@ -35,28 +35,6 @@ static atomic_int clock_scaled;
 static atomic_uint clock_epoch;
 static _Atomic uint64_t clock_offset;
 static int clock_paused;
-
-#if defined(__aarch64__)
-static _Atomic uint64_t counter_mult; /* nanoseconds per counter tick, 32.32 fixed point; 1: none */
-
-static uint64_t real_ns(void)
-{
-    uint64_t mult = atomic_load_explicit(&counter_mult, memory_order_relaxed);
-    if (__builtin_expect(mult <= 1, 0)) {
-        if (mult == 1) return void_monotonic_ns();
-        uint64_t hz;
-        __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz));
-        mult = hz >= 1000000u ? (uint64_t)(((unsigned __int128)1000000000u << 32) / hz) : 1;
-        atomic_store_explicit(&counter_mult, mult, memory_order_relaxed);
-        if (mult == 1) return void_monotonic_ns();
-    }
-    uint64_t v;
-    __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) : : "memory");
-    return (uint64_t)(((unsigned __int128)v * mult) >> 32);
-}
-#else
-static uint64_t real_ns(void) { return void_monotonic_ns(); }
-#endif
 
 static uint64_t game_at(uint64_t real)
 {
@@ -71,12 +49,12 @@ static uint64_t game_ns(void)
         unsigned epoch = atomic_load_explicit(&clock_epoch, memory_order_acquire);
         if (epoch & 1u) continue;
         if (__builtin_expect(atomic_load_explicit(&clock_scaled, memory_order_acquire), 0)) break;
-        uint64_t t = real_ns() - atomic_load_explicit(&clock_offset, memory_order_relaxed);
+        uint64_t t = void_monotonic_ns() - atomic_load_explicit(&clock_offset, memory_order_relaxed);
         atomic_thread_fence(memory_order_acquire);
         if (epoch == atomic_load_explicit(&clock_epoch, memory_order_acquire)) return t;
     }
     pthread_mutex_lock(&clock_lock);
-    uint64_t t = game_at(real_ns());
+    uint64_t t = game_at(void_monotonic_ns());
     pthread_mutex_unlock(&clock_lock);
     return t;
 }
@@ -86,7 +64,7 @@ void void_set_time_scale(double scale)
     if (!(scale > 0) || !isfinite(scale)) return;
     pthread_mutex_lock(&clock_lock);
     atomic_fetch_add_explicit(&clock_epoch, 1, memory_order_acq_rel);
-    uint64_t real = real_ns();
+    uint64_t real = void_monotonic_ns();
     anchor_game = game_at(real);
     anchor_real = real;
     time_scale = scale;
@@ -102,7 +80,7 @@ void void_clock_pause(int paused)
     pthread_mutex_lock(&clock_lock);
     if (clock_paused != !!paused) {
         atomic_fetch_add_explicit(&clock_epoch, 1, memory_order_acq_rel);
-        uint64_t real = real_ns();
+        uint64_t real = void_monotonic_ns();
         anchor_game = game_at(real);
         anchor_real = real;
         clock_paused = !!paused;
@@ -115,11 +93,28 @@ void void_clock_pause(int paused)
     pthread_mutex_unlock(&clock_lock);
 }
 
-static uint64_t boot_ns;
+static _Atomic uint64_t boot_ns;
+static uint64_t game_uptime_ns(void)
+{
+    uint64_t boot = atomic_load_explicit(&boot_ns, memory_order_relaxed);
+    if (!boot) {
+        uint64_t now = game_ns();
+        if (atomic_compare_exchange_strong_explicit(&boot_ns, &boot, now,
+                                                    memory_order_relaxed, memory_order_relaxed))
+            return 3600000000000ull;
+    }
+    return game_ns() - boot + 3600000000000ull;
+}
+
 uint32_t void_tick_ms(void)
 {
-    if (!boot_ns) boot_ns = game_ns() - 3600000000000ull;  /* an hour of "uptime" */
-    return (uint32_t)((game_ns() - boot_ns) / 1000000ull);
+    return (uint32_t)(game_uptime_ns() / 1000000u);
+}
+
+uint64_t void_rdtsc(void)
+{
+    uint64_t ns = game_ns();
+    return (ns / 1000000000u) * TSC_HZ + (ns % 1000000000u) * TSC_HZ / 1000000000u;
 }
 
 uint64_t void_now_100ns(void)
@@ -132,18 +127,27 @@ uint64_t void_now_100ns(void)
 WINAPI_EXPORT(K32, GetTickCount, 0) { return void_tick_ms(); }
 WINAPI_EXPORT(K32, QueryPerformanceFrequency, 1)
 {
-    MEM32(ARG(0)) = 10000000u;
-    MEM32(ARG(0) + 4) = 0;
+    MEM64(ARG(0)) = QPC_HZ;
     return 1;
 }
 WINAPI_EXPORT(K32, QueryPerformanceCounter, 1)
 {
-    if (!boot_ns) (void)void_tick_ms();
-    uint64_t ticks = (game_ns() - boot_ns) / 100u;
-    MEM32(ARG(0)) = (uint32_t)ticks;
-    MEM32(ARG(0) + 4) = (uint32_t)(ticks >> 32);
+    MEM64(ARG(0)) = game_uptime_ns() / (1000000000u / QPC_HZ);
     return 1;
 }
+
+/* cRZTimer's startup calibration (__cdecl, two LARGE_INTEGER outputs).
+ * The virtual frequencies are exact, even if Android pauses during startup. */
+void sub_A01C906A(void)
+{
+    MEM64(ARG(0)) = QPC_HZ;
+    MEM64(ARG(1)) = TSC_HZ;
+    uint32_t cache = MEM32(0xA10CB63Cu);
+    if (cache) MEM64(cache) = TSC_HZ;
+    g_eax = 1;
+    g_esp += 4;
+}
+
 WINAPI_EXPORT(K32, GetSystemTimeAsFileTime, 1)
 {
     uint64_t t = void_now_100ns();

@@ -26,6 +26,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.File;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -41,6 +42,7 @@ public final class LauncherActivity extends Activity {
     static final String EXTRA_SHOW = "launcher.show";
     static volatile boolean visible;
     private static final int ASK_FOLDER = 1, ASK_ZIP = 2, ASK_TARGET = 3, ASK_PERMISSION = 4, ASK_DRIVER = 5, ASK_GOG = 6, ASK_GOG_TARGET = 7;
+    private static final int ASK_PANVK_DRIVER = 8;
     /** startTextures: the originals a conversion replaced go (TextureBackend.removeOriginals). */
     private static final int TEX_REMOVE_ORIGINALS = -1;
     /** How often the renderer card looks again while the driver check runs. */
@@ -81,6 +83,7 @@ public final class LauncherActivity extends Activity {
     private android.app.AlertDialog turnipDialog;
 
     /* An archive read and waiting for the player's decision (or a target folder). */
+    private Thread archiveReader;
     private Zip pendingZip;
     private Uri pendingUri;
     private File pendingFile;
@@ -90,7 +93,7 @@ public final class LauncherActivity extends Activity {
     private final Map<Integer, TextView> notes = new HashMap<>();
     private final Map<Integer, LinearLayout> notices = new HashMap<>();
     private TextView workTitle, workText, workStop;
-    private ProgressBar workBar;
+    private ProgressBar workBar, archiveProgress;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -321,6 +324,7 @@ public final class LauncherActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (archiveReader != null) archiveReader.interrupt();
         handler.removeCallbacks(watcher);
         handler.removeCallbacks(probeWatch);
         if (turnipDialog != null) turnipDialog.dismiss();
@@ -375,6 +379,10 @@ public final class LauncherActivity extends Activity {
         work.setVisibility(View.GONE);
         distributions = holder(main);
         files = holder(main);
+        archiveProgress = ui.progress();
+        archiveProgress.setLayoutParams(new LinearLayout.LayoutParams(-1, ui.dp(8)));
+        archiveProgress.setMax(100);
+        archiveProgress.setVisibility(View.GONE);
         renderer = holder(side);
         options = holder(side);
         texturesBox = holder(side);
@@ -454,6 +462,7 @@ public final class LauncherActivity extends Activity {
         body.setVisibility((!folded || expanded) && !working && !(busy != null && busySection == title) ? View.VISIBLE : View.GONE);
         card.addView(body);
         attach(card, notice(title));
+        if (title == Texts.GAME_FILES) attach(card, archiveProgress);
         if (working) {
             attach(card, work);
             work.setVisibility(View.VISIBLE);
@@ -466,7 +475,7 @@ public final class LauncherActivity extends Activity {
         Spec.Mode mode = spec.mode(effectiveRenderer(selected));
         if (mode != null && mode.vulkanKind()) {
             Map<String, String> report = Probe.report(this);
-            String bc = report == null ? null : report.get(("turnip".equals(mode.kind) ? "turnip" : "stock") + ".bc");
+            String bc = report == null ? null : report.get(("turnip".equals(mode.kind) || "panvk".equals(mode.kind) ? mode.kind : "stock") + ".bc");
             return bc == null ? null : "111".equals(bc);
         }
         return gpu.probed ? gpu.s3tc : null;
@@ -619,6 +628,7 @@ public final class LauncherActivity extends Activity {
     private void setBusy(int section, String what) {
         busySection = section;
         busy = what;
+        if (section == Texts.GAME_FILES) archiveProgress.setVisibility(View.GONE);
         note(section, what, false);
         refresh(Texts.PLAY, Texts.GAME_FILES, Texts.TEXTURES, Texts.SPACE);
         if (section == Texts.RENDERER) refresh(Texts.RENDERER);
@@ -627,19 +637,28 @@ public final class LauncherActivity extends Activity {
 
     /** Runs work off the UI thread and hands its result (or failure) back to it. */
     private <T> void background(Callable<T> work, Done<T> done, Done<Throwable> failed) {
-        new Thread(() -> {
+        background(work, done, failed, null);
+    }
+
+    private <T> Thread background(Callable<T> work, Done<T> done, Done<Throwable> failed, Done<T> discard) {
+        Thread thread = new Thread(() -> {
             T result = null;
             Throwable error = null;
             try { result = work.call(); } catch (Throwable e) { error = e; }
             final T value = result;
             final Throwable problem = error;
             handler.post(() -> {
-                if (isFinishing() || isDestroyed()) return;
+                if (isFinishing() || isDestroyed()) {
+                    if (problem == null && discard != null) discard.accept(value);
+                    return;
+                }
                 if (problem == null) done.accept(value);
                 else if (failed != null) failed.accept(problem);
                 else android.util.Log.w("Launcher", "background: " + problem, problem);
             });
-        }, "launcher-ui").start();
+        }, "launcher-ui");
+        thread.start();
+        return thread;
     }
 
     /* ------------------------------------------------------- permissions */
@@ -936,17 +955,18 @@ public final class LauncherActivity extends Activity {
             return;
         }
         if (!Pickers.pick(this, kind, request, near, kind == Pickers.GOG))
-            note(request == ASK_DRIVER ? Texts.RENDERER : Texts.GAME_FILES, Texts.fmt(this, Texts.E_PICKER, "—"), true);
+            note(kind == Pickers.DRIVER ? Texts.RENDERER : Texts.GAME_FILES, Texts.fmt(this, Texts.E_PICKER, "—"), true);
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        boolean driver = request == ASK_DRIVER || request == ASK_PANVK_DRIVER;
         Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
         String path = result == RESULT_OK && data != null ? data.getStringExtra(FileBrowserActivity.RESULT) : null;
         if (uri == null && path == null) {
             /* A picker that closed by itself: offer the built-in browser at once. */
-            if (Pickers.instantCancel() && (request == ASK_FOLDER || request == ASK_ZIP || request == ASK_DRIVER))
-                Pickers.pick(this, request == ASK_FOLDER ? Pickers.FOLDER : Pickers.ZIP, request, null, true);
+            if (Pickers.instantCancel() && (request == ASK_FOLDER || request == ASK_ZIP || driver))
+                Pickers.pick(this, driver ? Pickers.DRIVER : request == ASK_FOLDER ? Pickers.FOLDER : Pickers.ZIP, request, null, true);
             if (request == ASK_TARGET) dropPending();
             return;
         }
@@ -954,7 +974,8 @@ public final class LauncherActivity extends Activity {
         if (request == ASK_FOLDER) chooseFolder(path != null ? new File(path) : Storage.treePath(uri));
         else if (request == ASK_ZIP) readArchive(uri, path != null ? new File(path) : null);
         else if (request == ASK_TARGET) unpackInto(path != null ? new File(path) : Storage.treePath(uri));
-        else if (request == ASK_DRIVER) importDriver(uri, path != null ? new File(path) : null);
+        else if (driver) importDriver(request == ASK_PANVK_DRIVER ? VulkanDriver.PANVK : VulkanDriver.TURNIP,
+            uri, path != null ? new File(path) : null);
         else if (request == ASK_GOG) {
             if (path == null) error(Texts.t(this, Texts.GOG_HINT));
             else readGog(new File(path));
@@ -1070,46 +1091,54 @@ public final class LauncherActivity extends Activity {
     }
 
     private void readArchive(Uri uri, File file) {
+        if (archiveReader != null) return;
         dropPending();
-        final ParcelFileDescriptor fd;
-        try {
-            fd = file != null ? ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        setBusy(Texts.t(this, Texts.READING));
+        archiveReader = background(() -> {
+            ParcelFileDescriptor fd = file != null ? ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
                 : getContentResolver().openFileDescriptor(uri, "r");
             if (fd == null) throw new IOException(String.valueOf(uri));
-        } catch (IOException | RuntimeException e) {
-            error(Texts.fmt(this, Texts.E_IO, e.getMessage()));
-            return;
-        }
-        if (!Storage.seekable(fd)) {
-            try { fd.close(); } catch (IOException ignored) { /* nothing to keep */ }
-            error(Texts.t(this, Texts.E_REMOTE));
-            return;
-        }
-        File path = file != null ? file : Storage.fileOf(uri, fd);
-        setBusy(Texts.t(this, Texts.READING));
-        background(() -> {
-            Zip zip = new Zip(new ParcelFileDescriptor.AutoCloseInputStream(fd).getChannel());
+            FileChannel channel = new ParcelFileDescriptor.AutoCloseInputStream(fd).getChannel();
             try {
+                if (!Storage.seekable(fd)) throw new Failure(Failure.REMOTE, null);
+                File path = file != null ? file : Storage.fileOf(uri, fd);
+                String expected = Zip.expectedMd5(file != null ? file.getName() : Storage.displayName(this, uri, path));
+                if (expected != null) {
+                    Zip.verifyMd5(channel, expected, percent -> handler.post(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        note(Texts.t(this, Texts.VERIFY_MD5) + " · " + percent + "%", false);
+                        archiveProgress.setProgress(percent);
+                        archiveProgress.setVisibility(View.VISIBLE);
+                    }));
+                    handler.post(() -> {
+                        if (!isFinishing() && !isDestroyed()) {
+                            archiveProgress.setVisibility(View.GONE);
+                            note(Texts.t(this, Texts.READING), false);
+                        }
+                    });
+                }
+                Zip zip = new Zip(channel);
                 List<Install.ArchivePart> plan = Install.plan(zip, spec);
                 if (plan.isEmpty()) throw new Failure(Failure.NOT_FOUND, null);
-                return new Object[] {zip, plan};
-            } catch (IOException | RuntimeException e) {
-                zip.close();
+                return new Object[] {zip, plan, path};
+            } catch (IOException | RuntimeException | Error e) {
+                try { channel.close(); } catch (IOException close) { e.addSuppressed(close); }
                 throw e;
             }
         }, read -> {
+            archiveReader = null;
             setBusy(null);
             pendingZip = (Zip) read[0];
             @SuppressWarnings("unchecked") List<Install.ArchivePart> plan = (List<Install.ArchivePart>) read[1];
             pendingPlan = plan;
             pendingUri = uri;
-            pendingFile = path;
+            pendingFile = (File) read[2];
             askImport();
         }, e -> {
+            archiveReader = null;
             setBusy(null);
-            try { fd.close(); } catch (IOException ignored) { /* closed with the archive */ }
             error(Texts.failure(this, Failure.of(e)));
-        });
+        }, read -> closeQuietly((Zip) read[0]));
     }
 
     /** What an archive's part is called in the import dialog: the part, or with several
@@ -1431,7 +1460,9 @@ public final class LauncherActivity extends Activity {
         if (gpu == null) return;
         Spec.Mode turnip = Probe.turnipMode(spec);
         boolean drivers = turnip != null && selected.renderers.contains(turnip.id) && gpu.qualcomm();
-        if (selected.renderers.size() < 2 && !drivers) return;
+        Spec.Mode panvk = Probe.panvkMode(spec);
+        boolean panvkDrivers = panvk != null && selected.renderers.contains(panvk.id) && Probe.mali(this, Probe.report(this));
+        if (selected.renderers.size() < 2 && !drivers && !panvkDrivers) return;
         LinearLayout card = section(renderer, Texts.RENDERER);
         List<Renderers.Status> statuses = Renderers.evaluate(this, spec, selected, gpu, convertedTextures());
         String explicit = Renderers.explicitChoice(this, spec, selected, hooks);
@@ -1455,45 +1486,51 @@ public final class LauncherActivity extends Activity {
             card.addView(ui.label(Texts.fmt(this, Texts.N_UNCHECKED, current.mode.title, fallback.title), 13, ui.error));
         }
         if (drivers) {
-            File own = TurnipDriver.chosen(this);
-            card.addView(ui.label(Texts.fmt(this, Texts.TURNIP_DRIVER, own != null ? TurnipDriver.title(this)
-                : Texts.t(this, Texts.TURNIP_BUILTIN)), 14, ui.text));
-            card.addView(ui.label(Texts.t(this, Texts.TURNIP_HINT), 12, ui.muted));
-            TextView choose = ui.button(Texts.t(this, Texts.TURNIP_CHOOSE), Ui.SECONDARY, () -> pick(Pickers.ZIP, ASK_DRIVER, null));
-            Ui.enable(choose, idle());
-            if (own == null) card.addView(ui.buttons(choose));
-            else {
-                TextView reset = ui.button(Texts.t(this, Texts.TURNIP_RESET), Ui.QUIET, this::resetDriver);
-                Ui.enable(reset, idle());
-                card.addView(ui.buttons(choose, reset));
-            }
+            driverControls(card, VulkanDriver.TURNIP, ASK_DRIVER);
             TextView download = ui.button(Texts.t(this, Texts.TURNIP_DOWNLOAD), Ui.SECONDARY, this::chooseTurnipRepo);
             Ui.enable(download, idle());
             card.addView(ui.buttons(download));
         }
+        if (panvkDrivers) driverControls(card, VulkanDriver.PANVK, ASK_PANVK_DRIVER);
         card.addView(ui.label(Texts.fmt(this, Texts.GPU, gpu.renderer.isEmpty() ? "?" : gpu.renderer, Gpu.version(gpu.vulkan)), 12, ui.muted));
         card.addView(ui.label(Texts.t(this, Texts.N_APPLIES), 12, ui.muted));
     }
 
-    /** The player's own Turnip driver from a picked package or library; the driver check runs for it. */
-    private void importDriver(Uri uri, File file) {
+    private void driverControls(LinearLayout card, VulkanDriver driver, int request) {
+        boolean panvk = driver == VulkanDriver.PANVK;
+        String title = driver.title(this);
+        card.addView(ui.label(Texts.fmt(this, panvk ? Texts.PANVK_DRIVER : Texts.TURNIP_DRIVER,
+            title.isEmpty() ? Texts.t(this, Texts.TURNIP_BUILTIN) : title), 14, ui.text));
+        card.addView(ui.label(Texts.t(this, panvk ? Texts.PANVK_HINT : Texts.TURNIP_HINT), 12, ui.muted));
+        TextView choose = ui.button(Texts.t(this, Texts.TURNIP_CHOOSE), Ui.SECONDARY, () -> pick(Pickers.DRIVER, request, null));
+        Ui.enable(choose, idle());
+        if (title.isEmpty()) card.addView(ui.buttons(choose));
+        else {
+            TextView reset = ui.button(Texts.t(this, Texts.TURNIP_RESET), Ui.QUIET, () -> resetDriver(driver));
+            Ui.enable(reset, idle());
+            card.addView(ui.buttons(choose, reset));
+        }
+    }
+
+    private void importDriver(VulkanDriver driver, Uri uri, File file) {
         if (!idle()) return;
+        boolean panvk = driver == VulkanDriver.PANVK;
         setBusy(Texts.RENDERER, Texts.t(this, Texts.TURNIP_COPYING));
-        background(() -> TurnipDriver.install(this, uri, file), title -> {
+        background(() -> driver.install(this, uri, file), title -> {
             setBusy(null);
-            note(Texts.RENDERER, Texts.fmt(this, Texts.TURNIP_DRIVER, title), false);
+            note(Texts.RENDERER, Texts.fmt(this, panvk ? Texts.PANVK_DRIVER : Texts.TURNIP_DRIVER, title), false);
             checkRenderer();
             refresh(Texts.ABOUT);
         }, problem -> {
             setBusy(null);
-            note(Texts.RENDERER, Texts.fmt(this, Texts.E_TURNIP, String.valueOf(problem.getMessage())), true);
+            note(Texts.RENDERER, Texts.fmt(this, panvk ? Texts.E_PANVK : Texts.E_TURNIP, String.valueOf(problem.getMessage())), true);
         });
     }
 
-    private void resetDriver() {
+    private void resetDriver(VulkanDriver driver) {
         if (!idle()) return;
         setBusy(Texts.RENDERER, Texts.t(this, Texts.R_CHECKING));
-        background(() -> { TurnipDriver.reset(this); return true; }, done -> {
+        background(() -> { driver.reset(this); return true; }, done -> {
             setBusy(null); checkRenderer(); refresh(Texts.ABOUT);
         }, failure -> {
             setBusy(null); note(Texts.RENDERER, Texts.failure(this, Failure.of(failure)), true);
@@ -1740,7 +1777,10 @@ public final class LauncherActivity extends Activity {
                 TextureBackend backend = textures;
                 long epoch = textureEpoch;
                 textureScanning = true;
-                background(() -> withTextureArchive(distribution, (index, fd) -> backend.scan(root, index, fd)), scan -> textureScanFinished(source, epoch, scan), failure -> {
+                background(() -> {
+                    File cache = Install.textureCacheRoot(this, spec, distribution, root);
+                    return withTextureArchive(distribution, (index, fd) -> backend.scan(root, cache, index, fd));
+                }, scan -> textureScanFinished(source, epoch, scan), failure -> {
                     TextureBackend.Scan scan = new TextureBackend.Scan();
                     scan.failure = failure.getMessage() != null ? failure.getMessage() : failure.toString();
                     textureScanFinished(source, epoch, scan);
@@ -1783,8 +1823,13 @@ public final class LauncherActivity extends Activity {
         File root = textureRoot();
         TextureBackend backend = textures;
         Spec.Distribution distribution = selected;
-        confirmJob(new Work.Job(Texts.TEXTURES, Texts.t(this, Texts.JOB_TEXTURES), root) {
+        File cache = Install.textureCacheRoot(this, spec, distribution, root);
+        confirmJob(new Work.Job(Texts.TEXTURES, Texts.t(this, Texts.JOB_TEXTURES), format > 0 ? cache : root) {
             @Override void work() throws Exception {
+                if (format == TextureBackend.ASTC || format == TextureBackend.ETC2) {
+                    if (!cache.equals(root) && !cache.isDirectory() && !cache.mkdirs() && !cache.isDirectory())
+                        throw new IOException("Cannot create texture cache folder: " + cache);
+                }
                 Thread poll = new Thread(() -> {
                     while (!finished) {
                         long[] p = backend.progress();
@@ -1795,8 +1840,8 @@ public final class LauncherActivity extends Activity {
                 poll.start();
                 int result;
                 try {
-                    result = format == 0 ? backend.undo(root) : format == TEX_REMOVE_ORIGINALS ? backend.removeOriginals(root)
-                    : withTextureArchive(distribution, (index, fd) -> backend.convert(root, format,
+                    result = format == 0 ? backend.undo(root, cache) : format == TEX_REMOVE_ORIGINALS ? backend.removeOriginals(root)
+                    : withTextureArchive(distribution, (index, fd) -> backend.convert(root, cache, format,
                         Runtime.getRuntime().availableProcessors(), index, fd));
                 } finally {
                     poll.interrupt();
@@ -1972,11 +2017,14 @@ public final class LauncherActivity extends Activity {
         List<Spec.License> licenses = licenses();
         if (!licenses.isEmpty()) card.addView(ui.buttons(ui.button(Texts.t(this, Texts.LICENSES), Ui.QUIET, () -> showLicenses(licenses))));
         card.addView(ui.buttons(ui.button(Texts.t(this, Texts.COPY_DIAGNOSTICS), Ui.SECONDARY, this::copyDiagnostics)));
-        if (!TurnipDriver.unused(this).isEmpty()) {
+        if (!VulkanDriver.TURNIP.unused(this).isEmpty() || !VulkanDriver.PANVK.unused(this).isEmpty()) {
             TextView clear = ui.button(Texts.t(this, Texts.TURNIP_CLEAN), Ui.SECONDARY, () -> {
                 if (!idle()) return;
                 setBusy(Texts.ABOUT, Texts.t(this, Texts.JOB_CLEAN));
-                background(() -> { TurnipDriver.removeUnused(this); return true; }, done -> {
+                background(() -> {
+                    for (VulkanDriver driver : VulkanDriver.values()) driver.removeUnused(this);
+                    return true;
+                }, done -> {
                     setBusy(null); refresh(Texts.ABOUT);
                 }, failure -> {
                     setBusy(null); note(Texts.ABOUT, Texts.failure(this, Failure.of(failure)), true);

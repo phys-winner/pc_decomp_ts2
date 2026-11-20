@@ -31,7 +31,7 @@ import java.nio.charset.StandardCharsets;
 
 /** Original game UI fills the surface. Android dialogs edit only settings and native text. */
 public final class GameActivity extends Activity implements SurfaceHolder.Callback {
-    private static native void nativeStart(String game,String data,String images,String args,boolean verbose);
+    private native boolean nativeStart(String game,String data,String images,String args,boolean verbose);
     private static native void nativeSurface(Object surface);
     static native void nativeKey(int vk,boolean down);
     static native void nativeMouseButton(int button,boolean down);
@@ -40,9 +40,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static native void nativeMouseWheel(int delta);
     static native int nativeTouchContext();
     static native boolean nativeTouchRewards();
+    private static native boolean nativeTouchPhoto();
     static native int nativeTouchHitKind(float x,float y);
     static native float[] nativeTouchUiPick(float x,float y,float diameter);
     static native long nativeTouchSwipeFeedback();
+    static native boolean nativeTouchFloorButtonUsed();
     static native WorldTarget[] nativeTouchTargets(float x,float y,int radius);
     static native boolean nativeTouchConfirmTarget(int x,int y,long key);
     static native long nativeTouchToolToken();
@@ -50,6 +52,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static native int nativeTouchObjectCost();
     static native boolean nativeTouchObjectPreview(long token);
     private static native int nativeUpscaleStatus();
+    private static native long nativeFrameTimes(int[] intervalsUs);
+    static native String nativeGpuStrings();
+    static native int nativeFpsLimit();
+    static native int nativeRendererActive();
     private static native long nativeCheatsRequest(String command);
     private static native long nativeCheatsStatus(int serial);
     private static native String[] nativeCheatsRows(int serial);
@@ -101,7 +107,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private LinearLayout loadingView;
     private TextView objectCost;
     private LinearLayout objectControls;
+    private LinearLayout photoControls;
     private Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;
+    private FpsOverlay fpsOverlay;
+    private String fpsMode;
     private FrameLayout targetRadiusPanel;
     private LinearLayout targetRadiusTextPanel;
     private TextView targetRadiusHint;
@@ -118,13 +127,17 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private final android.os.Handler controlHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateControls=new Runnable(){public void run(){
         if(active!=GameActivity.this||!started||touch==null)return;
-        if(!firstFrame&&(nativeHudState()&0x80000000L)!=0){firstFrame=true;root.removeView(loadingView);loadingView=null;launch.firstFrame(root);}
+        long hud=nativeHudState();
+        if(!firstFrame&&(hud&0x80000000L)!=0){
+            firstFrame=true;root.removeView(loadingView);loadingView=null;launch.firstFrame(root);updateFpsOverlay();
+        }
         touch.syncContext(nativeTouchContext());touch.syncToolToken(nativeTouchToolToken());
         touch.pollCommands();
         if(toolMenu!=null&&!toolMenuValid())closeToolMenu();
         if(targetMenu!=null&&!targetMenu.isCurrent())closeTargetMenu();
         refreshObjectControls();
         showTimeHint();
+        showFloorHint();
         int status=nativeUpscaleStatus();if(status!=0&&status!=upscaleStatus){upscaleStatus=status;touchNotice(text(R.string.upscale_fallback,status));}
         if(textSerial!=0)handleTextReceipt(nativeTouchReplaceTextStatus(textSerial));
         if(cheatSerial!=0)handleCheatReceipt(nativeCheatsStatus(cheatSerial));
@@ -368,6 +381,68 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         toolsLayout.rightMargin=toolsLayout.bottomMargin=Math.round(8*density);root.addView(toolsButton,toolsLayout);
         toolsButton.setOnClickListener(v->showToolMenu());
         toolsButton.setOnLongClickListener(v->{showToolMenu();return true;});
+        photoControls=new LinearLayout(this);
+        photoControls.setVisibility(View.GONE);
+        Button shoot=objectButton(text(R.string.take_photo),text(R.string.take_photo));
+        Button dismiss=objectButton(text(R.string.cancel),text(R.string.cancel));
+        shoot.setOnClickListener(v->photoKey(0x43));
+        dismiss.setOnClickListener(v->photoKey(0x1B));
+        for(Button button:new Button[]{shoot,dismiss}){
+            button.setTextSize(14);button.setPadding(Math.round(12*density),0,Math.round(12*density),0);
+            LinearLayout.LayoutParams buttonLayout=new LinearLayout.LayoutParams(-2,Math.round(48*density));
+            buttonLayout.leftMargin=Math.round(6*density);
+            photoControls.addView(button,buttonLayout);
+        }
+        FrameLayout.LayoutParams photoLayout=new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.RIGHT|android.view.Gravity.BOTTOM);
+        photoLayout.rightMargin=photoLayout.bottomMargin=Math.round(8*density);
+        root.addView(photoControls,photoLayout);
+    }
+    private boolean canUsePhotoControls(int mode){
+        return active==this&&started&&mode==TouchLayer.LIVE&&!inputOverlayOpen()&&nativeTouchPhoto();
+    }
+    private void photoKey(int key){
+        if(canUsePhotoControls(nativeTouchContext()))touch.controllerKey(key);
+    }
+    private FrameLayout.LayoutParams fpsLayout() {
+        FrameLayout.LayoutParams layout = new FrameLayout.LayoutParams(-1, -1);
+        layout.setMargins(safeLeft, safeTop, safeRight, safeBottom);
+        return layout;
+    }
+
+    private void updateFpsOverlay() {
+        if (!firstFrame || active != this || !hasWindowFocus()) {
+            stopFpsOverlay();
+            return;
+        }
+        String mode = launch.option("fps_counter");
+        if (!"1".equals(mode) && !"2".equals(mode)) mode = "0";
+        if (!mode.equals(fpsMode)) {
+            if (fpsOverlay != null) {
+                stopFpsOverlay();
+                root.removeView(fpsOverlay);
+                fpsOverlay = null;
+            }
+            fpsMode = mode;
+            if (!"0".equals(mode)) {
+                android.view.Display display = root.getDisplay();
+                SystemInfo system = "2".equals(mode) ? new SystemInfo(this, root.getWidth(), root.getHeight(),
+                    display != null ? display.getRefreshRate() : 0) : null;
+                fpsOverlay = new FpsOverlay(this, FpsCounter.hudScale(getResources().getDisplayMetrics().density),
+                    GameActivity::nativeFrameTimes, system);
+                root.addView(fpsOverlay, 1, fpsLayout());
+            }
+        }
+        if (fpsOverlay != null) {
+            fpsOverlay.setVisibility(View.VISIBLE);
+            fpsOverlay.start();
+        }
+    }
+
+    private void stopFpsOverlay() {
+        if (fpsOverlay != null) {
+            fpsOverlay.stop();
+            fpsOverlay.setVisibility(View.GONE);
+        }
     }
     private boolean toolMenuValid(){
         return active==this&&started&&(toolMenuContext==TouchLayer.BUY||toolMenuContext==TouchLayer.BUILD)
@@ -381,7 +456,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         refreshObjectControls();
     }
     private void showToolMenu(){
-        if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
+        if(active!=this||!started||inputOverlayOpen()||textSerial!=0||!GamePreferences.showGameTools())return;
         toolMenuContext=nativeTouchContext();toolMenuSize=nativeTouchGameSize();toolMenuEpoch=nativeTouchLayoutEpoch();
         if(!toolMenuValid())return;
         touch.setBlocked(true);if(gamepad!=null)gamepad.setEnabledInput(false);
@@ -418,6 +493,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         boolean visible=active==this&&started&&!inputOverlayOpen()&&touch.objectControlsVisible();
         objectControls.setVisibility(visible?View.VISIBLE:View.GONE);
         int mode=nativeTouchContext();
+        photoControls.setVisibility(canUsePhotoControls(mode)?View.VISIBLE:View.GONE);
         boolean help=active==this&&started&&!inputOverlayOpen()&&
                 (mode&(TouchLayer.OPTIONS|TouchLayer.MODAL|TouchLayer.LOADING|TouchLayer.TEXT_FOCUS))==TouchLayer.OPTIONS;
         helpButton.setVisibility(help?View.VISIBLE:View.GONE);
@@ -430,7 +506,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             GamePreferences.markTargetRadiusHintShown();
         }
         touch.showTargetArea(targetArea?GamePreferences.targetRadius():0);
-        boolean tools=active==this&&started&&!inputOverlayOpen()&&(mode==TouchLayer.BUY||mode==TouchLayer.BUILD);
+        boolean tools=active==this&&started&&!inputOverlayOpen()&&GamePreferences.showGameTools()&&
+                (mode==TouchLayer.BUY||mode==TouchLayer.BUILD);
         toolsButton.setVisibility(tools?View.VISIBLE:View.GONE);
         int cost=visible?nativeTouchObjectCost():-1;
         objectCost.setText(cost>=0?"§ "+cost:"");objectCost.setVisibility(cost>=0?View.VISIBLE:View.GONE);
@@ -472,6 +549,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams toolsLayout=(FrameLayout.LayoutParams)toolsButton.getLayoutParams();
         toolsLayout.rightMargin=right+Math.round(8*getResources().getDisplayMetrics().density);
         toolsLayout.bottomMargin=bottom+Math.round(8*getResources().getDisplayMetrics().density);toolsButton.setLayoutParams(toolsLayout);
+        if(fpsOverlay!=null)fpsOverlay.setLayoutParams(fpsLayout());
+        FrameLayout.LayoutParams photoLayout=(FrameLayout.LayoutParams)photoControls.getLayoutParams();
+        photoLayout.rightMargin=toolsLayout.rightMargin;photoLayout.bottomMargin=toolsLayout.bottomMargin;
+        photoControls.setLayoutParams(photoLayout);
     }
 
     static String userdataName(String requested){
@@ -508,6 +589,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         catch(android.system.ErrnoException e){android.util.Log.w("Sims2","System language: "+e);}
         if (active != null && active != this) {
             active.controlHandler.removeCallbacks(active.updateControls);
+            active.stopFpsOverlay();
             active.closeTargetMenu();
             active.cancelTextSession();
             if (active.touch != null) { touch.takePendingCommand(active.touch); active.touch.releaseAll(); active.touch.releaseLocal(); }
@@ -546,7 +628,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 System.load(dev.getAbsolutePath());
             }else System.loadLibrary("sims2");
             String renderer=launch.renderer();
-            nativeRenderer("turnip".equals(renderer)?2:"dxvk".equals(renderer)?1:0,getApplicationInfo().nativeLibraryDir,getCacheDir().getAbsolutePath());
+            nativeRenderer("panvk".equals(renderer)?3:"turnip".equals(renderer)?2:"dxvk".equals(renderer)?1:0,
+                    getApplicationInfo().nativeLibraryDir,getCacheDir().getAbsolutePath());
         }catch(LinkageError failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
         started = true;
         root = new FrameLayout(this);
@@ -582,8 +665,15 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         new Thread(()->{
             try{
                 File resources=GameAssets.prepare(getAssets(),getFilesDir());
-                runOnUiThread(()->{if(active==this&&!isFinishing())nativeStart(launch.folder("game").getAbsolutePath(),
-                        data.getAbsolutePath(),resources.getAbsolutePath(),args,new File(base,"verbose").exists());});
+                runOnUiThread(()->{
+                    if(active!=this||isFinishing())return;
+                    if(!nativeStart(launch.folder("game").getAbsolutePath(), data.getAbsolutePath(),
+                            resources.getAbsolutePath(),args,new File(base,"verbose").exists())){
+                        launch.failed(text(R.string.engine_start_failed));
+                        Launch.openLauncher(this,launch.distribution());
+                        finish();
+                    }
+                });
             }catch(java.io.IOException failure){runOnUiThread(()->{
                 if(active!=this)return;
                 launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();
@@ -591,7 +681,12 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         },"Port resources").start();
     }
 
-    private void nativeExited(int code){if(code==67)launch.failed(text(R.string.image_mismatch));launch.exiting(code,null);}
+    private void nativeExited(int code){
+        if(code==67)launch.failed(text(R.string.image_mismatch));
+        else if(code==65||code==66)launch.failed(text(R.string.engine_start_failed));
+        launch.exiting(code,null);
+        if(code>=65&&code<=67)Launch.openLauncher(this,launch.distribution());
+    }
 
     private boolean ownsInput(){return active==this||active==null;}
     private void submitScale(){
@@ -615,6 +710,14 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         touch.setBlocked(true);if(gamepad!=null)gamepad.setEnabledInput(false);refreshObjectControls();
         settingsDialog.show();GamePreferences.markTimeHintShown();
     }
+    private void showFloorHint(){
+        if(GamePreferences.floorHintShown()||!firstFrame||!hasWindowFocus()||inputOverlayOpen()||textSerial!=0)return;
+        int mode=nativeTouchContext();
+        if((mode==TouchLayer.LIVE||mode==TouchLayer.BUY||mode==TouchLayer.BUILD)&&nativeTouchFloorButtonUsed()){
+            touchNotice(text(R.string.floor_swipe_hint));
+            GamePreferences.markFloorHintShown();
+        }
+    }
     private void showTouchSettings(){
         if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
         touch.setBlocked(true);
@@ -631,9 +734,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             public void onStopTrackingTouch(SeekBar b){submitScale();}
         });
         TextView help=new TextView(dialogContext);help.setTextColor(Color.BLACK);help.setText(text(R.string.gestures_help));
-        android.widget.CheckBox swipe=new android.widget.CheckBox(dialogContext);swipe.setText(text(R.string.ui_swipe_controls));
-        swipe.setTextColor(Color.BLACK);swipe.setChecked(GamePreferences.uiSwipeControls());content.addView(swipe);
-        swipe.setOnCheckedChangeListener((button,checked)->{touch.releaseAll();GamePreferences.uiSwipeControls(checked);});
+        controlOption(content,R.string.ui_swipe_controls,GamePreferences.uiSwipeControls(),checked->{
+            touch.releaseAll();GamePreferences.uiSwipeControls(checked);
+        });
+        controlOption(content,R.string.show_game_tools,GamePreferences.showGameTools(),GamePreferences::showGameTools);
         TextView restart=new TextView(dialogContext);restart.setTextColor(Color.BLACK);restart.setText(text(R.string.port_settings_restart));content.addView(restart);
         org.sims2.port.launcher.PortOptions.append(this,content,launch);
         content.addView(help);
@@ -650,6 +754,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         });
         settingsDialog.show();
         settingsDialog.getWindow().getDecorView().setForceDarkAllowed(false);
+    }
+    private void controlOption(LinearLayout content,int label,boolean enabled,java.util.function.Consumer<Boolean> change){
+        android.widget.CheckBox box=new android.widget.CheckBox(content.getContext());
+        box.setText(text(label));box.setTextColor(Color.BLACK);box.setChecked(enabled);content.addView(box);
+        box.setOnCheckedChangeListener((button,checked)->change.accept(checked));
     }
     private void showTextEditor(float x,float y){
         if(active!=this||!started||inputOverlayOpen()||textSerial!=0)return;
@@ -714,6 +823,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
     @Override public void onWindowFocusChanged(boolean hasFocus){
         super.onWindowFocusChanged(hasFocus);
+        updateFpsOverlay();
         if(!hasFocus)closeTargetMenu();
         if(gamepad!=null)gamepad.setEnabledInput(hasFocus&&active==this&&!inputOverlayOpen());
         if(active!=this&&active!=null){if(touch!=null)touch.releaseLocal();return;}
@@ -730,6 +840,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     @Override public void surfaceDestroyed(SurfaceHolder holder){if(started&&ownsInput()){closeTargetMenu();cancelTextSession();if(touch!=null)touch.releaseAll();nativeSurface(null);}}
     @Override protected void onPause(){
         controlHandler.removeCallbacks(updateControls);
+        stopFpsOverlay();
         closeTargetMenu();
         if(gamepad!=null)gamepad.setEnabledInput(false);
         if(started){if(ownsInput()){nativeCheatsCancel();cancelTextSession();touch.releaseAll();nativePause(true);}else touch.releaseLocal();}
@@ -737,11 +848,13 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
     @Override protected void onResume(){
         super.onResume();hideSystemUi();
+        updateFpsOverlay();
         if(gamepad!=null)gamepad.setEnabledInput(active==this&&hasWindowFocus()&&!inputOverlayOpen());
         if(started&&active==this){nativeTouchCameraContact(false);nativePause(false);controlHandler.removeCallbacks(updateControls);controlHandler.post(updateControls);}
     }
     @Override protected void onDestroy(){
         controlHandler.removeCallbacks(updateControls);
+        stopFpsOverlay();
         closeTargetMenu();
         if(cheatDialog!=null){AlertDialog previous=cheatDialog;cheatDialog=null;previous.dismiss();}
         if(gamepad!=null){gamepad.release();((android.hardware.input.InputManager)getSystemService(Context.INPUT_SERVICE)).unregisterInputDeviceListener(gamepad);}

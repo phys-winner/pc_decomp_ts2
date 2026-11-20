@@ -15,7 +15,9 @@
 #include <jni.h>
 #include <math.h>
 #include <semaphore.h>
+#include <stdarg.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -45,26 +47,88 @@ uint64_t void_audio_pause_state(void)
 {
     return __atomic_load_n(&audio_pause_state, __ATOMIC_ACQUIRE);
 }
-extern void __llvm_profile_set_filename(const char *) __attribute__((weak));
 
-/* d3d9_gl.c asks for the window when the game creates its device; wait for
- * the surface if the activity has not delivered it yet. */
-void *void_android_window(void)
+/* Present intervals for the UT3 overlay. A pause epoch starts a fresh graph. */
+#define FRAME_TIMES 304u
+static pthread_mutex_t frame_times_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t frame_intervals, frame_pause_epoch, last_present_ns;
+static uint32_t frame_times_us[FRAME_TIMES];
+static unsigned frame_times_valid;
+
+void void_android_frame_presented(void)
 {
-    pthread_mutex_lock(&window_lock);
-    while (!window) pthread_cond_wait(&window_cond, &window_lock);
-    ANativeWindow *w = window;
-    pthread_mutex_unlock(&window_lock);
-    return w;
+    pthread_mutex_lock(&frame_times_lock);
+    uint64_t pause = void_audio_pause_state();
+    if (frame_pause_epoch != pause) {
+        frame_pause_epoch = pause;
+        last_present_ns = 0;
+        frame_times_valid = 0;
+    }
+    if (!(pause & 1u)) {
+        uint64_t now = void_monotonic_ns();
+        if (last_present_ns) {
+            uint64_t us = (now - last_present_ns) / 1000u;
+            frame_times_us[frame_intervals++ % FRAME_TIMES] = us > INT32_MAX ? INT32_MAX : (uint32_t)us;
+            if (frame_times_valid < FRAME_TIMES) ++frame_times_valid;
+        }
+        last_present_ns = now;
+    }
+    pthread_mutex_unlock(&frame_times_lock);
 }
 
-/* The current window (NULL while the activity has none) and its serial; with
- * wait set, block until there is one. */
+JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeFrameTimes(JNIEnv *env, jclass cls, jintArray array)
+{
+    (void)cls;
+    jsize length = array ? (*env)->GetArrayLength(env, array) : 0;
+    if (length > (jsize)FRAME_TIMES) length = (jsize)FRAME_TIMES;
+    jint values[FRAME_TIMES];
+    pthread_mutex_lock(&frame_times_lock);
+    uint64_t end = frame_intervals;
+    unsigned valid = frame_pause_epoch == void_audio_pause_state() ? frame_times_valid : 0;
+    for (jsize i = 0; i < length; ++i) {
+        unsigned back = (unsigned)(length - i);
+        values[i] = back <= valid ? (jint)frame_times_us[(end - back) % FRAME_TIMES] : 0;
+    }
+    pthread_mutex_unlock(&frame_times_lock);
+    if (length) (*env)->SetIntArrayRegion(env, array, 0, length, values);
+    return (jlong)end;
+}
+
+static pthread_mutex_t gpu_strings_lock = PTHREAD_MUTEX_INITIALIZER;
+static char gpu_strings[300];
+
+void void_android_gpu_strings(const char *renderer, const char *version)
+{
+    pthread_mutex_lock(&gpu_strings_lock);
+    snprintf(gpu_strings, sizeof gpu_strings, "%s\n%s", renderer ? renderer : "", version ? version : "");
+    for (char *c = gpu_strings; *c; ++c) if ((unsigned char)*c >= 0x80) *c = '?';
+    pthread_mutex_unlock(&gpu_strings_lock);
+}
+
+JNIEXPORT jstring JNICALL Java_org_sims2_port_GameActivity_nativeGpuStrings(JNIEnv *env, jclass cls)
+{
+    (void)cls;
+    char text[sizeof gpu_strings];
+    pthread_mutex_lock(&gpu_strings_lock);
+    memcpy(text, gpu_strings, sizeof text);
+    pthread_mutex_unlock(&gpu_strings_lock);
+    return (*env)->NewStringUTF(env, text);
+}
+
+JNIEXPORT jint JNICALL Java_org_sims2_port_GameActivity_nativeFpsLimit(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return s2_fps_limit();
+}
+extern void __llvm_profile_set_filename(const char *) __attribute__((weak));
+
+/* Keep the window alive past unlocking, when surfaceDestroyed can release it. */
 void *void_android_window_current(uint32_t *serial, int wait)
 {
     pthread_mutex_lock(&window_lock);
     while (wait && !window) pthread_cond_wait(&window_cond, &window_lock);
     ANativeWindow *w = window;
+    if (w) ANativeWindow_acquire(w);
     *serial = window_serial;
     pthread_mutex_unlock(&window_lock);
     return w;
@@ -83,12 +147,7 @@ void void_android_screen_size(int *w, int *h)
 
 void *void_android_window_acquire(uint32_t *serial)
 {
-    pthread_mutex_lock(&window_lock);
-    ANativeWindow *current = window;
-    *serial = window_serial;
-    if (current) ANativeWindow_acquire(current);
-    pthread_mutex_unlock(&window_lock);
-    return current;
+    return void_android_window_current(serial, 0);
 }
 
 int void_android_display_size(int *width, int *height)
@@ -107,10 +166,12 @@ void void_android_game_exited(int code)
     int attached = (*jvm)->GetEnv(jvm, (void **)&env, JNI_VERSION_1_6) != JNI_OK;
     if (attached && (*jvm)->AttachCurrentThread(jvm, &env, NULL) != JNI_OK) return;
     jclass cls = (*env)->GetObjectClass(env, activity);
-    jmethodID method = (*env)->GetMethodID(env, cls, "nativeExited", "(I)V");
-    if (method) (*env)->CallVoidMethod(env, activity, method, code);
+    if (cls) {
+        jmethodID method = (*env)->GetMethodID(env, cls, "nativeExited", "(I)V");
+        if (method) (*env)->CallVoidMethod(env, activity, method, code);
+        (*env)->DeleteLocalRef(env, cls);
+    }
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    (*env)->DeleteLocalRef(env, cls);
     if (attached) (*jvm)->DetachCurrentThread(jvm);
 }
 
@@ -149,33 +210,53 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved)
 extern const char *void_command_line;
 static char command_line[2048];
 
-JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeStart(JNIEnv *env, jobject self, jstring game,
+int void_android_game_started(void) { return game_started; }
+
+static int copy_start_string(JNIEnv *env, jstring value, char *out, size_t capacity)
+{
+    if (!value) return 0;
+    jsize bytes = (*env)->GetStringUTFLength(env, value);
+    if (bytes < 0 || (size_t)bytes >= capacity) return 0;
+    (*env)->GetStringUTFRegion(env, value, 0, (*env)->GetStringLength(env, value), out);
+    out[bytes] = 0;
+    return !(*env)->ExceptionCheck(env);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeStart(JNIEnv *env, jobject self, jstring game,
     jstring data, jstring images, jstring args, jboolean verbose)
 {
-    if (game_started) return;
-    const char *g = (*env)->GetStringUTFChars(env, game, NULL);
-    const char *d = (*env)->GetStringUTFChars(env, data, NULL);
-    const char *i = (*env)->GetStringUTFChars(env, images, NULL);
-    const char *a = (*env)->GetStringUTFChars(env, args, NULL);
-    snprintf(game_dir, sizeof game_dir, "%s", g);
-    snprintf(data_dir, sizeof data_dir, "%s", d);
-    snprintf(images_dir, sizeof images_dir, "%s", i);
-    /* <sdcard>/Sims2/args.txt: the game's own command-line switches. */
-    if (a && *a) {
-        snprintf(command_line, sizeof command_line, "\"C:\\Games\\The Sims 2 Legacy\\EP9\\TSBin\\Sims2EP9.exe\" %s", a);
+    if (game_started) return JNI_TRUE;
+    static const char prefix[] = "\"C:\\Games\\The Sims 2 Legacy\\EP9\\TSBin\\Sims2EP9.exe\" ";
+    size_t first_arg = sizeof prefix - 1;
+    if (!copy_start_string(env, game, game_dir, sizeof game_dir) ||
+        !copy_start_string(env, data, data_dir, sizeof data_dir) ||
+        !copy_start_string(env, images, images_dir, sizeof images_dir) ||
+        !copy_start_string(env, args, command_line + first_arg, sizeof command_line - first_arg))
+        return JNI_FALSE;
+    activity = (*env)->NewGlobalRef(env, self);
+    if (!activity) return JNI_FALSE;
+    void_verbose = verbose ? 1 : 0;
+    const char *default_command = void_command_line;
+    if (command_line[first_arg]) {
+        memcpy(command_line, prefix, first_arg);
         void_command_line = command_line;
     }
-    (*env)->ReleaseStringUTFChars(env, game, g);
-    (*env)->ReleaseStringUTFChars(env, data, d);
-    (*env)->ReleaseStringUTFChars(env, images, i);
-    (*env)->ReleaseStringUTFChars(env, args, a);
-    activity = (*env)->NewGlobalRef(env, self);
-    void_verbose = verbose ? 1 : 0;
     pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 64u << 20);
-    game_started = pthread_create(&game_thread, &attr, game_main, NULL) == 0;
-    pthread_attr_destroy(&attr);
+    int error = pthread_attr_init(&attr);
+    if (!error) {
+        error = pthread_attr_setstacksize(&attr, 64u << 20);
+        if (!error) error = pthread_create(&game_thread, &attr, game_main, NULL);
+        pthread_attr_destroy(&attr);
+    }
+    if (error) {
+        void_log("[android] cannot start the game thread: %s", strerror(error));
+        (*env)->DeleteGlobalRef(env, activity);
+        activity = NULL;
+        void_command_line = default_command;
+        return JNI_FALSE;
+    }
+    game_started = 1;
+    return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeSurface(JNIEnv *env, jobject self, jobject surface)
@@ -263,6 +344,12 @@ JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeTouchRewards(J
 {
     (void)env; (void)cls;
     return s2_touch_rewards() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeTouchPhoto(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return s2_touch_photo() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jint JNICALL Java_org_sims2_port_GameActivity_nativeTouchUiScale(JNIEnv *env, jclass cls)
@@ -653,6 +740,12 @@ JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeHudState(JNIEnv *
     return (jlong)(((uint64_t)frame << 32) | tags);
 }
 
+JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeTouchFloorButtonUsed(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return s2_touch_floor_button_used() ? JNI_TRUE : JNI_FALSE;
+}
+
 /* Put the cursor at a point of the view in [0,1] without mouse motion (a
  * paint stroke starts under the finger instead of turning the camera). */
 JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeMouseWarp(JNIEnv *env, jobject self, jfloat x, jfloat y)
@@ -682,7 +775,11 @@ static int audio_normal_output = 1;
 #define AUDIO_LOG_QUEUE_COUNT 32
 
 /* The mixer produces events; only the log thread touches storage. */
-static char audio_log_queue[AUDIO_LOG_QUEUE_COUNT][AUDIO_LOG_LINE_BYTES];
+typedef struct {
+    char line[AUDIO_LOG_LINE_BYTES];
+    bool session_log;
+} audio_log_entry;
+static audio_log_entry audio_log_queue[AUDIO_LOG_QUEUE_COUNT];
 static _Atomic unsigned audio_log_head, audio_log_tail;
 static sem_t audio_log_ready;
 static int audio_log_enabled;
@@ -719,7 +816,9 @@ static void *audio_log_worker(void *unused)
         }
         unsigned tail = atomic_load_explicit(&audio_log_tail, memory_order_relaxed);
         if (tail == atomic_load_explicit(&audio_log_head, memory_order_acquire)) continue;
-        audio_log_append(audio_log_queue[tail % AUDIO_LOG_QUEUE_COUNT]);
+        const audio_log_entry *entry = &audio_log_queue[tail % AUDIO_LOG_QUEUE_COUNT];
+        if (entry->session_log) void_log("%s", entry->line);
+        else audio_log_append(entry->line);
         atomic_store_explicit(&audio_log_tail, tail + 1, memory_order_release);
     }
 }
@@ -741,14 +840,27 @@ static void audio_log_start(void)
     audio_log_enabled = 1;
 }
 
-static void audio_log_enqueue(const char *line)
+static void audio_log_enqueue(const char *line, bool session_log)
 {
     if (!audio_log_enabled) return;
     unsigned head = atomic_load_explicit(&audio_log_head, memory_order_relaxed);
     if (head - atomic_load_explicit(&audio_log_tail, memory_order_acquire) >= AUDIO_LOG_QUEUE_COUNT) return;
-    strcpy(audio_log_queue[head % AUDIO_LOG_QUEUE_COUNT], line);
+    audio_log_entry *entry = &audio_log_queue[head % AUDIO_LOG_QUEUE_COUNT];
+    strcpy(entry->line, line);
+    entry->session_log = session_log;
     atomic_store_explicit(&audio_log_head, head + 1, memory_order_release);
     sem_post(&audio_log_ready);
+}
+
+__attribute__((format(printf, 1, 2)))
+static void audio_log_message(const char *format, ...)
+{
+    char line[AUDIO_LOG_LINE_BYTES];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(line, sizeof line, format, args);
+    va_end(args);
+    audio_log_enqueue(line, true);
 }
 
 enum {
@@ -794,7 +906,7 @@ static void audio_report(unsigned event, int code, const int16_t *frames, uint32
     reports[event].seen = 1;
     reports[event].last = ms;
     reports[event].suppressed = 0;
-    audio_log_enqueue(line);
+    audio_log_enqueue(line, false);
 }
 
 static void audio_close_stream(void)
@@ -811,7 +923,7 @@ static void audio_close_stream(void)
 
 static void audio_close_failed(aaudio_result_t error)
 {
-    if (++audio_errors <= 4) void_log("[audio] stream error %d; resetting output", (int)error);
+    if (++audio_errors <= 4) audio_log_message("[audio] stream error %d; resetting output", (int)error);
     audio_close_stream();
 }
 
@@ -838,7 +950,7 @@ static uint32_t audio_write_frames(const int16_t *frames, uint32_t count)
     }
     if (written < count && void_audio_pause_state() == pause) {
         if (audio_dropped_frames < 1920)
-            void_log("[audio] discarded %u unwritten frames after timeout/error", count - written);
+            audio_log_message("[audio] discarded %u unwritten frames after timeout/error", count - written);
         audio_dropped_frames += count - written;
     }
     if (error < 0) {
@@ -895,7 +1007,7 @@ uint32_t void_audio_output(const int16_t *frames, uint32_t count)
                 if (capacity > 0 && target > capacity) target = capacity;
                 int32_t before = AAudioStream_getBufferSizeInFrames(stream);
                 if (target <= INT32_MAX && before != target) AAudioStream_setBufferSizeInFrames(stream, (int32_t)target);
-                void_log("[audio] output: burst %d, capacity %d, buffer %d -> %d frames, normal %d", (int)burst,
+                audio_log_message("[audio] output: burst %d, capacity %d, buffer %d -> %d frames, normal %d", (int)burst,
                     (int)capacity, (int)before,
                     (int)AAudioStream_getBufferSizeInFrames(stream), audio_normal_output);
                 /* A partially primed queue can underrun before the first real chunk. */
@@ -941,8 +1053,8 @@ uint32_t void_audio_output(const int16_t *frames, uint32_t count)
         audio_report(AUDIO_STALL, (int)audio_zero_chunks, frames, count, written);
         if (!audio_normal_output) {
             audio_normal_output = 1;
-            void_log("[audio] low latency stream stalled for 3 chunks; using normal output until process exit");
-        } else void_log("[audio] normal stream stalled for 3 chunks; reopening on next chunk");
+            audio_log_message("[audio] low latency stream stalled for 3 chunks; using normal output until process exit");
+        } else audio_log_message("[audio] normal stream stalled for 3 chunks; reopening on next chunk");
         audio_close_stream();
     }
     if (stream) {
@@ -960,11 +1072,11 @@ uint32_t void_audio_output(const int16_t *frames, uint32_t count)
             audio_report(AUDIO_XRUN, (int)grown, frames, count, written);
             if (grown > size) {
                 audio_bad_chunks = 0;
-                void_log("[audio] underruns %d: buffer %d -> %d frames", (int)xruns, (int)size, (int)grown);
+                audio_log_message("[audio] underruns %d: buffer %d -> %d frames", (int)xruns, (int)size, (int)grown);
             } else if (!audio_normal_output && ++audio_bad_chunks == 3) {
                 audio_normal_output = 1;
                 ++audio_errors;
-                void_log("[audio] low latency underruns persist at buffer limit; using normal output until process exit");
+                audio_log_message("[audio] low latency underruns persist at buffer limit; using normal output until process exit");
                 audio_close_stream();
             }
         } else audio_bad_chunks = 0;
@@ -982,7 +1094,7 @@ uint32_t void_audio_output(const int16_t *frames, uint32_t count)
     }
     level_frames += written;
     if (level_frames >= 48000u * 10u) {
-        void_log("[audio] last 10 s: peak %d, rms %.0f, underruns %d, short writes %llu, dropped frames %llu, errors %llu", level_peak,
+        audio_log_message("[audio] last 10 s: peak %d, rms %.0f, underruns %d, short writes %llu, dropped frames %llu, errors %llu", level_peak,
                  sqrt(level_sum / (2.0 * level_frames)), stream ? (int)AAudioStream_getXRunCount(stream) : -1,
                  (unsigned long long)audio_short_writes, (unsigned long long)audio_dropped_frames,
                  (unsigned long long)audio_errors);

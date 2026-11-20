@@ -19,9 +19,12 @@ int s2_zip_init(const char *root)
     snprintf(zip_root, sizeof zip_root, "%s", root);
     game_zip = zm_from_env("game");
     if (game_zip) void_log("[zip] mounted %zu files, sidecar %s", zm_count(game_zip), root);
-    else if (getenv("PORT_MOUNT_GAME") && *getenv("PORT_MOUNT_GAME")) {
-        void_log("[zip] cannot open selected archive/index");
-        return 0;
+    else {
+        const char *mounted = getenv("PORT_MOUNT_GAME");
+        if (mounted && *mounted) {
+            void_log("[zip] cannot open selected archive/index");
+            return 0;
+        }
     }
     return 1;
 }

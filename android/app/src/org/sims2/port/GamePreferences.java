@@ -14,6 +14,10 @@ public final class GamePreferences implements PortHooks {
     static void initControls(Context context){controls=context.getSharedPreferences("controls",Context.MODE_PRIVATE);}
     static boolean uiSwipeControls(){return controls==null||controls.getBoolean("ui_swipe_controls",true);}
     static void uiSwipeControls(boolean enabled){if(controls!=null)controls.edit().putBoolean("ui_swipe_controls",enabled).apply();}
+    static boolean showGameTools(){return controls!=null&&controls.getBoolean("show_game_tools",false);}
+    static void showGameTools(boolean enabled){if(controls!=null)controls.edit().putBoolean("show_game_tools",enabled).apply();}
+    static boolean floorHintShown(){return controls==null||controls.getBoolean("floor_swipe_hint_shown",false);}
+    static void markFloorHintShown(){if(controls!=null)controls.edit().putBoolean("floor_swipe_hint_shown",true).apply();}
     static boolean timeHintShown(){return controls==null||controls.getBoolean("time_swipe_hint_shown",false);}
     static void markTimeHintShown(){if(controls!=null)controls.edit().putBoolean("time_swipe_hint_shown",true).apply();}
     static final int MIN_TARGET_RADIUS=4, MAX_TARGET_RADIUS=48;
@@ -44,6 +48,8 @@ public final class GamePreferences implements PortHooks {
         return "english";
     }
     @Override public void migrate(Context context){
+        if(context.getSharedPreferences("controls",Context.MODE_PRIVATE).getBoolean("show_fps",false))
+            Launch.adopt(context,Collections.singletonMap("option.fps_counter","1"));
         String old=TouchLayer.readText(new File(Environment.getExternalStorageDirectory(),"Sims2/userdata/language.txt")).trim();
         for(String code:CODES)if(code.equals(old)){
             Launch.adopt(context,Collections.singletonMap("option.game_language",code));break;

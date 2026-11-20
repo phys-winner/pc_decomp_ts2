@@ -9,8 +9,10 @@ import build_android as B
 
 
 def main():
-    source = (B.ROOT / 'android/host/kernel32.c').read_text()
-    clocks = source[source.index('static pthread_mutex_t clock_lock'):source.index('static uint64_t boot_ns;')]
+    source = (B.ROOT / 'android/host/kernel32.c').read_text(encoding='utf-8')
+    constants = '\n'.join(line for line in source.splitlines() if line.startswith(('#define QPC_HZ ', '#define TSC_HZ '))) + '\n'
+    clocks = source[source.index('static pthread_mutex_t clock_lock'):source.index('uint64_t void_now_100ns')]
+    shims = source[source.index('WINAPI_EXPORT(K32, GetTickCount'):source.index('WINAPI_EXPORT(K32, GetSystemTimeAsFileTime')]
     prelude = r'''
 #include <stdint.h>
 typedef _Atomic int atomic_int;
@@ -22,6 +24,7 @@ typedef _Atomic unsigned atomic_uint;
 #define atomic_load_explicit __c11_atomic_load
 #define atomic_store_explicit __c11_atomic_store
 #define atomic_fetch_add_explicit __c11_atomic_fetch_add
+#define atomic_compare_exchange_strong_explicit __c11_atomic_compare_exchange_strong
 #define atomic_thread_fence __c11_atomic_thread_fence
 #define atomic_load(p) __c11_atomic_load(p, __ATOMIC_SEQ_CST)
 #define PTHREAD_MUTEX_INITIALIZER 0
@@ -40,8 +43,19 @@ static uint64_t void_monotonic_ns(void) {
     return captured;
 }
 static void void_log(const char *fmt, ...) {}
+static uint64_t guest[8];
+static uint32_t g_eax, g_esp, timer_cache;
+#define MEM32(a) (*(uint32_t *)((a) == 0xA10CB63Cu ? &timer_cache : (uint32_t *)((char *)guest + (a))))
+#define MEM64(a) (*(uint64_t *)((char *)guest + (a)))
+#define ARG(i) MEM32(g_esp + 4u + 4u * (i))
+#define WINAPI_EXPORT(dll, name, nargs) static uint32_t name(void)
 '''
     checks = r'''
+static uint64_t read_qpc(void) {
+    ARG(0) = 32;
+    return QueryPerformanceCounter() ? MEM64(32) : 0;
+}
+
 __declspec(dllexport) int check(void) {
     uint64_t t = game_ns();
     if (t != now) return 1;
@@ -85,23 +99,44 @@ __declspec(dllexport) int check(void) {
     }
     t = game_ns(); inject_pause = 1;
     if (game_ns() != t || inject_pause) return 14;
+
+    const uint64_t qpc = read_qpc(), tsc = void_rdtsc();
+    if (qpc != 3600ull * QPC_HZ || GetTickCount() != 3600000) return 15;
+    if (!QueryPerformanceFrequency() || MEM64(32) != 10000000) return 16;
+    void_clock_pause(1);
+    now += 3600000000ull;
+    if (read_qpc() != qpc || void_rdtsc() != tsc) return 17;
+    ARG(1) = 40;
+    timer_cache = 48;
+    sub_A01C906A();
+    if (g_eax != 1 || g_esp != 4 || MEM64(32) != 10000000 ||
+        MEM64(40) != 3400000000ull || MEM64(48) != MEM64(40)) return 18;
+    g_esp = 0;
+    void_clock_pause(0);
+    now += 430000000000ull;
+    if (read_qpc() - qpc != 430ull * QPC_HZ || void_rdtsc() - tsc != 430ull * TSC_HZ ||
+        GetTickCount() != 4030000) return 19;
+    void_set_time_scale(2);
+    now += 1000000000ull;
+    if (read_qpc() - qpc != 432ull * QPC_HZ || void_rdtsc() - tsc != 432ull * TSC_HZ) return 20;
     return locks || bad;
 }
 '''
     with tempfile.TemporaryDirectory(prefix='sims2-clock-') as directory:
         base = Path(directory)
         code, obj, dll = base/'check.c', base/'check.obj', base/'check.dll'
-        code.write_text(prelude + clocks + checks)
+        code.write_text(prelude + constants + clocks + shims + checks)
         subprocess.run([str(B.CLANG), '--target=x86_64-pc-windows-msvc', '-O2', '-fno-builtin',
-                        '-fno-stack-protector', '-c', str(code), '-o', str(obj)], check=True)
+                        '-fno-strict-aliasing', '-fno-stack-protector', '-c', str(code), '-o', str(obj)], check=True)
         subprocess.run([str(B.CLANG.with_name('ld.lld.exe')), '-flavor', 'link', '/dll', '/noentry',
                         '/out:' + str(dll), str(obj)], check=True)
         library = ctypes.CDLL(str(dll))
         try:
-            assert library.check() == 0
+            status = library.check()
+            assert status == 0, status
         finally:
             _ctypes.FreeLibrary(library._handle)
-    print('PASS actual-C game clock: pause, duplicate transitions, scale changes, 10000 resume cycles, lock-free normal clock and invalid scale rejection')
+    print('PASS actual-C game clock: 10000 pause cycles, scaling, fixed calibration and synchronized QPC/ticks/TSC')
 
 
 if __name__ == '__main__':

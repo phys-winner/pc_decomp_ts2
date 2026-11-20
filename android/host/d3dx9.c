@@ -16,6 +16,7 @@
 
 #define D3DX "d3dx9_36.dll"
 #define D3DXERR_INVALIDDATA 0x88760B59u
+#define CT_REGISTERS 256u
 
 /* ============================================================ ID3DXBuffer */
 typedef struct { void_com_object com; uint32_t data, size; } dxbuffer_t;
@@ -31,8 +32,10 @@ static void_com_class dxbuffer_class = { "ID3DXBuffer", 5, dxbuffer_methods, 0 }
 static uint32_t make_buffer(const void *data, uint32_t size)
 {
     dxbuffer_t *b = (dxbuffer_t *)calloc(1, sizeof *b);
+    if (!b) return 0;
     b->size = size;
     b->data = void_galloc(size ? size : 1);
+    if (!b->data) { free(b); return 0; }
     if (data) memcpy(GPTR(b->data), data, size);
     uint32_t guest = void_com_wrap(&b->com, &dxbuffer_class, 0);
     b->com.destroy = dxbuffer_destroy;
@@ -41,8 +44,11 @@ static uint32_t make_buffer(const void *data, uint32_t size)
 
 WINAPI_EXPORT(D3DX, D3DXCreateBuffer, 2)
 {
-    MEM32(ARG(1)) = make_buffer(NULL, ARG(0));
-    return D3D_OK;
+    uint32_t out = ARG(1);
+    if (!void_vm_writable(out, 4)) return D3DERR_INVALIDCALL;
+    uint32_t buffer = make_buffer(NULL, ARG(0));
+    MEM32(out) = buffer;
+    return buffer ? D3D_OK : E_OUTOFMEMORY_;
 }
 
 /* ================================================================ profiles */
@@ -59,9 +65,6 @@ typedef struct {
     int count;
     int pixel;
 } ctable_t;
-
-static ctable_t *tables[4096];
-static int table_count;
 
 static uint32_t ct_info(ctable_t *t, int i) { return t->blob + MEM32(t->blob + 16) + 20u * (uint32_t)i; }
 static uint32_t ct_type(ctable_t *t, int i) { return t->blob + MEM32(ct_info(t, i) + 12); }
@@ -219,38 +222,47 @@ static void write_b(ctable_t *t, uint32_t reg, const int32_t *v, uint32_t count)
 }
 
 /* Set a constant from `n` floats laid out as D3DX does (row-major elements). */
-static uint32_t set_floats(ctable_t *t, int i, const float *data, uint32_t n, int transpose)
+static uint32_t set_floats(ctable_t *t, int i, const float *data, uint32_t n)
 {
     uint32_t info = ct_info(t, i), type = ct_type(t, i);
     uint32_t set = MEM16(info + 4), reg = MEM16(info + 6), regs = MEM16(info + 8);
     uint32_t cls = MEM16(type), rows = MEM16(type + 4), cols = MEM16(type + 6);
     uint32_t elements = MEM16(type + 8) ? MEM16(type + 8) : 1;
-    float buf[4 * 256];
-    memset(buf, 0, sizeof buf);
+    float buf[4 * CT_REGISTERS] = {0};
     uint32_t per = rows * cols;
-    if (regs > 256) regs = 256;
-    for (uint32_t e = 0; e < elements; ++e) {
-        const float *m = data + e * per;
-        if (e * per >= n) break;
-        uint32_t regs_per = elements ? regs / elements : regs;
+    if (regs > CT_REGISTERS) regs = CT_REGISTERS;
+    uint32_t regs_per = regs / elements;
+    for (uint32_t e = 0; per && regs_per && e < elements; ++e) {
+        uint64_t start = (uint64_t)e * per;
+        if (start >= n) break;
         for (uint32_t r = 0; r < regs_per; ++r) {
             float *out = buf + 4 * (e * regs_per + r);
             for (uint32_t c = 0; c < 4; ++c) {
-                float v = 0.0f;
+                uint32_t index = per;
                 if (cls == 3) {             /* MATRIX_COLUMNS: register r is column r */
-                    if (r < cols && c < rows) v = transpose ? m[r * rows + c] : m[c * cols + r];
+                    if (r < cols && c < rows) index = c * cols + r;
                 } else if (cls == 2) {      /* MATRIX_ROWS */
-                    if (r < rows && c < cols) v = transpose ? m[c * rows + r] : m[r * cols + c];
+                    if (r < rows && c < cols) index = r * cols + c;
                 } else {                    /* SCALAR / VECTOR */
-                    if (r == 0 && c < cols) v = m[c];
+                    if (r == 0 && c < cols) index = c;
                 }
-                out[c] = v;
+                if (index < per && index < n - start) out[c] = data[start + index];
             }
         }
     }
     if (set == 2) write_f(t, reg, buf, regs);
-    else if (set == 1) { int32_t iv[4 * 16]; for (uint32_t k = 0; k < 4 * regs && k < 64; ++k) iv[k] = (int32_t)buf[k]; write_i(t, reg, iv, regs); }
-    else if (set == 0) { int32_t bv[16]; for (uint32_t k = 0; k < regs && k < 16; ++k) bv[k] = buf[4 * k] != 0.0f; write_b(t, reg, bv, regs); }
+    else if (set == 1) {
+        int32_t values[4 * CT_REGISTERS];
+        for (uint32_t k = 0; k < 4 * regs; ++k) {
+            float v = buf[k];
+            values[k] = isnan(v) ? 0 : v >= 0x1p31f ? INT32_MAX : v <= -0x1p31f ? INT32_MIN : (int32_t)v;
+        }
+        write_i(t, reg, values, regs);
+    } else if (set == 0) {
+        int32_t values[CT_REGISTERS];
+        for (uint32_t k = 0; k < regs; ++k) values[k] = buf[4 * k] != 0.0f;
+        write_b(t, reg, values, regs);
+    }
     return D3D_OK;
 }
 
@@ -259,9 +271,11 @@ COM_METHOD(ct, SetDefaults, 2)
     ctable_t *t = CT;
     for (int i = 0; i < t->count; ++i) {
         uint32_t info = ct_info(t, i);
-        if (!MEM32(info + 16)) continue;
+        uint32_t offset = MEM32(info + 16);
         uint32_t set = MEM16(info + 4), reg = MEM16(info + 6), regs = MEM16(info + 8);
-        const float *def = (const float *)GPTR(t->blob + MEM32(info + 16));
+        if (!offset || set > 2) continue;
+        if (offset > t->size || regs * (set == 0 ? 4u : 16u) > t->size - offset) return D3DERR_INVALIDCALL;
+        const float *def = (const float *)GPTR(t->blob + offset);
         if (set == 2) write_f(t, reg, def, regs);
         else if (set == 1) write_i(t, reg, (const int32_t *)def, regs);
         else if (set == 0) write_b(t, reg, (const int32_t *)def, regs);
@@ -273,8 +287,9 @@ COM_METHOD(ct, SetValue, 5)
 {
     ctable_t *t = CT;
     int i = ct_handle_index(t, ARG(2));
-    if (i < 0) return D3DERR_INVALIDCALL;
-    return set_floats(t, i, (const float *)GPTR(ARG(3)), ARG(4) / 4, 0);
+    uint32_t bytes = ARG(4) & ~3u;
+    if (i < 0 || (bytes && !void_vm_readable(ARG(3), bytes))) return D3DERR_INVALIDCALL;
+    return set_floats(t, i, (const float *)GPTR(ARG(3)), bytes / 4);
 }
 
 COM_METHOD(ct, SetBool, 4)
@@ -283,68 +298,51 @@ COM_METHOD(ct, SetBool, 4)
     int i = ct_handle_index(t, ARG(2));
     if (i < 0) return D3DERR_INVALIDCALL;
     float f = ARG(3) ? 1.0f : 0.0f;
-    return set_floats(t, i, &f, 1, 0);
+    return set_floats(t, i, &f, 1);
 }
 
 static uint32_t set_array(ctable_t *t, uint32_t handle, uint32_t data, uint32_t count, int ints)
 {
     int i = ct_handle_index(t, handle);
     if (i < 0) return D3DERR_INVALIDCALL;
-    float tmp[1024];
-    if (count > 1024) count = 1024;
+    float tmp[4 * CT_REGISTERS];
+    if (count > 4 * CT_REGISTERS) count = 4 * CT_REGISTERS;
+    if (count && !void_vm_readable(data, count * 4)) return D3DERR_INVALIDCALL;
     for (uint32_t k = 0; k < count; ++k) {
         uint32_t raw = MEM32(data + 4 * k);
         if (ints) tmp[k] = (float)(int32_t)raw; else memcpy(&tmp[k], &raw, 4);
     }
-    return set_floats(t, i, tmp, count, 0);
+    return set_floats(t, i, tmp, count);
 }
 
 COM_METHOD(ct, SetBoolArray, 5) { return set_array(CT, ARG(2), ARG(3), ARG(4), 1); }
-COM_METHOD(ct, SetInt, 4) { ctable_t *t = CT; int i = ct_handle_index(t, ARG(2)); if (i < 0) return D3DERR_INVALIDCALL; float f = (float)(int32_t)ARG(3); return set_floats(t, i, &f, 1, 0); }
+COM_METHOD(ct, SetInt, 4) { ctable_t *t = CT; int i = ct_handle_index(t, ARG(2)); if (i < 0) return D3DERR_INVALIDCALL; float f = (float)(int32_t)ARG(3); return set_floats(t, i, &f, 1); }
 COM_METHOD(ct, SetIntArray, 5) { return set_array(CT, ARG(2), ARG(3), ARG(4), 1); }
-COM_METHOD(ct, SetFloat, 4) { ctable_t *t = CT; int i = ct_handle_index(t, ARG(2)); if (i < 0) return D3DERR_INVALIDCALL; uint32_t u = ARG(3); float f; memcpy(&f, &u, 4); return set_floats(t, i, &f, 1, 0); }
+COM_METHOD(ct, SetFloat, 4) { ctable_t *t = CT; int i = ct_handle_index(t, ARG(2)); if (i < 0) return D3DERR_INVALIDCALL; uint32_t u = ARG(3); float f; memcpy(&f, &u, 4); return set_floats(t, i, &f, 1); }
 COM_METHOD(ct, SetFloatArray, 5) { return set_array(CT, ARG(2), ARG(3), ARG(4), 0); }
 COM_METHOD(ct, SetVector, 4) { return set_array(CT, ARG(2), ARG(3), 4, 0); }
-COM_METHOD(ct, SetVectorArray, 5) { return set_array(CT, ARG(2), ARG(3), 4 * ARG(4), 0); }
-COM_METHOD(ct, SetMatrix, 4)
+COM_METHOD(ct, SetVectorArray, 5) { return set_array(CT, ARG(2), ARG(3), 4 * (ARG(4) > CT_REGISTERS ? CT_REGISTERS : ARG(4)), 0); }
+
+static uint32_t set_matrices(ctable_t *t, uint32_t handle, uint32_t data, uint32_t count, int transpose)
 {
-    ctable_t *t = CT;
-    int i = ct_handle_index(t, ARG(2));
+    int i = ct_handle_index(t, handle);
     if (i < 0) return D3DERR_INVALIDCALL;
     uint32_t type = ct_type(t, i), rows = MEM16(type + 4), cols = MEM16(type + 6);
-    /* Pick the rows x cols block out of the 4x4 D3DXMATRIX. */
-    const float *m = (const float *)GPTR(ARG(3));
-    float block[16];
-    for (uint32_t r = 0; r < rows && r < 4; ++r) for (uint32_t c = 0; c < cols && c < 4; ++c) block[r * cols + c] = m[r * 4 + c];
-    return set_floats(t, i, block, rows * cols, 0);
-}
-COM_METHOD(ct, SetMatrixArray, 5)
-{
-    ctable_t *t = CT;
-    int i = ct_handle_index(t, ARG(2));
-    if (i < 0) return D3DERR_INVALIDCALL;
-    uint32_t type = ct_type(t, i), rows = MEM16(type + 4), cols = MEM16(type + 6), count = ARG(4);
-    float *block = (float *)calloc((size_t)count * 16 + 16, sizeof(float));
-    const float *m = (const float *)GPTR(ARG(3));
+    if (!rows || rows > 4 || !cols || cols > 4) return D3DERR_INVALIDCALL;
+    if (count > CT_REGISTERS) count = CT_REGISTERS;
+    if (count && !void_vm_readable(data, count * 16 * sizeof(float))) return D3DERR_INVALIDCALL;
+    /* Pick the rows x cols block out of each 4x4 D3DXMATRIX. */
+    const float *m = (const float *)GPTR(data);
+    float block[16 * CT_REGISTERS];
     for (uint32_t e = 0; e < count; ++e)
-        for (uint32_t r = 0; r < rows && r < 4; ++r) for (uint32_t c = 0; c < cols && c < 4; ++c)
-            block[e * rows * cols + r * cols + c] = m[e * 16 + r * 4 + c];
-    uint32_t hr = set_floats(t, i, block, count * rows * cols, 0);
-    free(block);
-    return hr;
+        for (uint32_t r = 0; r < rows; ++r) for (uint32_t c = 0; c < cols; ++c)
+            block[e * rows * cols + r * cols + c] = m[e * 16 + (transpose ? c * 4 + r : r * 4 + c)];
+    return set_floats(t, i, block, count * rows * cols);
 }
+COM_METHOD(ct, SetMatrix, 4) { return set_matrices(CT, ARG(2), ARG(3), 1, 0); }
+COM_METHOD(ct, SetMatrixArray, 5) { return set_matrices(CT, ARG(2), ARG(3), ARG(4), 0); }
 COM_METHOD(ct, SetMatrixPointerArray, 5) { void_log("[d3dx] SetMatrixPointerArray unsupported"); return D3DERR_INVALIDCALL; }
-COM_METHOD(ct, SetMatrixTranspose, 4)
-{
-    ctable_t *t = CT;
-    int i = ct_handle_index(t, ARG(2));
-    if (i < 0) return D3DERR_INVALIDCALL;
-    uint32_t type = ct_type(t, i), rows = MEM16(type + 4), cols = MEM16(type + 6);
-    const float *m = (const float *)GPTR(ARG(3));
-    float block[16];
-    for (uint32_t r = 0; r < rows && r < 4; ++r) for (uint32_t c = 0; c < cols && c < 4; ++c) block[r * cols + c] = m[c * 4 + r];
-    return set_floats(t, i, block, rows * cols, 0);
-}
+COM_METHOD(ct, SetMatrixTranspose, 4) { return set_matrices(CT, ARG(2), ARG(3), 1, 1); }
 COM_METHOD(ct, SetMatrixTransposeArray, 5) { void_log("[d3dx] SetMatrixTransposeArray unsupported"); return D3DERR_INVALIDCALL; }
 COM_METHOD(ct, SetMatrixTransposePointerArray, 5) { void_log("[d3dx] SetMatrixTransposePointerArray unsupported"); return D3DERR_INVALIDCALL; }
 
@@ -361,11 +359,13 @@ static void_com_class ctable_class = { "ID3DXConstantTable", 27, ctable_methods,
 static uint32_t find_ctab(uint32_t code, uint32_t *size)
 {
     uint32_t p = code + 4;
-    for (int guard = 0; guard < 100000; ++guard) {
+    if (!void_vm_readable(code, 4)) return 0;
+    for (int guard = 0; guard < 100000 && void_vm_readable(p, 4); ++guard) {
         uint32_t token = MEM32(p);
         if (token == 0x0000FFFFu) break;
         if ((token & 0xFFFF) == 0xFFFE) {
             uint32_t len = (token >> 16) & 0x7FFF;
+            if (!void_vm_readable(p, 4 + 4 * len)) break;
             if (len >= 1 && MEM32(p + 4) == FOURCC('C','T','A','B')) { *size = 4 * (len - 1); return p + 8; }
             p += 4 + 4 * len;
             continue;
@@ -378,18 +378,28 @@ static uint32_t find_ctab(uint32_t code, uint32_t *size)
 static uint32_t make_ctable(uint32_t code)
 {
     uint32_t size = 0, ctab = find_ctab(code, &size);
-    if (!ctab) return 0;
+    if (!ctab || size < 28) return 0;
+    uint32_t count = MEM32(ctab + 12), first = MEM32(ctab + 16);
+    if (first > size || count > (size - first) / 20) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t info = ctab + first + 20 * i;
+        uint32_t name = MEM32(info), type = MEM32(info + 12), initial = MEM32(info + 16);
+        if (name >= size || !memchr(GPTR(ctab + name), 0, size - name) ||
+            type > size - 16 || initial >= size) return 0;
+    }
     ctable_t *t = (ctable_t *)calloc(1, sizeof *t);
+    if (!t) return 0;
     t->size = size;
     t->blob = void_galloc(size);
+    if (!t->blob) { free(t); return 0; }
     memcpy(GPTR(t->blob), GPTR(ctab), size);
-    t->count = (int)MEM32(t->blob + 12);
+    t->count = (int)count;
     t->pixel = (MEM32(code) & 0xFFFF0000u) == 0xFFFF0000u;
     t->handles = void_galloc(8u * (uint32_t)(t->count ? t->count : 1));
+    if (!t->handles) { ct_destroy(&t->com); return 0; }
     for (int i = 0; i < t->count; ++i) { MEM32(t->handles + 8u * (uint32_t)i) = FOURCC('C','T','H','D'); MEM32(t->handles + 8u * (uint32_t)i + 4) = (uint32_t)i; }
     uint32_t guest = void_com_wrap(&t->com, &ctable_class, 0);
     t->com.destroy = ct_destroy;
-    if (table_count < 4096) tables[table_count++] = t;
     return guest;
 }
 
@@ -446,11 +456,11 @@ static char *read_all(const char *path, size_t *size)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END)) { fclose(f); return NULL; }
     long n = ftell(f);
-    rewind(f);
+    if (n < 0 || (unsigned long)n >= UINT32_MAX || fseek(f, 0, SEEK_SET)) { fclose(f); return NULL; }
     char *data = (char *)malloc((size_t)n + 1);
-    if (fread(data, 1, (size_t)n, f) != (size_t)n) { free(data); fclose(f); return NULL; }
+    if (!data || fread(data, 1, (size_t)n, f) != (size_t)n) { free(data); fclose(f); return NULL; }
     data[n] = 0;
     fclose(f);
     *size = (size_t)n;
@@ -496,8 +506,8 @@ typedef struct { void_com_object com; int proc; } txshader_t;
 COM_METHOD(txs, QueryInterface, 3) { void_com_addref(&TXS->com); MEM32(ARG(2)) = THIS_; return 0; }
 COM_METHOD(txs, AddRef, 1) { return void_com_addref(&TXS->com); }
 COM_METHOD(txs, Release, 1) { return void_com_release(&TXS->com); }
-COM_METHOD(txs, GetFunction, 2) { MEM32(ARG(1)) = tx_bytecode(TXS->proc); return D3D_OK; }
-COM_METHOD(txs, GetConstantBuffer, 2) { MEM32(ARG(1)) = make_buffer(NULL, 0); return D3D_OK; }
+COM_METHOD(txs, GetFunction, 2) { uint32_t b = tx_bytecode(TXS->proc); MEM32(ARG(1)) = b; return b ? D3D_OK : E_OUTOFMEMORY_; }
+COM_METHOD(txs, GetConstantBuffer, 2) { uint32_t b = make_buffer(NULL, 0); MEM32(ARG(1)) = b; return b ? D3D_OK : E_OUTOFMEMORY_; }
 COM_METHOD(txs, GetDesc, 2) { MEM32(ARG(1)) = 0; MEM32(ARG(1) + 4) = 0x54580100u; MEM32(ARG(1) + 8) = 0; return D3D_OK; }
 COM_TODO(txs, ConstantAccess)
 static const void_fn txshader_methods[] = {
@@ -512,11 +522,12 @@ static void_com_class txshader_class = { "ID3DXTextureShader", 26, txshader_meth
 WINAPI_EXPORT(D3DX, D3DXCreateTextureShader, 2)
 {
     uint32_t code = ARG(0);
-    if (MEM32(code) != 0x54580100u || MEM32(code + 8) != FOURCC('V','T','X','S')) {
+    if (!void_vm_readable(code, 16) || MEM32(code) != 0x54580100u || MEM32(code + 8) != FOURCC('V','T','X','S')) {
         void_log("[d3dx] D3DXCreateTextureShader: unknown texture shader bytecode");
         return D3DERR_INVALIDCALL;
     }
     txshader_t *t = (txshader_t *)calloc(1, sizeof *t);
+    if (!t) return E_OUTOFMEMORY_;
     t->proc = (int)MEM32(code + 12);
     MEM32(ARG(1)) = void_com_wrap(&t->com, &txshader_class, 0);
     return D3D_OK;
@@ -677,6 +688,7 @@ static int cache_answer(uint64_t h, uint32_t *out, uint32_t *hr)
     if (blob) {
         *out = make_buffer(blob, (uint32_t)size);
         free(blob);
+        if (!*out) { *hr = E_OUTOFMEMORY_; return -1; }
         return 1;
     }
     snprintf(path, sizeof path, "%s/shadercache/%016llx.err", void_data_dir(), (unsigned long long)h);
@@ -689,9 +701,7 @@ static int cache_answer(uint64_t h, uint32_t *out, uint32_t *hr)
         messages = nl ? nl + 1 : blob + size;
     }
     *hr = code ? (uint32_t)code : E_FAIL_;
-    size_t n = size - (size_t)(messages - blob);
-    *out = make_buffer(messages, (uint32_t)n + 1);
-    ((char *)GPTR(((dxbuffer_t *)void_com_host(*out))->data))[n] = 0;
+    *out = make_buffer(messages, (uint32_t)(size - (size_t)(messages - blob)) + 1);
     free(blob);
     return -1;
 }
@@ -758,17 +768,19 @@ static int shader_service(uint32_t src, uint32_t len, uint32_t defines, uint32_t
 WINAPI_EXPORT(D3DX, D3DXCompileShader, 10)
 {
     uint32_t src = ARG(0), len = ARG(1), defines = ARG(2), include = ARG(3);
+    if (len && !void_vm_readable(src, len)) return D3DERR_INVALIDCALL;
     const char *function = ARG(4) ? (const char *)GPTR(ARG(4)) : "";
     const char *profile = ARG(5) ? (const char *)GPTR(ARG(5)) : "";
     uint32_t flags = ARG(6);
     if (!strcmp(profile, "tx_1_0")) {
         int proc = tx_match((const char *)GPTR(src), len);
         if (proc != TX_NONE) {
-            if (ARG(7)) MEM32(ARG(7)) = tx_bytecode(proc);
+            uint32_t code = ARG(7) ? tx_bytecode(proc) : 0;
+            if (ARG(7)) MEM32(ARG(7)) = code;
             if (ARG(8)) MEM32(ARG(8)) = 0;
             if (ARG(9)) MEM32(ARG(9)) = 0;
             VLOG("[d3dx] texture shader recognised as procedure %d", proc);
-            return D3D_OK;
+            return ARG(7) && !code ? E_OUTOFMEMORY_ : D3D_OK;
         }
     }
     uint32_t buffer = 0, hr = 0;
@@ -780,9 +792,11 @@ WINAPI_EXPORT(D3DX, D3DXCompileShader, 10)
         return D3D_OK;
     }
     if (answer < 0) {
-        void_log("[d3dx] D3DXCompileShader %s/%s fails as on Windows: %s", function, profile,
-            (const char *)GPTR(((dxbuffer_t *)void_com_host(buffer))->data));
-        if (ARG(8)) MEM32(ARG(8)) = buffer; else void_com_release((void_com_object *)void_com_host(buffer));
+        if (buffer) {
+            void_log("[d3dx] D3DXCompileShader %s/%s fails as on Windows: %s", function, profile,
+                (const char *)GPTR(((dxbuffer_t *)void_com_host(buffer))->data));
+        }
+        if (ARG(8)) MEM32(ARG(8)) = buffer; else if (buffer) void_com_release((void_com_object *)void_com_host(buffer));
         if (ARG(7)) MEM32(ARG(7)) = 0;
         if (ARG(9)) MEM32(ARG(9)) = 0;
         return hr;
@@ -811,6 +825,7 @@ WINAPI_EXPORT(D3DX, D3DXCompileShaderFromFileA, 9)
 WINAPI_EXPORT(D3DX, D3DXAssembleShader, 7)
 {
     uint32_t src = ARG(0), len = ARG(1), defines = ARG(2);
+    if (len && !void_vm_readable(src, len)) return D3DERR_INVALIDCALL;
     uint32_t buffer = 0, hr = 0;
     int answer = shader_service(src, len, defines, ARG(3), "@asm", "asm", ARG(4), &buffer, &hr);
     if (answer > 0) {
@@ -819,8 +834,8 @@ WINAPI_EXPORT(D3DX, D3DXAssembleShader, 7)
         return D3D_OK;
     }
     if (answer < 0) {
-        void_log("[d3dx] D3DXAssembleShader fails as on Windows: %s", (const char *)GPTR(((dxbuffer_t *)void_com_host(buffer))->data));
-        if (ARG(6)) MEM32(ARG(6)) = buffer; else void_com_release((void_com_object *)void_com_host(buffer));
+        if (buffer) void_log("[d3dx] D3DXAssembleShader fails as on Windows: %s", (const char *)GPTR(((dxbuffer_t *)void_com_host(buffer))->data));
+        if (ARG(6)) MEM32(ARG(6)) = buffer; else if (buffer) void_com_release((void_com_object *)void_com_host(buffer));
         if (ARG(5)) MEM32(ARG(5)) = 0;
         return hr;
     }
@@ -840,10 +855,10 @@ WINAPI_EXPORT(D3DX, D3DXAssembleShader, 7)
         if (pd) MOJOSHADER_freeParseData(pd);
         return D3DXERR_INVALIDDATA;
     }
-    if (ARG(5)) MEM32(ARG(5)) = make_buffer(pd->output, (uint32_t)pd->output_len);
+    if (ARG(5)) { buffer = make_buffer(pd->output, (uint32_t)pd->output_len); MEM32(ARG(5)) = buffer; }
     if (ARG(6)) MEM32(ARG(6)) = 0;
     MOJOSHADER_freeParseData(pd);
-    return D3D_OK;
+    return ARG(5) && !buffer ? E_OUTOFMEMORY_ : D3D_OK;
 }
 
 /* D3DXDisassembleShader(code, colorcode, comments, ppDisassembly): Microsoft's
@@ -853,12 +868,15 @@ WINAPI_EXPORT(D3DX, D3DXAssembleShader, 7)
 WINAPI_EXPORT(D3DX, D3DXDisassembleShader, 4)
 {
     uint32_t code = ARG(0), out = ARG(3);
+    if (!void_vm_writable(out, 4)) return D3DERR_INVALIDCALL;
+    MEM32(out) = 0;
     uint32_t size = d3d_shader_bytecode_size(code);
     if (size) {
         /* The comment travels as a one-entry D3DXMACRO list. */
         uint32_t macro = 0;
         if (ARG(2)) {
             macro = void_galloc(16);
+            if (!macro) return E_OUTOFMEMORY_;
             MEM32(macro) = void_gstrdup("comments");
             MEM32(macro + 4) = ARG(2);
             MEM32(macro + 8) = 0;
@@ -868,14 +886,15 @@ WINAPI_EXPORT(D3DX, D3DXDisassembleShader, 4)
         int answer = shader_service(code, size, macro, 0, "@disasm", "disasm", ARG(1), &buffer, &hr);
         if (macro) { void_gfree(MEM32(macro)); void_gfree(macro); }
         if (answer > 0) { MEM32(out) = buffer; return D3D_OK; }
-        if (answer < 0) { void_com_release((void_com_object *)void_com_host(buffer)); MEM32(out) = 0; return hr; }
+        if (answer < 0) { if (buffer) void_com_release((void_com_object *)void_com_host(buffer)); return hr; }
     }
     const MOJOSHADER_parseData *pd = size ? MOJOSHADER_parse(MOJOSHADER_PROFILE_D3D, "main", (const unsigned char *)GPTR(code),
         size, NULL, 0, NULL, 0, NULL, NULL, NULL) : NULL;
     const char *text = pd && !pd->error_count ? pd->output : "// disassembly unavailable\n";
-    MEM32(out) = make_buffer(text, (uint32_t)strlen(text) + 1);
+    uint32_t buffer = make_buffer(text, (uint32_t)strlen(text) + 1);
+    MEM32(out) = buffer;
     if (pd) MOJOSHADER_freeParseData(pd);
-    return D3D_OK;
+    return buffer ? D3D_OK : E_OUTOFMEMORY_;
 }
 
 /* ================================================================ textures */
@@ -969,10 +988,10 @@ static int dxvk_read_rgba(void *surface, const d3d_format *f, const uint32_t *re
     void *held;
     const uint8_t *bits = void_dxvk_surface_map(surface, &pitch, &held);
     if (!bits) return 0;
-    d3d_format_decode(f, bits + (size_t)rect[1] * (uint32_t)pitch + (size_t)rect[0] * (f->bits / 8),
-                      rect[2] - rect[0], rect[3] - rect[1], (uint32_t)pitch, rgba);
+    int decoded = pitch > 0 && d3d_format_decode(f, bits + (size_t)rect[1] * (uint32_t)pitch + (size_t)rect[0] * (f->bits / 8),
+                     rect[2] - rect[0], rect[3] - rect[1], (uint32_t)pitch, rgba);
     void_dxvk_surface_unmap(held);
-    return 1;
+    return decoded;
 }
 
 static uint32_t dxvk_filter_levels(void *texture, int cube, uint32_t first, uint32_t count)

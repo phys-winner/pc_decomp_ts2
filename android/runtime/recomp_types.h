@@ -1165,14 +1165,9 @@ static inline void CPUID_impl(uint32_t eax_val, uint32_t ebx_val, uint32_t ecx_v
 /* CPUID_impl writes the global registers */
 #define CPUID(a, b, c, d) do { RECOMP_REGS_OUT(); CPUID_impl(a, b, c, d); RECOMP_REGS_IN(); } while (0)
 
-/* RDTSC: the ARM64 virtual counter rescaled to the 3.4 GHz invariant TSC of
- * the processor in the CPUID table, so cycle budgets keep their PC length. */
-static inline uint64_t __rdtsc(void) {
-    uint64_t ticks, freq;
-    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(ticks));
-    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
-    return freq ? (uint64_t)(((unsigned __int128)ticks * 3400000000u) / freq) : ticks;
-}
+/* RDTSC: the shared guest clock expressed in virtual CPU cycles. */
+uint64_t void_rdtsc(void);
+static inline uint64_t __rdtsc(void) { return void_rdtsc(); }
 
 /* ============================================================
  * Indirect Call Dispatch

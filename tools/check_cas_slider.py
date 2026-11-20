@@ -302,7 +302,7 @@ def build_source(touch_source=None):
     state = u[u.index('typedef struct { uint32_t hwnd, msg, wparam, lparam, time, x, y; } qmsg_t;'):
               u.index('static void timers_post_due(void);')]
     state += i[i.index('typedef struct { uint32_t msg, wparam, lparam; } pending_t;'):i.index('void void_input_screen_size(')]
-    state += 'static __thread unsigned message_depth, touch_barrier_deferred;\n'
+    state += 'static __thread unsigned message_depth, touch_barrier_deferred, modal_message_depth;\n'
     prelude = T.PRELUDE.replace('static void drive(void);',
         'static void drive(void);\nstatic unsigned mono_ns,time_fail,read_only_stack;')
     prelude += '\nuint64_t void_monotonic_ns(void){return mono_ns;}\n'
@@ -354,7 +354,7 @@ def main():
     cfile, binary = output / 'check.c', output / 'check.elf'
     before_source=OUT/'before-v14d/android/host/sims2_touch.c' if args.expect_v14d_failure else None
     cfile.write_text(build_source(before_source))
-    subprocess.run([str(B.CLANG), *B.COMMON, '-O2', '-fno-builtin', '-fno-stack-protector', '-nostdlib',
+    subprocess.run([str(B.CLANG), *B.COMMON, '-O2', '-mno-outline-atomics', '-fno-builtin', '-fno-stack-protector', '-nostdlib',
         '-Iandroid/host', '-Iandroid/runtime', '-Wl,--gc-sections,-e,selftest', str(cfile), '-o', str(binary)], check=True)
     elf = ELFFile(io.BytesIO(binary.read_bytes()))
     symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}

@@ -22,6 +22,10 @@ def check_c():
     source = re.sub(r'^#include .*\n', '', source, flags=re.M)
     prelude = r'''
 typedef unsigned int uint32_t;
+typedef int pthread_mutex_t;
+#define PTHREAD_MUTEX_INITIALIZER 0
+static void pthread_mutex_lock(pthread_mutex_t *lock){++*lock;}
+static void pthread_mutex_unlock(pthread_mutex_t *lock){--*lock;}
 #define NULL ((void *)0)
 #define S2_TOUCH_FOCUSED_TEXT 1024
 #define S2_TOUCH_BUY 256
@@ -30,8 +34,9 @@ static unsigned char memory[0x40000];
 #define MEM32(a) (*(uint32_t *)(memory+(a)))
 #define MEM8(a) memory[(a)]
 static uint32_t g_ecx,g_eax,g_esp,context,owner=0x10000,calls,nested,preps,prepare_behavior,epoch;
-static int width=1170,height=540;
+static int width=1170,height=540,rewards;
 static uint32_t s2_touch_context(void){return context;}
+static int s2_touch_rewards(void){return rewards;}
 static uint32_t s2_touch_owner_manager(void){return owner;}
 static unsigned s2_touch_layout_epoch(void){return epoch;}
 static void void_input_screen_size(int *w,int *h){*w=width;*h=height;}
@@ -90,6 +95,8 @@ static void setup(void){
  preparing_catalog_popup=0;g_ecx=0x15008;g_esp=0x2F000;g_eax=1;
 }
 __declspec(dllexport) uint32_t check_all(void){
+ setup();context=S2_TOUCH_BUY;rewards=1;sub_A07495DA();if(calls!=1||g_esp!=0x2F004)return 91;
+ rewards=0;
  for(unsigned mode=256;mode<=512;mode+=256){
   setup();context=mode;sub_A07495DA();if(calls||g_esp!=0x2F004||g_eax)return 1;
   setup();context=mode;if(!s2_catalog_info(0x11000)||calls!=1||g_esp!=0x2F000||explicit_catalog_popup)return 2;

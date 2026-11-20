@@ -53,8 +53,15 @@ static int attr_cache_ready;
 extern uint32_t d3d_constant_generation;
 
 /* The Android activity provides the window; the shell build has none. */
-__attribute__((weak)) void *void_android_window(void) { return NULL; }
-__attribute__((weak)) void void_android_frame_presented(void) {}
+#ifdef VOID_ANDROID_APP
+#include <android/native_window.h>
+void void_android_frame_presented(void);
+void void_android_gpu_strings(const char *renderer, const char *version);
+static void release_window(void *window) { if (window) ANativeWindow_release(window); }
+#else
+void void_android_frame_presented(void) {}
+static void release_window(void *window) { (void)window; }
+#endif
 __attribute__((weak)) void *void_android_window_current(uint32_t *serial, int wait) { (void)wait; *serial = 0; return NULL; }
 __attribute__((weak)) void void_android_window_ack(uint32_t serial) { (void)serial; }
 
@@ -64,6 +71,20 @@ static EGLConfig egl_config;
 static EGLSurface egl_pbuffer = EGL_NO_SURFACE;
 static uint32_t egl_window_serial;
 
+static void attach_window_surface(void *window)
+{
+    EGLSurface next = eglCreateWindowSurface(egl_display, egl_config, (EGLNativeWindowType)window, NULL);
+    release_window(window);
+    if (next == EGL_NO_SURFACE || !eglMakeCurrent(egl_display, next, next, egl_context)) {
+        void_log("[gl] new window surface failed %04X", eglGetError());
+        if (next != EGL_NO_SURFACE) eglDestroySurface(egl_display, next);
+        return;
+    }
+    egl_surface = next;
+    eglSwapInterval(egl_display, 1);
+    void_log("[gl] presenting into a new window surface");
+}
+
 /* Take up the activity's current window if it changed since the last frame.
  * Without one (the app in the background) the game waits here, letting the
  * other guest threads run, until the activity has a surface again. */
@@ -71,28 +92,22 @@ static void follow_window(void)
 {
     uint32_t serial;
     void *window = void_android_window_current(&serial, 0);
-    if (serial == egl_window_serial && egl_surface != EGL_NO_SURFACE) return;
+    if (serial == egl_window_serial && egl_surface != EGL_NO_SURFACE) {
+        release_window(window);
+        return;
+    }
     eglMakeCurrent(egl_display, egl_pbuffer, egl_pbuffer, egl_context);
     if (egl_surface != EGL_NO_SURFACE) eglDestroySurface(egl_display, egl_surface);
     egl_surface = EGL_NO_SURFACE;
-    egl_window_serial = serial;
-    void_android_window_ack(serial);
     if (!window) {
+        void_android_window_ack(serial);
         void_log("[gl] surface gone: the game waits for the activity");
         d3d_rt_wait_begin();
         window = void_android_window_current(&serial, 1);
         d3d_rt_wait_end();
-        egl_window_serial = serial;
     }
-    egl_surface = eglCreateWindowSurface(egl_display, egl_config, (EGLNativeWindowType)window, NULL);
-    if (egl_surface == EGL_NO_SURFACE || !eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context)) {
-        void_log("[gl] new window surface failed %04X", eglGetError());
-        eglMakeCurrent(egl_display, egl_pbuffer, egl_pbuffer, egl_context);
-        egl_surface = EGL_NO_SURFACE;
-    } else {
-        eglSwapInterval(egl_display, 1);
-        void_log("[gl] presenting into a new window surface");
-    }
+    egl_window_serial = serial;
+    if (window) attach_window_surface(window);
     void_android_window_ack(serial);
 }
 
@@ -110,26 +125,25 @@ int d3d_gl_init(void)
         EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_NONE };
     EGLConfig config;
     EGLint n = 0;
-    if (!eglChooseConfig(egl_display, attrs, &config, 1, &n) || !n) { void_log("[gl] no EGL config"); return 0; }
+    if (!eglChooseConfig(egl_display, attrs, &config, 1, &n) || !n) { void_log("[gl] no EGL config"); goto failed; }
     egl_config = config;
     const EGLint ctx_attrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_CONTEXT_MINOR_VERSION_KHR, 2, EGL_NONE };
     egl_context = eglCreateContext(egl_display, config, EGL_NO_CONTEXT, ctx_attrs);
-    if (egl_context == EGL_NO_CONTEXT) { void_log("[gl] eglCreateContext failed %04X", eglGetError()); return 0; }
+    if (egl_context == EGL_NO_CONTEXT) { void_log("[gl] eglCreateContext failed %04X", eglGetError()); goto failed; }
     const EGLint pb[] = { EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE };
-    if (window_mode) {
-        egl_surface = eglCreateWindowSurface(egl_display, config, (EGLNativeWindowType)window, NULL);
-        egl_pbuffer = eglCreatePbufferSurface(egl_display, config, pb);
-    } else {
-        egl_surface = eglCreatePbufferSurface(egl_display, config, pb);
-    }
-    if (egl_surface == EGL_NO_SURFACE || !eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context)) {
+    egl_pbuffer = eglCreatePbufferSurface(egl_display, config, pb);
+    if (egl_pbuffer == EGL_NO_SURFACE || !eglMakeCurrent(egl_display, egl_pbuffer, egl_pbuffer, egl_context)) {
         void_log("[gl] EGL surface/current failed %04X", eglGetError());
-        return 0;
+        goto failed;
     }
+    if (window_mode) attach_window_surface(window);
+    else egl_surface = egl_pbuffer;
     current_gl_program_valid = 0;
-    if (window_mode) eglSwapInterval(egl_display, 1);
     void_log("[gl] %s / %s / %s (%s)", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION),
         window_mode ? "window" : "pbuffer");
+#ifdef VOID_ANDROID_APP
+    void_android_gpu_strings((const char *)glGetString(GL_RENDERER), (const char *)glGetString(GL_VERSION));
+#endif
     GLint value = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &value); d3d_gl_limits.max_texture = (uint32_t)value;
     glGetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &value); d3d_gl_limits.max_3d_texture = (uint32_t)value;
@@ -151,6 +165,15 @@ int d3d_gl_init(void)
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     init_msaa();
     return 1;
+failed:
+    release_window(window);
+    if (egl_pbuffer != EGL_NO_SURFACE) eglDestroySurface(egl_display, egl_pbuffer);
+    if (egl_context != EGL_NO_CONTEXT) eglDestroyContext(egl_display, egl_context);
+    eglTerminate(egl_display);
+    egl_pbuffer = EGL_NO_SURFACE;
+    egl_context = EGL_NO_CONTEXT;
+    egl_display = EGL_NO_DISPLAY;
+    return 0;
 }
 
 /* ------------------------------------------------------------- targets */
@@ -196,10 +219,11 @@ static int scaled_px(uint32_t v, float k) { return k == 1.0f ? (int)v : (int)((f
 
 void d3d_scaled_add(d3d_surface *s, d3d_texture *t)
 {
+    if (!s && !t) return;
     if (scaled_count >= MAX_SCALED) { void_log("[gl] more than %d screen-sized targets", MAX_SCALED); return; }
     scaled_is_texture[scaled_count] = t != NULL;
     scaled[scaled_count++] = t ? (void *)t : (void *)s;
-    if (applied_scale == 0.0f) applied_scale = s ? s->scale : t->scale;
+    if (applied_scale == 0.0f) applied_scale = t ? t->scale : s->scale;
 }
 
 void d3d_scaled_remove(void *object)

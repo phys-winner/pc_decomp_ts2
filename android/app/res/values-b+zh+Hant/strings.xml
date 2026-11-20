@@ -44,4 +44,5 @@
   <string name="target_ground">地面</string>
   <string name="target_object">物品 %1$d</string>
   <string name="target_changed">目標已移動。請再次輕觸。</string>
+  <string name="floor_swipe_hint">用三根手指向上或向下滑動即可切換樓層。</string>
 </resources>

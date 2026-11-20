@@ -131,14 +131,17 @@ void d3d_storage_swizzle(const d3d_format *f, uint32_t usage, GLint sw[4])
 }
 
 /* Guest texels (D3D layout, `pitch` bytes per row or block row) to logical RGBA. */
-void d3d_format_decode(const d3d_format *f, const uint8_t *src, uint32_t width, uint32_t height, uint32_t pitch, float *rgba)
+int d3d_format_decode(const d3d_format *f, const uint8_t *src, uint32_t width, uint32_t height, uint32_t pitch, float *rgba)
 {
+    if (!width || height > UINT32_MAX / width) return 0;
     void *owned;
     size_t size;
     const void *gl = d3d_format_convert(f, src, width, height, pitch, &owned, &size, 0);
+    if (!gl) return 0;
     d3d_gl_layout_to_rgba(f->format, f->type, gl, width * height, rgba);
     d3d_swizzle_rgba(f->swizzle, rgba, width * height);
     free(owned);
+    return 1;
 }
 
 static uint32_t unorm(float v, uint32_t max)

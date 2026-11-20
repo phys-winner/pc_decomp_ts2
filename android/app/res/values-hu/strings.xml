@@ -44,4 +44,5 @@
   <string name="target_ground">Talaj</string>
   <string name="target_object">Tárgy %1$d</string>
   <string name="target_changed">A célpont elmozdult. Koppints újra.</string>
+  <string name="floor_swipe_hint">A szintváltáshoz húzd három ujjadat felfelé vagy lefelé.</string>
 </resources>

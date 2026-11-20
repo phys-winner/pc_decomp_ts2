@@ -44,4 +44,5 @@
   <string name="target_ground">Bakken</string>
   <string name="target_object">Gjenstand %1$d</string>
   <string name="target_changed">Målet har flyttet seg. Trykk igjen.</string>
+  <string name="floor_swipe_hint">Sveip opp eller ned med tre fingre for å bytte etasje.</string>
 </resources>

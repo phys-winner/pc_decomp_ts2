@@ -44,4 +44,5 @@
   <string name="target_ground">พื้น</string>
   <string name="target_object">วัตถุ %1$d</string>
   <string name="target_changed">เป้าหมายเคลื่อนที่แล้ว แตะอีกครั้ง</string>
+  <string name="floor_swipe_hint">ใช้สามนิ้วปัดขึ้นหรือลงเพื่อเปลี่ยนชั้น</string>
 </resources>

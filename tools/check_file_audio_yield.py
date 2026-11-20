@@ -28,6 +28,7 @@ PRELUDE = r'''
 #define WIN_MAX_PATH 260
 #define VLOG(...) ((void)0)
 #define VOID_OBJ_FIND 1
+#define VOID_OBJ_FILE 2
 #include "dircache.h"
 #include "iostat.h"
 #include "readcache.h"
@@ -58,8 +59,11 @@ static overlay_t overlays[64];static int overlay_count;
 static char cwd[260]="C:\\";
 static pthread_mutex_t cwd_lock=PTHREAD_MUTEX_INITIALIZER;
 static unsigned char guest_memory[1024];
-static int owned=1,begins,ends,error;
-static void void_blocking_begin(void){assert(owned);owned=0;++begins;}
+static int owned=1,begins,ends,error,file_refs=1,file_handle_open=1,close_during_read;
+static void void_blocking_begin(void){
+ assert(owned);owned=0;++begins;
+ if(close_during_read){assert(file_refs==2&&file_handle_open);close_during_read=0;file_handle_open=0;--file_refs;}
+}
 static void void_blocking_end(void){assert(!owned);owned=1;++ends;}
 static void void_set_last_error(unsigned e){assert(owned);error=e;}
 static void *guest(uint32_t p){assert(owned&&p<sizeof guest_memory);return guest_memory+p;}
@@ -70,18 +74,30 @@ static void void_utf8_to_ga(const char *s,uint32_t p,unsigned n){snprintf(guest(
 static void void_utf8_to_gw(const char *s,uint32_t p,unsigned n){assert(owned);uint16_t *d=guest(p);unsigned i;for(i=0;i+1<n&&s[i];++i)d[i]=(uint8_t)s[i];d[i]=0;}
 typedef struct void_object {void *data;void (*destroy)(struct void_object*);} void_object;
 static void_object *current;
+static void_object fixture_object;
+static void close_fixture_descriptor(void);
 static void_object *void_object_new(int kind,size_t size){assert(owned&&kind==VOID_OBJ_FIND);current=calloc(1,sizeof *current);current->data=calloc(1,size);return current;}
-static void void_object_release(void_object *o){assert(owned);o->destroy(o);free(o->data);free(o);current=NULL;}
+static void void_object_release(void_object *o){
+ assert(owned);
+ if(!o)return;
+ if(o==&fixture_object){if(!--file_refs)close_fixture_descriptor();return;}
+ o->destroy(o);free(o->data);free(o);current=NULL;
+}
 static unsigned void_handle_new(void_object *o){assert(owned&&o==current);return 7;}
 typedef struct file_t {int fd,is_dir,std_stream;uint32_t wlen;int werr;struct file_t *wnext;
  uint64_t path_key;int cached_reads,lazy;off_t lazy_pos;const zm_entry *zip_entry;} file_t;
 static file_t fixture_file,*dirty_files;
+static void close_fixture_descriptor(void){assert(!close(fixture_file.fd));}
 static int file_flush(file_t *f){(void)f;return 0;}
 static int file_open_now(file_t *f,uint32_t h){(void)h;return f->fd>=0?0:-1;}
 static uint32_t args[5];
 #define ARG(i) args[i]
 #define WINAPI_EXPORT(d,n,c) static uint32_t n##_impl(void)
-static file_t *file_get(uint32_t h){assert(owned);return h==8?&fixture_file:NULL;}
+static void_object *void_handle_acquire(uint32_t h,int kind){
+ assert(owned&&kind==VOID_OBJ_FILE);
+ if(h!=8||!file_handle_open)return NULL;
+ ++file_refs;fixture_object.data=&fixture_file;return &fixture_object;
+}
 static int void_vm_writable(uint32_t p,uint32_t n){assert(owned);return (uint64_t)p+n<=sizeof guest_memory;}
 static unsigned void_errno_to_win32(int e){return e==EBADF?ERROR_INVALID_HANDLE_:5;}
 static DIR *checked_opendir(const char *p){assert(!owned);return opendir(p);}
@@ -93,7 +109,12 @@ static int checked_lstat(const char *p,struct stat *s){assert(!owned);return lst
 '''
 TEST = r'''
 int main(void){
- char folder[]="/data/local/tmp/sims2/file-yield-XXXXXX";assert(mkdtemp(folder));
+#ifdef __ANDROID__
+ char folder[]="/data/local/tmp/sims2/file-yield-XXXXXX";
+#else
+ char folder[]="/tmp/sims2-file-yield-XXXXXX";
+#endif
+ assert(mkdtemp(folder));
  char dir[1200],file[1300];snprintf(dir,sizeof dir,"%s/Dir",folder);assert(!mkdir(dir,0700));
  snprintf(file,sizeof file,"%s/Alpha.TXT",dir);FILE *out=fopen(file,"w");assert(out);fputs("audio",out);assert(!fclose(out));
  mounts[0].win="C:";snprintf(mounts[0].host,sizeof mounts[0].host,"%s",folder);
@@ -116,7 +137,9 @@ int main(void){
  args[2]=2;args[4]=32;MEM32(40)=3;MEM32(44)=0;
  assert(ReadFile_impl()==1&&MEM32(16)==2&&!memcmp(GPTR(768),"io",2)&&MEM32(36)==2);
  args[2]=2048;before=begins;assert(!ReadFile_impl()&&error==998&&begins==before);
- assert(!close(fixture_file.fd));
+ args[2]=1;args[4]=0;close_during_read=1;
+ assert(ReadFile_impl()==1&&MEM32(16)==1&&GPTR(768)[0]=='i'&&!file_refs&&!file_handle_open);
+ assert(fcntl(fixture_file.fd,F_GETFD)<0&&errno==EBADF);
  assert(owned&&begins==ends);assert(!unlink(file)&&!rmdir(dir)&&!rmdir(folder));
  puts("PASS file audio yield: case-insensitive paths, ANSI/wide enumeration/failures, small/zero/overlapped/invalid reads; host I/O unlocked, guest state locked");
  return 0;
@@ -128,13 +151,13 @@ def main():
     find_type=source[source.index('typedef struct {\n    char **names;'):source.index('static void find_destroy')]
     # A forward declaration starts each two-function slice (it runs to the
     # end of the function after it); the definitions follow by full header.
-    names=('static int normalize(', 'static int resolve_component(', 'static char *to_host_uncounted(',
+    names=('const char *void_overlay_path(', 'static int normalize(', 'static int resolve_component(', 'static char *to_host_uncounted(',
            'static char *to_host(', 'static int walk_components(',
            'static char *to_host_uncounted(const char *windows_path, int *parent_exists, char *normalized_out, int *type)\n{',
            'static void find_destroy(', 'static uint64_t unix_to_filetime(', 'static int fill_find_data(',
            'static uint32_t find_first_uncounted(',
            'static uint32_t find_first_uncounted(char *pattern_path, uint32_t out, int wide)\n{',
-           'WINAPI_EXPORT(K32, ReadFile, 5)')
+           'static void release_file_operation(', 'WINAPI_EXPORT(K32, ReadFile, 5)')
     out=ROOT/'build/test/file-audio-yield'
     out.mkdir(parents=True,exist_ok=True)
     fixture=out/'probe.c'

@@ -1,6 +1,5 @@
-"""Build the port's resource overlay: copies of game packages with a few UI
-resources changed, which the host serves in place of the originals (the
-installed game files are never modified).
+"""Build the port's resource overlay with patched game packages and pinned PE
+images. The host serves these copies at their original game paths.
 
 The Graphics/Performance Options panel (ui.package, type 0, instance
 0x49060F03, groups 0xA99D8A11 for 1024x768 and up and 0x08000600 for
@@ -25,6 +24,8 @@ to the game's save list, so Apply keeps the chosen values across restarts.
     python tools/build_overlay.py [--out build/overlay]
 """
 import argparse
+import hashlib
+import json
 import re
 import struct
 import sys
@@ -369,6 +370,16 @@ def main():
     patched = patch_neighborhood_warning(strings.read(entry))
     rewrite_package(GAME / text_rel, Path(args.out) / text_rel, {(entry['type'], entry['group'], entry['instance']): patched})
     print('Russian neighborhood hint: installed packs need associated districts')
+    modules = json.loads((ROOT / 'port.example.json').read_text(encoding='utf-8'))['modules']
+    for module in modules:
+        relative = Path(module['source'])
+        original = GAME / relative
+        data = original.read_bytes()
+        if hashlib.sha256(data).hexdigest() != module['sha256']:
+            raise SystemExit(f'{original} does not match the supported Legacy Collection image')
+        target = Path(args.out) / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
     count = sum(p.is_file() for p in Path(args.out).rglob('*'))
     if count > 64:
         raise SystemExit(f'{count} overlay files exceed the host capacity of 64')

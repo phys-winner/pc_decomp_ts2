@@ -22,6 +22,8 @@ static unsigned ui_target_logs,fling_logs;
 static void void_log(const char *s,...){(void)s;}
 static int void_vm_readable(uint32_t p,size_t n){return p>0&&(uint64_t)p+n<sizeof memory;}
 static unsigned s2_touch_context(void){return fixture_context;}
+static uint32_t fixture_modal;
+static uint32_t s2_touch_modal_window(void){return fixture_modal;}
 static unsigned s2_touch_layout_epoch(void){return fixture_epoch;}
 static uint32_t s2_touch_owner_manager(void){return fixture_manager;}
 static double s2_ui_factor(void){return fixture_factor;}
@@ -167,6 +169,10 @@ int main(void){
  /* Live mode: the open pie holds no capture and is found among the visible windows. */
  reset();pie();MEM32(0x1054)=0x4400;MEM32(0x4400)=0x4410;MEM32(0x4410)=0x4420;MEM32(0x4420)=0x4410;MEM32(0x4428)=0x3000;
  assert(!MEM32(0x834)&&touch_open_pie(0x800,0x1000)==0x3000);
+ window(0x5600,0x1000,180,200,590,450);fixture_modal=0x5600;
+ assert(!touch_open_pie(0x800,0x1000));
+ fixture_modal=0x3000;assert(touch_open_pie(0x800,0x1000)==0x3000);
+ fixture_modal=0;
  MEM32(0x30E8)=1;assert(!touch_open_pie(0x800,0x1000));MEM32(0x30E8)=3;
  MEM32(0x3004)=0x900;assert(!touch_open_pie(0x800,0x1000));MEM32(0x3004)=0x800;
  MEM32(0x10E8)=0;assert(!touch_open_pie(0x800,0x1000));MEM32(0x10E8)=3;

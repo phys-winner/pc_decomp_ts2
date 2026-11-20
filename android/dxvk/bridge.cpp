@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <vector>
 #include "bridge_abi.h"
-#include "turnip.h"
+#include "custom_vulkan.h"
 #include "bridge_metadata.h"
 
 #define EXPORT extern "C" __attribute__((visibility("default")))
@@ -764,18 +764,19 @@ uint32_t op_release(void *p) {
   }
   return refs;
 }
-uint32_t op_create9(uint32_t sdk, const char *library_path, const char *turnip_dir) {
+uint32_t op_create9(uint32_t sdk, const char *library_path, const char *native_dir, int renderer) {
   try {
     void *library = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
     if (!library) { say(dlerror()); return 0; }
-    if (turnip_dir) {
+    if (renderer == SIMS2_RENDERER_TURNIP || renderer == SIMS2_RENDERER_PANVK) {
+      bool panvk = renderer == SIMS2_RENDERER_PANVK;
       char error[512]{};
-      auto loader = sims2_open_turnip(turnip_dir, error, sizeof error);
+      auto loader = sims2_open_custom_vulkan(native_dir, panvk, error, sizeof error);
       using SetLoader = void (*)(PFN_vkGetInstanceProcAddr);
       auto set_loader = reinterpret_cast<SetLoader>(dlsym(library, kSetLoader));
       if (!loader || !set_loader) { say(loader ? "DXVK custom Vulkan loader hook unavailable" : error); return 0; }
       set_loader(loader);
-      say("Turnip Vulkan 1.3 driver loaded through adrenotools; the system driver stays in place");
+      say(panvk ? "PanVK Vulkan driver active" : "Turnip Vulkan driver active");
     }
     using Callbacks = void (*)(int (*)(uint32_t*, uint32_t*, uint32_t*), void (*)(const void*, uint64_t, int32_t), void (*)());
     auto callbacks = reinterpret_cast<Callbacks>(dlsym(library, kSetCallbacks));

@@ -6,7 +6,7 @@ import java.io.IOException;
  *  player's words (Texts.failure). Plain Java. */
 final class Failure extends IOException {
     static final int NOT_ZIP = 1, SPLIT = 2, NOT_FOUND = 3, UNSAFE = 4, METHOD = 5, ENCRYPTED = 6, CORRUPT = 7,
-        FULL = 8, READ_ONLY = 9, IO = 10, CANCELLED = 11, REMOTE = 12, CHANGED = 13;
+        FULL = 8, READ_ONLY = 9, IO = 10, CANCELLED = 11, REMOTE = 12, CHANGED = 13, MD5_MISMATCH = 14;
 
     final int code;
     final String detail;

@@ -82,10 +82,13 @@ static char *fix_pixel_varyings(const char *src)
         char decl[48];
         snprintf(decl, sizeof decl, "in highp vec4 io_%u_%u;", u, i);
         if (strstr(src, decl) || strstr(decls, decl)) continue;
-        dn += (size_t)snprintf(decls + dn, sizeof decls - dn, "%s\n", decl);
+        int written = snprintf(decls + dn, sizeof decls - dn, "%s\n", decl);
+        if (written < 0 || (size_t)written >= sizeof decls - dn) return NULL;
+        dn += (size_t)written;
     }
     size_t len = strlen(src);
     char *body = (char *)malloc(len + 1), *w = body;
+    if (!body) return NULL;
     for (const char *line = src; *line;) {
         const char *end = strchr(line, '\n');
         size_t n = end ? (size_t)(end - line + 1) : strlen(line);
@@ -93,7 +96,9 @@ static char *fix_pixel_varyings(const char *src)
         unsigned u, i;
         if (!strncmp(line, "vec4 ps_", 8) && sscanf(line, "vec4 %31[a-z_0-9] = io_%u_%u;", name, &u, &i) == 3) {
             w += sprintf(w, "vec4 %s;\n", name);
-            mn += (size_t)snprintf(moved + mn, sizeof moved - mn, "\t%s = io_%u_%u;\n", name, u, i);
+            int written = snprintf(moved + mn, sizeof moved - mn, "\t%s = io_%u_%u;\n", name, u, i);
+            if (written < 0 || (size_t)written >= sizeof moved - mn) { free(body); return NULL; }
+            mn += (size_t)written;
         } else {
             memcpy(w, line, n);
             w += n;
@@ -104,12 +109,13 @@ static char *fix_pixel_varyings(const char *src)
     if (!dn && !mn) return body;
     char *with_decls = insert_before(body, "void main()", decls);
     free(body);
-    if (!mn) return with_decls;
+    if (!with_decls || !mn) return with_decls;
     const char *mainp = strstr(with_decls, "void main()");
     const char *brace = mainp ? strchr(mainp, '{') : NULL;
     if (!brace) return with_decls;
     size_t at = (size_t)(brace + 1 - with_decls);
     char *out = (char *)malloc(strlen(with_decls) + mn + 2);
+    if (!out) { free(with_decls); return NULL; }
     memcpy(out, with_decls, at);
     out[at] = '\n';
     memcpy(out + at + 1, moved, mn);

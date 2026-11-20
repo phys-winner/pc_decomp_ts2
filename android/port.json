@@ -41,9 +41,10 @@
       "version": "2025",
       "activity": "org.sims2.port.GameActivity",
       "renderers": [
+        "gles",
         "dxvk",
         "turnip",
-        "gles"
+        "panvk"
       ],
       "intro": {
         "default": false
@@ -60,16 +61,14 @@
           "marker": "EP9/TSData/Res/Config/globalProps.xml",
           "required": [
             "Base/TSData/",
-            "EP9/TSData/",
-            "EP9/TSBin/Sims2EP9.exe",
-            "EP9/TSBin/ijl15.dll"
+            "EP9/TSData/"
           ]
         }
       ]
     }
   ],
   "renderers": {
-    "default": "dxvk",
+    "default": "gles",
     "modes": [
       {
         "id": "gles",
@@ -118,11 +117,34 @@
           "libs2turnip.so",
           "libc++_shared.so"
         ]
+      },
+      {
+        "id": "panvk",
+        "kind": "panvk",
+        "title": "DXVK (PanVK)",
+        "description": {
+          "en": "DXVK with Mesa PanVK for compatible Mali GPUs",
+          "ru": "DXVK с Mesa PanVK для совместимых Mali",
+          "de": "DXVK mit Mesa PanVK für kompatible Mali-GPUs",
+          "pl": "DXVK z Mesa PanVK dla zgodnych układów Mali"
+        },
+        "driver": "libvulkan_panfrost.so",
+        "vulkan": "1.3",
+        "probe": "dxvk",
+        "minSdk": 30,
+        "libraries": [
+          "libs2dxvk.so",
+          "libdxvk_d3d9.so",
+          "libadrenotools.so",
+          "libvulkan_panfrost.so",
+          "libc++_shared.so"
+        ]
       }
     ]
   },
   "textures": {
-    "backend": "org.sims2.port.TextureCache"
+    "backend": "org.sims2.port.TextureCache",
+    "separateCache": true
   },
   "hints": {
     "gameFiles": {
@@ -135,6 +157,17 @@
     }
   },
   "options": [
+    {
+      "key": "fps_counter",
+      "type": "choice",
+      "default": "0",
+      "title": {"en": "FPS counter", "ru": "Счётчик FPS", "de": "FPS-Anzeige", "pl": "Licznik FPS"},
+      "choices": [
+        {"value": "0", "title": {"en": "Off", "ru": "Выключен", "de": "Aus", "pl": "Wyłączony"}},
+        {"value": "1", "title": {"en": "FPS and frame times", "ru": "FPS и время кадров", "de": "FPS und Bildzeiten", "pl": "FPS i czasy klatek"}},
+        {"value": "2", "title": {"en": "FPS, frame times and system info", "ru": "FPS, время кадров и данные системы", "de": "FPS, Bildzeiten und Systemdaten", "pl": "FPS, czasy klatek i dane systemu"}}
+      ]
+    },
     {
       "key": "game_language",
       "type": "choice",

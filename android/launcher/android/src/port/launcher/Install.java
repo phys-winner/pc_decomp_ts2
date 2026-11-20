@@ -149,6 +149,20 @@ final class Install {
         return State.get(context, State.CHOICES, key(d, p) + ".mount", "");
     }
 
+    static File textureCacheRoot(Context context, Spec spec, Spec.Distribution d, File game) {
+        if (!spec.separateTextureCache) return game;
+        File source = game;
+        try { source = game.getCanonicalFile(); } catch (IOException ignored) { }
+        boolean removable = false;
+        try { removable = android.os.Environment.isExternalStorageRemovable(source); }
+        catch (IllegalArgumentException ignored) { }
+        // A single cache can exceed FAT32's file limit, and media folders can restrict writes.
+        if (!removable && game.canWrite()) return game;
+        String identity = d.id + "\n" + source.getAbsolutePath() + "\n" + mount(context, d, d.parts.get(0));
+        String key = java.util.UUID.nameUUIDFromBytes(identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        return new File(context.getFilesDir(), "texture-caches/" + key);
+    }
+
     static void choose(Context context, Spec.Distribution d, Spec.Part p, File folder) {
         State.update(context, State.CHOICES, values -> {
             values.setProperty(key(d, p), folder.getAbsolutePath());

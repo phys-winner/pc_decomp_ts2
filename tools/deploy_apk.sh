@@ -1,7 +1,7 @@
 #!/bin/bash
 # Put the game on a device: the APK (build/android-game/sims2.apk, tools/build_game_apk.py)
 # with its storage permissions and every pack's TSData (/sdcard/Sims2/game, ~12 GB).
-# Original PE files come from EP9/TSBin; adaptation resources ship in the APK.
+# The APK supplies the PE images and port resources.
 # The profile (/sdcard/Sims2/userdata) is the game's own: it fills it on its
 # first start. Files already there with the same size are skipped by adb push
 # --sync, so a second run only completes an interrupted one.
@@ -41,12 +41,6 @@ def add_tree(local, remote):
             sources[f'{remote}/{path.relative_to(local).as_posix()}'] = path.stat().st_size
 for pack in packs:
     add_tree(Path(game) / pack / 'TSData', f'/sdcard/Sims2/game/{pack}/TSData')
-for name in ('Sims2EP9.exe', 'ijl15.dll'):
-    path = Path(game) / 'EP9/TSBin' / name
-    if not path.is_file():
-        sys.exit(f'missing game binary: {path}')
-    sources[f'/sdcard/Sims2/game/EP9/TSBin/{name}'] = path.stat().st_size
-
 def shell(command):
     return subprocess.check_output([adb, '-s', serial, 'shell', command], text=True)
 df = shell('df -Pk /sdcard').splitlines()
@@ -70,10 +64,7 @@ shell() { "$ADB" -s "$S" shell "$@"; }
 start=$(date +%s)
 "$ADB" -s "$S" install -r build/android-game/sims2.apk | tail -1
 shell "pm grant org.sims2.port android.permission.READ_EXTERNAL_STORAGE; pm grant org.sims2.port android.permission.WRITE_EXTERNAL_STORAGE" || true
-shell "mkdir -p /sdcard/Sims2/game/EP9/TSBin /sdcard/Sims2/userdata"
-for name in Sims2EP9.exe ijl15.dll; do
-    "$ADB" -s "$S" push --sync "$GAME/EP9/TSBin/$name" /sdcard/Sims2/game/EP9/TSBin/ | tail -1
-done
+shell "mkdir -p /sdcard/Sims2/userdata"
 for pack in "${packs[@]}"; do
     t=$(date +%s)
     shell "mkdir -p /sdcard/Sims2/game/$pack"

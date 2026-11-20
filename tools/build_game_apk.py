@@ -4,9 +4,9 @@
                                    [--java-only] [--push-lib] [--library PATH]
 
 The library comes from tools/build_android.py --shared (or --library PATH,
-which skips the native build); the game data, the PE
-images come from the installed game's EP9/TSBin. Port resources ship in the APK;
-the game data and writable profile live under /sdcard/Sims2 on the device.
+which skips the native build). Port resources and the two pinned PE images
+from the PC installation ship in the APK. The game data and writable profile
+live under /sdcard/Sims2 on the device.
 --java-only packs no library: the activity then loads the one pushed into its
 own files by --push-lib (run-as, debuggable APK), which keeps iterations on
 the touch layer to a small install. (The Void port's tool, adapted.)

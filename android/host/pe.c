@@ -369,10 +369,15 @@ int void_modules_init(const char *image_dir)
         void_module *m = &modules[module_count++];
         memset(m, 0, sizeof *m);
         snprintf(m->name, sizeof m->name, "%s", lifted[i].name);
-        snprintf(m->win_path, sizeof m->win_path, "%s\\%s", VIRTUAL_BIN, lifted[i].name);
+        snprintf(m->win_path, sizeof m->win_path, "%s\\%s", VIRTUAL_BIN, lifted[i].file);
         m->kind = lifted[i].exe ? MOD_LIFTED_EXE : MOD_LIFTED_DLL;
-        char path[1024];
-        snprintf(path, sizeof path, "%s/%s", image_dir, lifted[i].file);
+        /* Image mapping runs before the guest can enter the general file resolver. */
+        char external[1024];
+        const char *path = void_overlay_path(m->win_path);
+        if (!path) {
+            snprintf(external, sizeof external, "%s/%s", image_dir, lifted[i].file);
+            path = external;
+        }
         if (lifted[i].optional && access(path, F_OK)) {
             void_log("[void] optional module %s not installed", lifted[i].name);
             --module_count;
@@ -380,7 +385,8 @@ int void_modules_init(const char *image_dir)
         }
         if (!map_image(m, path, &lifted[i])) return 0;
         if (lifted[i].exe) { exe_base = m->base; m->state = ST_READY; m->refs = 1; }
-        void_log("[void] mapped %s at %08X size %08X entry %08X", m->name, m->base, m->size, m->entry);
+        void_log("[void] mapped %s at %08X size %08X entry %08X from %s",
+                 m->name, m->base, m->size, m->entry, path);
     }
     int ok = 1;
     for (int i = 0; i < module_count; ++i) if (modules[i].kind != MOD_PSEUDO) ok &= bind_imports(&modules[i]);

@@ -58,7 +58,8 @@ static int product_popup(uint32_t popup)
 void sub_A07495DA_lifted(void);
 void sub_A07495DA(void)
 {
-    if (catalog_mode() && product_popup(g_ecx) && explicit_catalog_popup != g_ecx) {
+    /* Rewards need the original popup even when the selection is still locked. */
+    if (catalog_mode() && !s2_touch_rewards() && product_popup(g_ecx) && explicit_catalog_popup != g_ecx) {
         g_eax = 0;
         g_esp += 4;
         return;

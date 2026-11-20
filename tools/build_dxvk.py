@@ -1,6 +1,6 @@
 """Stage the DXVK renderer of The Sims 2: import the pinned runtime and build its bridge.
 
-    python -X utf8 tools/build_dxvk.py [--ut3 DIR] [--dxvk-library SO] [--turnip-runtime DIR] [--dxvk-headers DIR]
+    python -X utf8 tools/build_dxvk.py [--ut3 DIR] [--dxvk-library SO] [--turnip-runtime DIR] [--panvk-runtime DIR] [--dxvk-headers DIR]
 
 Nothing is downloaded or rebuilt from DXVK sources. The pinned game-agnostic binaries imported from the mature HoMM5 port are reused: DXVK Native 2.4.1 D3D9 with its Android WSI
 (libdxvk_d3d9.so), adrenotools with its hooks, and the Mesa Turnip driver; libc++_shared.so
@@ -18,6 +18,7 @@ rebuilding it with the ut3 port's tools/build_dxvk.py and updating the pins here
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -33,7 +34,8 @@ API = 30   # adrenotools and the launcher require Android 11.
 TARGET = f"aarch64-linux-android{API}"
 BRIDGE_SOURCES = ("android/dxvk/bridge.cpp",)
 # Everything the bridge is built from or must agree with; the APK builder refuses a stale receipt.
-RECEIPT_SOURCES = (*BRIDGE_SOURCES, "android/dxvk/bridge_abi.h", "android/dxvk/turnip.h",
+RECEIPT_SOURCES = (*BRIDGE_SOURCES, "android/dxvk/bridge_abi.h", "android/dxvk/custom_vulkan.h",
+                   "android/launcher/native/panvk_identity.h",
                    "android/dxvk/bridge_metadata.h",
                    "android/dxvk/bridge_dispatch.h", "android/dxvk/bridge_special_names.h",
                    "android/host/dxvk_methods.h", "tools/build_dxvk.py", "tools/generate_dxvk_bridge.py")
@@ -59,7 +61,7 @@ def source_sha(path):
 
 def pins():
     data = json.loads((ROOT / "dependencies.json").read_text(encoding="utf-8"))
-    return {name: data[name] for name in ("dxvk", "adrenotools", "turnip", "libcxx_shared")}
+    return {name: data[name] for name in ("dxvk", "adrenotools", "turnip", "panvk", "libcxx_shared")}
 
 
 def check_elf(path):
@@ -145,6 +147,9 @@ def main():
                         help="sibling ut3 checkout whose build/dxvk, build/turnip-runtime and reference/dxvk are reused")
     parser.add_argument("--dxvk-library", type=Path, help="libdxvk_d3d9.so (default: <ut3>/build/dxvk)")
     parser.add_argument("--turnip-runtime", type=Path, help="adrenotools/Turnip runtime folder (default: <ut3>/build/turnip-runtime/runtime)")
+    parser.add_argument("--panvk-runtime", type=Path,
+                        default=Path(os.environ.get("S2_PANVK_RUNTIME", ROOT.parent / "frostpunk/build/gpu-runtime/panvk")),
+                        help="Frostpunk's patched PanVK build and notice")
     parser.add_argument("--dxvk-headers", type=Path, help="DXVK source tree with include/native (default: reference/dxvk, then <ut3>/reference/dxvk)")
     args = parser.parse_args()
     from prepare_dependencies import prepare
@@ -171,6 +176,8 @@ def main():
         sources[name] = (turnip_dir / name, digest)
     for name, original in TURNIP_DRIVER.items():
         sources[name] = (turnip_dir / original, pinned["turnip"]["runtime"][name])
+    sources["libvulkan_panfrost.so"] = (args.panvk_runtime / "libvulkan_panfrost-fixed.so",
+                                      pinned["panvk"]["runtime"]["libvulkan_panfrost.so"])
     for name, (source, digest) in sources.items():
         check_elf(copy(verified(source, digest, name), runtime / name))
     licenses.mkdir(parents=True, exist_ok=True)
@@ -178,6 +185,9 @@ def main():
         source = HEADERS / relative if component == "dxvk" else TOOLCHAIN / relative if component == "libcxx_shared" else turnip_dir / "licenses" / relative
         digest = pinned[component]["headers" if component == "dxvk" else "licenses"][relative]
         copy(verified(source, digest, name), licenses / name)
+    panvk_notice = "PanVK-JimVulkan-NOTICE.txt"
+    copy(verified(args.panvk_runtime / "NOTICE-fixed.txt", pinned["panvk"]["licenses"][panvk_notice], panvk_notice),
+         licenses / panvk_notice)
 
     library = compile_bridge(runtime)
     check_elf(library)
@@ -187,8 +197,8 @@ def main():
         "sources": {relative: source_sha(ROOT / relative) for relative in RECEIPT_SOURCES},
         "pins_sha256": hashlib.sha256(json.dumps(pinned, sort_keys=True).encode()).hexdigest(),
         "runtime": [{"name": name, "bytes": (runtime / name).stat().st_size, "sha256": sha(runtime / name)} for name in names],
-        "licenses": [{"name": name, "sha256": sha(licenses / name)} for name in sorted(LICENSES)],
-        "reused_from": "pinned HoMM5 runtime: DXVK Native 2.4.1 D3D9 + Android WSI, adrenotools/hooks, Mesa Turnip 26.0.0 R8",
+        "licenses": [{"name": name, "sha256": sha(licenses / name)} for name in sorted((*LICENSES, panvk_notice))],
+        "reused_from": "HoMM5 DXVK Native 2.4.1 D3D9 and Turnip; Frostpunk's patched Mesa PanVK",
         "device_verified": False,
     }
     (OUT / "build-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")

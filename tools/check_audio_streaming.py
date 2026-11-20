@@ -268,6 +268,8 @@ int main(void) {
 
 AAUDIO_HARNESS = r'''
 #include <assert.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -297,6 +299,7 @@ static int start_error,open_error,create_error,prime_result=480;
 static int64_t now_ns;
 static int32_t results[128];
 static unsigned result_count,result_index,write_calls,accepted_count,logs,level_reports,fallback_reports;
+static int64_t summary_log_delay_ns;
 static int selected_mode;
 static int hardware_burst=96,hardware_capacity=1920,hardware_size=192;
 static int requested_capacity,buffer_changes,buffer_error;
@@ -312,10 +315,14 @@ static int clock_gettime(int clock,struct timespec *out) {
     out->tv_nsec=(long)(now_ns%1000000000);return 0;
 }
 static int usleep(unsigned us) {now_ns+=(int64_t)us*1000;return 0;}
-static void void_log(const char *format,...) {
-    if(!strncmp(format,"[audio] last 10 s:",18)) ++level_reports;
-    if(strstr(format,"using normal output")) ++fallback_reports;
+static void count_session_message(const char *line) {
+    if(!strncmp(line,"[audio] last 10 s:",18)) ++level_reports;
+    if(strstr(line,"using normal output")) ++fallback_reports;
     ++logs;
+}
+void void_log(const char *format,...) {
+    if(!strncmp(format,"[audio] last 10 s:",18)) now_ns+=summary_log_delay_ns;
+    count_session_message(format);
 }
 static aaudio_result_t AAudio_createStreamBuilder(AAudioStreamBuilder **out) {
     assert(lock_depth==1);*out=&builder;return create_error;
@@ -359,7 +366,8 @@ static int AAudioStream_getSampleRate(AAudioStream *s) {assert(s && !s->closed);
 static int AAudioStream_getChannelCount(AAudioStream *s) {assert(s && !s->closed);return 2;}
 static unsigned diag_lines;
 static char last_diag[640];
-static void audio_log_enqueue(const char *line) {
+static void audio_log_enqueue(const char *line,bool session_log) {
+    if(session_log) {count_session_message(line);return;}
     ++diag_lines;
     snprintf(last_diag,sizeof last_diag,"%s",line);
 }
@@ -490,12 +498,31 @@ def android_audio_headers():
     globals_ = source[source.index("static AAudioStream *stream;"):source.index("/* The mixer produces events")]
     events = source[source.index("enum {\n    AUDIO_OPENED"):source.index("static void audio_report(")]
     functions = "\n".join(function(source, signature) for signature in (
-        "static void audio_report(", "static void audio_close_stream(", "static void audio_close_failed(",
+        "static void audio_log_message(", "static void audio_report(", "static void audio_close_stream(", "static void audio_close_failed(",
         "static uint32_t audio_write_frames(", "uint32_t void_audio_output("))
     return {"android_audio.h": globals_ + events + functions}
 
 
 class SoundStreamingTest(unittest.TestCase):
+    def test_audio_summary_can_wait_on_logging_without_delaying_pcm(self):
+        harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
+int main(void) {
+    int16_t frames[960]={0};
+    summary_log_delay_ns=400000000;
+    for(unsigned chunk=0;chunk<8000;++chunk) {
+        now_ns+=9000000;reset_script(frames);
+        int64_t before=now_ns;
+        void_audio_output(frames,480);
+        if(chunk) assert(now_ns-before==1000000);  /* only the fake PCM write takes time */
+        assert(accepted_count==960);
+    }
+    assert(level_reports==8);
+    puts("PASS audio summaries: 400 ms logging stalls stay off the PCM path at every ten-second boundary");
+    return 0;
+}
+'''
+        compile_probe("aaudio-summary-nonblocking", harness, android_audio_headers())
+
     def test_audio_diagnostics_capture_failures_and_limit_repeated_reports(self):
         harness = AAUDIO_HARNESS[:AAUDIO_HARNESS.index("int main(void) {")] + r'''
 int main(void) {
@@ -527,6 +554,8 @@ int main(void) {
         prelude = r'''
 #include <assert.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -536,6 +565,14 @@ int main(void) {
 #define memory_order_acquire __ATOMIC_ACQUIRE
 #define memory_order_release __ATOMIC_RELEASE
 static char data_dir[512]="build/tests/aaudio-log-cap";
+static unsigned session_lines;
+static void void_log(const char *format,...) {
+    assert(!strcmp(format,"%s"));
+    va_list args;va_start(args,format);
+    assert(!strcmp(va_arg(args,const char *),"[audio] summary"));
+    va_end(args);
+    ++session_lines;
+}
 typedef unsigned sem_t;
 static int sem_post(sem_t *count) { ++*count;return 0; }
 static int sem_wait(sem_t *count) {
@@ -566,15 +603,18 @@ int main(void) {
     FILE *f=fopen(previous,"rb");char ending[5];assert(f && !fseek(f,-4,SEEK_END));
     assert(fgets(ending,sizeof ending,f) && !strcmp(ending,"abc\n"));fclose(f);
     audio_log_enabled=1;
-    for (unsigned i=0;i<AUDIO_LOG_QUEUE_COUNT+1;i++) audio_log_enqueue("evt\n");
+    for (unsigned i=0;i<AUDIO_LOG_QUEUE_COUNT+1;i++) audio_log_enqueue("evt\n",false);
     assert(audio_log_ready==AUDIO_LOG_QUEUE_COUNT && length(current)==7);
     audio_log_worker(NULL);
     assert(length(current)==7+4*AUDIO_LOG_QUEUE_COUNT &&
            atomic_load_explicit(&audio_log_head,memory_order_relaxed)==atomic_load_explicit(&audio_log_tail,memory_order_relaxed));
-    audio_log_enqueue("end\n");audio_log_worker(NULL);
-    assert(length(current)==11+4*AUDIO_LOG_QUEUE_COUNT);
+    audio_log_enqueue("[audio] summary",true);
+    audio_log_enqueue("end\n",false);
+    assert(!session_lines);
+    audio_log_worker(NULL);
+    assert(session_lines==1 && length(current)==11+4*AUDIO_LOG_QUEUE_COUNT);
     assert(!remove(current) && !remove(previous));
-    puts("PASS audio log: bounded producer queue and exactly 16,000,000 bytes across two rotating files");
+    puts("PASS audio log: bounded non-blocking queue, separate log destinations and exactly 16,000,000 bytes across two rotating files");
     return 0;
 }
 '''

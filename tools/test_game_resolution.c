@@ -25,6 +25,12 @@ static uint64_t void_monotonic_ns(void) {
     struct timespec now; assert(!clock_gettime(CLOCK_MONOTONIC, &now));
     return (uint64_t)now.tv_sec * 1000000000ull + now.tv_nsec;
 }
+static unsigned modal_message_depth;
+static unsigned void_begin_modal_messages(void) { return modal_message_depth++; }
+static void void_end_modal_messages(unsigned previous) {
+    assert(modal_message_depth == previous + 1);
+    modal_message_depth = previous;
+}
 #include "../android/host/sims2_settings.c"
 void s2_touch_reset_camera(void) {}
 void s2_touch_reset_cas_pan(void) {}
@@ -39,6 +45,7 @@ static int lot_resize_callbacks, lot_refresh_reenter;
 static int property_calls;
 static uint32_t loaded_property_value;
 static uint32_t load_step_result = 1;
+static uint32_t loading_screen_result = 1;
 static double fp_value;
 void sub_A0619442_lifted(void) { g_eax = g_ecx; g_esp += 4; }
 void sub_A06194E1_lifted(void) { g_eax = g_ecx; g_esp += 4; }
@@ -97,6 +104,12 @@ void sub_A0769B01_lifted(void) { if (ui_fit_chooser == g_ecx) assert(ui_fit_dept
 void sub_A076662A_lifted(void) { g_eax = g_ecx; g_esp += 4; }
 void sub_A05C0B82_lifted(void) { assert(ui_fit_depth); g_eax = g_ecx; g_esp += 12; }
 void sub_A05C0C89_lifted(void) { if (ui_fit_loading == g_ecx) assert(ui_fit_depth); g_eax = g_ecx; g_esp += 12; }
+void sub_A05BE74D_lifted(void) {
+    if (MEM32(MEM32(g_esp + 8)) == 0xA2BF8AD5u)
+        assert(ui_fit_loading_screen == g_ecx && ui_fit_height_depth && (s2_touch_context() & S2_TOUCH_LOADING));
+    g_eax = loading_screen_result;
+    g_esp += 12;
+}
 void sub_A0C47EFC_lifted(void) { assert(ui_fit_depth && ui_fit_height_depth && (s2_touch_context() & S2_TOUCH_LOADING));g_eax=0xABCDEF01;g_esp+=20; }
 void sub_A0C471DA_lifted(void) { g_eax=load_step_result;g_esp+=4; }
 void sub_A0C46C58_lifted(void) { g_eax=0x10203040;g_esp+=4; }
@@ -424,6 +437,19 @@ int main(void)
     ui_fit_linger_ns = 400000000ull;ui_fit(1,1);ui_fit(0,1);
     assert(ui_fit_linger == 2 && !resize_count);
     ui_fit_linger_until = 0;s2_fit_tick();assert(!ui_fit_linger && !resize_count);
+    s2_fit_scene_attached();
+    ui_fit_linger_ns = 0;
+    MEM32(132) = 120; MEM32(136) = 144; MEM32(144) = 0xA2BF8AD5u;
+    g_ecx = 88; g_esp = 128; sub_A05BE74D();
+    assert(g_esp == 140 && g_eax == 1 && ui_fit_loading_screen == 88);
+    g_ecx = 64; g_esp = 128; sub_A0C47EFC();
+    g_ecx = 64; g_esp = 128; sub_A0C471DA();
+    assert(!ui_fit_town_loading && ui_fit_height_depth == 1 && s2_touch_context() & S2_TOUCH_LOADING);
+    MEM32(144) = 0xA2BF8AD6u; g_ecx = 88; g_esp = 128; sub_A05BE74D();
+    assert(!ui_fit_loading_screen && !ui_fit_depth && !(s2_touch_context() & S2_TOUCH_LOADING));
+    MEM32(144) = 0xA2BF8AD5u; loading_screen_result = 0;
+    g_ecx = 88; g_esp = 128; sub_A05BE74D();
+    assert(!ui_fit_loading_screen && !ui_fit_depth && g_eax == 0 && g_esp == 140);
     puts("game resolution PASS (fixed canvas across UI/render choices, nested ownership/ABI, atomic persistence)");
     return 0;
 }

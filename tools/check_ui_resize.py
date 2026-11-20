@@ -15,7 +15,7 @@ OUT = B.ROOT / 'build/20261028-ui/resize-test'
 CHECK = r'''
 static int target_w=800,target_h=360,input_w,input_h;
 static int callbacks;
-static __thread unsigned message_depth,touch_barrier_deferred;
+static __thread unsigned message_depth,touch_barrier_deferred,modal_message_depth;
 void s2_game_resolution(int *w,int *h){*w=target_w;*h=target_h;}
 uint64_t void_monotonic_ns(void){return 0;}
 void void_input_set_screen_size(int w,int h){input_w=w;input_h=h;}

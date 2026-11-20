@@ -14,7 +14,9 @@ import java.util.Set;
 /** The renderers of port.json and whether each can run here: the Android version, the libraries
  *  this build carries, the system Vulkan version the platform declares, the GPU model (Turnip drives
  *  Adreno GPUs only) and, for the DXVK modes, the driver check of Probe (Vulkan 1.3, robustness2,
- *  BC1-3 textures...). A Vulkan mode the check has not confirmed yet is "not checked": it can be
+ *  BC1-3 textures...). A mode of the port's own Vulkan renderer ("probe": "version") asks the same
+ *  check only for a driver that loads and offers the mode's Vulkan version (BC1-3 if needsBC says so).
+ *  A Vulkan mode the check has not confirmed yet is "not checked": it can be
  *  chosen by hand, never automatically. A start that never reached the game's first frame is the
  *  last word: the launcher then names the renderer and offers the default one. */
 final class Renderers {
@@ -68,12 +70,19 @@ final class Renderers {
         for (String name : mode.libraries) if (!present.contains(name)) missing.add(name);
         if (!missing.isEmpty()) return new Status(mode, false, false, Texts.fmt(context, Texts.R_LIBRARIES, String.join(", ", missing)));
         if ("gles".equals(mode.kind)) return new Status(mode, true, true, null);
-        if (converted) return new Status(mode, false, false, Texts.t(context, Texts.R_CONVERTED));
+        /* Converted textures are no DXT for DXVK; a renderer of the port's own reads them unless it needs BC. */
+        if (converted && (!mode.versionProbe() || mode.needsBC))
+            return new Status(mode, false, false, Texts.t(context, Texts.R_CONVERTED));
         boolean turnip = "turnip".equals(mode.kind);
         if (turnip) {
             if (!gpu.qualcomm() || (mode.adrenoMin > 0 && (gpu.adreno < mode.adrenoMin || gpu.adreno > mode.adrenoMax))) {
                 String here = gpu.renderer.isEmpty() ? "?" : gpu.renderer;
                 return new Status(mode, false, false, Texts.fmt(context, Texts.R_ADRENO, mode.adrenoMin, mode.adrenoMax, here));
+            }
+        } else if ("panvk".equals(mode.kind)) {
+            if (!Probe.mali(context, report)) {
+                String here = gpu.renderer.isEmpty() ? "?" : gpu.renderer;
+                return new Status(mode, false, false, Texts.fmt(context, Texts.R_MALI, here));
             }
         } else {
             /* The system Vulkan driver, as the platform declares it. */
@@ -82,14 +91,23 @@ final class Renderers {
                 return new Status(mode, false, false, Texts.fmt(context, Texts.R_VULKAN, Gpu.version(gpu.vulkan), Gpu.version(mode.vulkan)));
         }
         if (!carried || report == null)
-            return new Status(mode, true, false, Texts.t(context, probing ? Texts.R_CHECKING : Texts.R_UNCHECKED));
+            return new Status(mode, !"panvk".equals(mode.kind), false, Texts.t(context, probing ? Texts.R_CHECKING : Texts.R_UNCHECKED));
         return judge(context, mode, report);
     }
 
     /** A Vulkan mode by the driver check's report (Probe). */
     static Status judge(Context context, Spec.Mode mode, Map<String, String> report) {
-        String driver = "turnip".equals(mode.kind) ? "turnip" : "stock";
+        String driver = "turnip".equals(mode.kind) || "panvk".equals(mode.kind) ? mode.kind : "stock";
         String status = report.getOrDefault(driver + ".status", "");
+        if ("panvk".equals(driver)) {
+            if (status.isEmpty() || "skipped".equals(status))
+                return new Status(mode, false, false, Texts.t(context, Texts.R_UNCHECKED));
+            /* ARM's vendor and VK_DRIVER_ID_MESA_PANVK = 20. */
+            if (("ok".equals(status) || "missing".equals(status)) && (Probe.vendor(report, driver) != 0x13b5
+                    || !"20".equals(report.get(driver + ".driverId"))))
+                return new Status(mode, false, false, Texts.fmt(context, Texts.R_ERROR, "PanVK driver not active"));
+        }
+        if (mode.versionProbe()) return versionCheck(context, mode, report, driver, status);
         switch (status) {
         case "ok": return new Status(mode, true, true, null);
         case "crash": return new Status(mode, false, false, Texts.t(context, Texts.R_CRASH));
@@ -108,6 +126,39 @@ final class Renderers {
             }
             return new Status(mode, true, false, Texts.t(context, Texts.R_UNCHECKED));
         default: return new Status(mode, true, false, Texts.t(context, Texts.R_UNCHECKED));
+        }
+    }
+
+    /** A mode of the port's own Vulkan renderer ("probe": "version"): the driver loaded in the check and
+     *  offers the mode's Vulkan version; BC1-3 count only when the mode needs them. What the report's
+     *  status and missing tokens say about DXVK (Vulkan 1.3, robustness2, its features) does not apply. */
+    static Status versionCheck(Context context, Spec.Mode mode, Map<String, String> report, String driver, String status) {
+        switch (status) {
+        case "crash": return new Status(mode, false, false, Texts.t(context, Texts.R_CRASH));
+        case "error": return new Status(mode, false, false, Texts.fmt(context, Texts.R_ERROR, report.getOrDefault(driver + ".error", "?")));
+        case "ok": case "missing": break;
+        default: return new Status(mode, true, false, Texts.t(context, Texts.R_UNCHECKED));
+        }
+        String api = report.getOrDefault(driver + ".api", "");
+        int offered = apiVersion(api);
+        if (offered == 0) return new Status(mode, true, false, Texts.t(context, Texts.R_UNCHECKED));
+        if (Integer.compareUnsigned(offered, mode.vulkan) < 0)
+            return new Status(mode, false, false, Texts.fmt(context, Texts.R_VULKAN, api, Gpu.version(mode.vulkan)));
+        if (mode.needsBC && !"111".equals(report.get(driver + ".bc")))
+            return new Status(mode, false, false, Texts.t(context, Texts.R_BC));
+        return new Status(mode, true, true, null);
+    }
+
+    /** "1.1.128" (the check's apiVersion) → VK_MAKE_API_VERSION(0, 1, 1, 128); 0 if it is no version. */
+    static int apiVersion(String text) {
+        String[] parts = text.trim().split("\\.");
+        try {
+            int major = Integer.parseInt(parts[0]), minor = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
+            int patch = parts.length > 2 ? Integer.parseInt(parts[2]) : 0;
+            if (major <= 0 || major > 127 || minor < 0 || minor > 1023 || patch < 0) return 0;
+            return (major << 22) | (minor << 12) | Math.min(patch, 4095);
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 

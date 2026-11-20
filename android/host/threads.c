@@ -431,19 +431,25 @@ static uint32_t handle_index(uint32_t h)
     return i < MAX_HANDLES ? i : 0;
 }
 
-void_object *void_handle_get(uint32_t h, int kind)
+static void_object *handle_lookup(uint32_t h, int kind, int retain)
 {
+    void_object *thread = NULL;
     if (h == 0xFFFFFFFEu) {           /* GetCurrentThread pseudo-handle */
-        void_object *o = void_thread_self()->object;
-        return (kind == VOID_OBJ_NONE || kind == VOID_OBJ_THREAD) ? o : NULL;
+        if (kind != VOID_OBJ_NONE && kind != VOID_OBJ_THREAD) return NULL;
+        void_thread *self = void_thread_self();
+        if (self) thread = self->object;
     }
     uint32_t i = handle_index(h);
     pthread_mutex_lock(&handle_lock);
-    void_object *o = i ? handles[i] : NULL;
+    void_object *o = i ? handles[i] : thread;
+    if (o && kind != VOID_OBJ_NONE && o->kind != kind) o = NULL;
+    if (o && retain) ++o->refs;
     pthread_mutex_unlock(&handle_lock);
-    if (o && kind != VOID_OBJ_NONE && o->kind != kind) return NULL;
     return o;
 }
+
+void_object *void_handle_get(uint32_t h, int kind) { return handle_lookup(h, kind, 0); }
+void_object *void_handle_acquire(uint32_t h, int kind) { return handle_lookup(h, kind, 1); }
 
 int void_handle_close(uint32_t h)
 {
@@ -459,11 +465,8 @@ int void_handle_close(uint32_t h)
 
 uint32_t void_handle_dup(uint32_t h)
 {
-    void_object *o = void_handle_get(h, VOID_OBJ_NONE);
+    void_object *o = void_handle_acquire(h, VOID_OBJ_NONE);
     if (!o) return 0;
-    pthread_mutex_lock(&handle_lock);
-    ++o->refs;
-    pthread_mutex_unlock(&handle_lock);
     return void_handle_new(o);
 }
 

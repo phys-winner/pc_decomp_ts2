@@ -44,4 +44,5 @@
   <string name="target_ground">Jord</string>
   <string name="target_object">Genstand %1$d</string>
   <string name="target_changed">Målet har flyttet sig. Tryk igen.</string>
+  <string name="floor_swipe_hint">Stryg op eller ned med tre fingre for at skifte etage.</string>
 </resources>

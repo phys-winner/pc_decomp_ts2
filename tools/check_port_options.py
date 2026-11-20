@@ -22,6 +22,9 @@ public void setForceDarkAllowed(boolean allowed){assert !allowed;}}''',
     'android/widget/Button.java': '''package android.widget;public class Button extends android.view.View {
 public String text;public Button(android.content.Context c){}public void setAllCaps(boolean b){assert !b;}
 public void setTextColor(int c){assert c==android.graphics.Color.BLACK;}public void setText(String s){text=s;}}''',
+    'android/widget/CheckBox.java': '''package android.widget;public class CheckBox extends Button {
+private boolean checked;public CheckBox(android.content.Context c){super(c);}public boolean isChecked(){return checked;}
+public void setChecked(boolean value){checked=value;}public void performClick(){checked=!checked;super.performClick();}}''',
     'android/widget/LinearLayout.java': '''package android.widget;public class LinearLayout {public java.util.List<Button> children=new java.util.ArrayList<>();
 public void addView(Button b){children.add(b);}}''',
     'android/widget/Toast.java': '''package android.widget;public class Toast {public static final int LENGTH_LONG=1;public static String last;
@@ -53,6 +56,13 @@ public class OptionsCheck {
   int selections=0;
   for(int i=0;i<Spec.instance.options.size();i++){
    Spec.Option option=Spec.instance.options.get(i);Button button=content.children.get(i);
+   if("bool".equals(option.type)){
+    CheckBox check=(CheckBox)button;boolean initial=check.isChecked();
+    assert initial=="1".equals(option.value)&&check.text.equals(option.title);
+    check.performClick();assert check.isChecked()!=initial&&Launch.option(context,option).equals(initial?"0":"1");
+    check.performClick();assert check.isChecked()==initial&&Launch.option(context,option).equals(initial?"1":"0");
+    continue;
+   }
    assert button.text.contains(option.title+": ");AlertDialog dialog=open(button);
    assert dialog.labels.length==option.choices.size()&&dialog.checked==option.choices.indexOf(option.value);
    dialog.callback.onClick(dialog,-1);dialog.callback.onClick(dialog,dialog.labels.length);
@@ -97,13 +107,13 @@ static Spec instance=new Spec();List<Option> options=new ArrayList<>();static Sp
 List<Option> options(String distribution){assert distribution.equals("legacy");return options;}Spec(){Option o;
 '''
     for option in options:
-        assert option['type'] == 'choice'
+        assert option['type'] in ('choice', 'bool')
         generated += 'o=new Option();'
         for name in ('key', 'type', 'default'):
             generated += f'o.{"value" if name == "default" else name}={json.dumps(option[name], ensure_ascii=False)};'
         title = option['title']
         generated += f'o.title={json.dumps(title.get("en") if isinstance(title, dict) else title, ensure_ascii=False)};'
-        for choice in option['choices']:
+        for choice in option.get('choices', ()):
             title = choice['title']
             generated += f'o.choices.add({json.dumps(choice["value"])});'
             generated += f'o.choiceTitles.add({json.dumps(title.get("en") if isinstance(title, dict) else title, ensure_ascii=False)});'
@@ -125,8 +135,8 @@ List<Option> options(String distribution){assert distribution.equals("legacy");r
         subprocess.run([str(JDK / 'bin/java.exe'), '-ea', '-cp', str(out), 'org.sims2.port.launcher.OptionsCheck', str(out / 'state')], check=True)
     settings = (ROOT / 'android/host/sims2_settings.c').read_text(encoding='utf-8')
     msaa = settings[settings.index('    const char *msaa=getenv('):settings.index('    const char *upscaler=getenv(')]
-    cap = settings[settings.index('    const char *cap=getenv('):settings.index('    ui_fsr=getenv(')]
-    override = next(line for line in settings.splitlines() if line.startswith('    if (getenv("S2_FPS_LIMIT"))'))
+    cap = settings[settings.index('    const char *cap=getenv('):settings.index('    const char *fsr = getenv(')]
+    override = settings[settings.index('    if (fps_override) {'):settings.index('    if (render_override)')]
     harness = '''#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,6 +148,7 @@ static const char *fixture_env(const char *name){return !strcmp(name,"S2_FPS_LIM
 static int parse(void){int render_msaa;
 ''' + msaa + '''return render_msaa;}
 static int parse_cap(int initial,int *saved){int fps_limit=initial,saved_fps=initial;
+const char *fps_override=getenv("S2_FPS_LIMIT");
 ''' + cap + override + '''
 *saved=saved_fps;return fps_limit;}
 int main(void){const char *values[]={NULL,"","0","1","2","3","4","8","-2","2x"," 4","04"};

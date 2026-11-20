@@ -985,6 +985,36 @@ uint32_t s2_language_init(const char *data_dir)
 
 static const char *steam_language(void) { return game_languages[game_language].name; }
 
+void sub_A01EC080_lifted(void);
+void sub_A01EC080(void)
+{
+    uint32_t self = g_ecx, out = MEM32(g_esp + 4), index = MEM32(g_esp + 8);
+    uint8_t language = MEM8(g_esp + 12);
+    sub_A01EC080_lifted();
+    if (!(g_eax & 0xFF) || index != 2 || (language != 13 && language != 255) ||
+        game_languages[game_language].id != 16 || MEM32(self + 0x0C) != 0x43545353u ||
+        !void_vm_readable(out, 28) || MEM32(out) != 0xA0D9B470u) return;
+    uint32_t length = MEM32(out + 0x14);
+    uint32_t data = MEM32(out + 0x18) > 15 ? MEM32(out + 4) : out + 4;
+    if (!length || length > 512 || !void_vm_readable(data, length)) return;
+    uint64_t hash = 14695981039346656037ull;
+    for (uint32_t i = 0; i < length; ++i) hash = (hash ^ MEM8(data + i)) * 1099511628211ull;
+    static const struct { uint64_t hash; const char *text; } descriptions[] = {
+#include "sims2_university_ru.inc"
+    };
+    for (size_t i = 0; i < sizeof descriptions / sizeof descriptions[0]; ++i) {
+        if (descriptions[i].hash != hash) continue;
+        const char *translation = descriptions[i].text;
+        uint32_t text = void_gstrdup(translation);
+        if (text) {
+            uint32_t args[] = { text, (uint32_t)strlen(translation) };
+            void_call_guest_this(0xA01ACFBEu, out, 2, args);
+            void_gfree(text);
+        }
+        return;
+    }
+}
+
 /* Android commits UTF-8 bytes; the ANSI window's keyboard code page would
  * reinterpret them. The original handler already has a UTF-8 branch (8). */
 void sub_A0156260_lifted(void);

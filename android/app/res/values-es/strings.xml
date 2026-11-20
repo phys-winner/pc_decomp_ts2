@@ -44,4 +44,5 @@
   <string name="target_ground">Suelo</string>
   <string name="target_object">Objeto %1$d</string>
   <string name="target_changed">El objetivo se ha movido. Toca otra vez.</string>
+  <string name="floor_swipe_hint">Desliza tres dedos hacia arriba o hacia abajo para cambiar de planta.</string>
 </resources>

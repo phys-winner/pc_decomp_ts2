@@ -412,11 +412,24 @@ WINAPI_EXPORT(U32, PostQuitMessage, 1)
 }
 
 /* Nested loading loops can dispatch a marker before the catalog callback returns. */
-static __thread unsigned message_depth, touch_barrier_deferred;
+static __thread unsigned message_depth, touch_barrier_deferred, modal_message_depth;
+
+unsigned void_begin_modal_messages(void)
+{
+    unsigned previous = modal_message_depth;
+    /* RunModal suspends the caller and has its own interactive dispatch loop. */
+    modal_message_depth = message_depth;
+    return previous;
+}
+
+void void_end_modal_messages(unsigned previous_depth)
+{
+    modal_message_depth = previous_depth;
+}
 
 static void message_returned(void)
 {
-    if (--message_depth == 0 && touch_barrier_deferred) {
+    if (--message_depth == modal_message_depth && touch_barrier_deferred) {
         unsigned serial = touch_barrier_deferred;
         touch_barrier_deferred = 0;
         s2_touch_barrier(serial);
@@ -463,7 +476,7 @@ static uint32_t dispatch_message(uint32_t m)
 {
     if (MEM32(m + 4) == VOID_TOUCH_QUERY_MESSAGE && MEM32(m + 8) == VOID_TOUCH_QUERY_COOKIE) {
         touch_barrier_deferred = MEM32(m + 12);
-        if (!message_depth) {
+        if (message_depth == modal_message_depth) {
             unsigned serial = touch_barrier_deferred;
             touch_barrier_deferred = 0;
             s2_touch_barrier(serial);

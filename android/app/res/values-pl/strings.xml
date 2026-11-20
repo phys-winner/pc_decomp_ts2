@@ -41,6 +41,8 @@
   <string name="time_controls">Sterowanie czasem</string>
   <string name="time_swipe_hint">Przesuń palcem po zegarze lub przyciskach prędkości: w prawo, aby przyspieszyć, w lewo, aby zwolnić i zatrzymać czas. Skala pośrodku pokazuje wybraną prędkość.</string>
   <string name="tools_menu">Narzędzia gry</string>
+  <string name="show_game_tools">Pokaż przycisk narzędzi gry</string>
+  <string name="take_photo">Zrób zdjęcie</string>
   <string name="tool_hand">Ręka</string>
   <string name="tool_eyedropper">Pipeta</string>
   <string name="tool_design">Projektowanie</string>
@@ -50,8 +52,9 @@
   <string name="tool_top_down">Widok z góry</string>
   <string name="tool_undo">Cofnij</string>
   <string name="tool_redo">Ponów</string>
-  <string name="port_settings_restart">Poniższe opcje obowiązują od następnego uruchomienia gry. FSR, FXAA i MSAA wymagają OpenGL ES; nieobsługiwane MSAA zostaje wyłączone. Skala interfejsu i gesty powyżej działają od razu.</string>
+  <string name="port_settings_restart">Sterowanie i licznik FPS zmieniają się od razu. Język i ustawienia renderowania obowiązują po ponownym uruchomieniu gry. FSR, FXAA i MSAA wymagają OpenGL ES. Nieobsługiwane MSAA zostaje wyłączone.</string>
   <string name="settings_save_failed">Nie udało się zapisać ustawienia. Spróbuj ponownie.</string>
+  <string name="engine_start_failed">Nie udało się uruchomić silnika gry. Szczegóły znajdują się w pliku sims2.log.</string>
   <string name="enable">Włącz</string>
   <string name="swipe_paused">Pauza</string>
   <string name="swipe_speed1">Normalna prędkość</string>
@@ -98,4 +101,5 @@
     <string name="target_area_diameter">Średnica obszaru dotknięcia: %1$d px</string>
     <string name="target_area_label">Rozmiar dotknięcia</string>
     <string name="target_area_hint">Suwak zmienia obszar wyszukiwania przedmiotów wokół punktu dotknięcia. Okrąg pokazuje jego rozmiar.</string>
+  <string name="floor_swipe_hint">Przesuń trzema palcami w górę lub w dół, aby zmienić piętro.</string>
 </resources>

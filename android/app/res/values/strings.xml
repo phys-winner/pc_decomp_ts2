@@ -41,6 +41,8 @@
   <string name="time_controls">Time controls</string>
   <string name="time_swipe_hint">Swipe along the clock or speed buttons: right to speed up, left to slow down and pause. The scale in the centre shows the selected speed.</string>
   <string name="tools_menu">Game tools</string>
+  <string name="show_game_tools">Show the game tools button</string>
+  <string name="take_photo">Take photo</string>
   <string name="tool_hand">Hand</string>
   <string name="tool_eyedropper">Eyedropper</string>
   <string name="tool_design">Design</string>
@@ -50,8 +52,9 @@
   <string name="tool_top_down">Top view</string>
   <string name="tool_undo">Undo</string>
   <string name="tool_redo">Redo</string>
-  <string name="port_settings_restart">The choices below are saved for the next game launch. FSR, FXAA and MSAA require OpenGL ES; unsupported MSAA falls back to no MSAA. Interface scale and swipe controls above apply now.</string>
+  <string name="port_settings_restart">The controls above and the FPS counter update immediately. Language and rendering choices take effect when the game restarts. FSR, FXAA and MSAA require OpenGL ES. The game disables MSAA if the device does not support it.</string>
   <string name="settings_save_failed">Could not save the setting. Try again.</string>
+  <string name="engine_start_failed">Could not start the game engine. See sims2.log for details.</string>
   <string name="enable">Enable</string>
   <string name="swipe_paused">Paused</string>
   <string name="swipe_speed1">Normal speed</string>
@@ -98,4 +101,5 @@
     <string name="target_area_diameter">Tap area diameter: %1$d px</string>
     <string name="target_area_label">Tap size</string>
     <string name="target_area_hint">Move the slider to change how far from a tap the game looks for objects. The circle shows the search area.</string>
+  <string name="floor_swipe_hint">Swipe up or down with three fingers to change floors.</string>
 </resources>

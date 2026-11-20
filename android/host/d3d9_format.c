@@ -207,21 +207,28 @@ const void *d3d_format_convert(const d3d_format *f, const uint8_t *src, uint32_t
     uint32_t pitch, void **owned, size_t *gl_size, int render_target)
 {
     *owned = NULL;
-    uint32_t out_bpp = f->gl_bits / 8;
-    size_t size = (size_t)width * height * (out_bpp ? out_bpp : 1);
+    *gl_size = 0;
+    if (!src || !width || !height || width > INT32_MAX || height > INT32_MAX) return NULL;
+    size_t row = f->block_bytes ? ((size_t)width + 3) / 4 * f->block_bytes : ((size_t)width * f->bits + 7) / 8;
+    uint32_t rows = d3d_format_rows(f, height);
+    if (!row || row > pitch || (size_t)(rows - 1) > (SIZE_MAX - row) / pitch) return NULL;
     int conv = f->conv;
     if (render_target && (f->d3d == 21 || f->d3d == 22)) conv = CONV_BGRA_TO_RGBA;
     if (conv == CONV_NONE) {
         /* Tightly packed rows can upload in place; otherwise repack. */
-        uint32_t row = d3d_format_pitch(f, width);
-        *gl_size = (size_t)row * d3d_format_rows(f, height);
+        if (__builtin_mul_overflow(row, (size_t)rows, gl_size)) return NULL;
         if (row == pitch) return src;
         uint8_t *out = (uint8_t *)malloc(*gl_size);
-        for (uint32_t y = 0; y < d3d_format_rows(f, height); ++y) memcpy(out + (size_t)y * row, src + (size_t)y * pitch, row);
+        if (!out) return NULL;
+        for (uint32_t y = 0; y < rows; ++y) memcpy(out + (size_t)y * row, src + (size_t)y * pitch, row);
         *owned = out;
         return out;
     }
-    uint8_t *out = (uint8_t *)malloc(size ? size : 1);
+    size_t size;
+    uint32_t out_bpp = f->gl_bits / 8;
+    if (!out_bpp || __builtin_mul_overflow((size_t)width * out_bpp, (size_t)height, &size)) return NULL;
+    uint8_t *out = (uint8_t *)malloc(size);
+    if (!out) return NULL;
     *owned = out;
     *gl_size = size;
     switch (conv) {

@@ -111,11 +111,13 @@ int void_game_main(const char *game, const char *data, const char *images, int s
     /* The screen the game is shown on: the activity's window, or S2_SCREEN
      * (WxH) for a shell run; the UI scale turns it into the game's size. */
     int screen_w = 0, screen_h = 0;
-    if (getenv("S2_SCREEN")) sscanf(getenv("S2_SCREEN"), "%dx%d", &screen_w, &screen_h);
+    const char *screen = getenv("S2_SCREEN");
+    if (screen) sscanf(screen, "%dx%d", &screen_w, &screen_h);
     else void_android_screen_size(&screen_w, &screen_h);
     s2_settings_init(data, screen_w, screen_h);
     seed_registry(s2_language_init(data));
-    if (getenv("VOID_TIME_SCALE")) void_set_time_scale(strtod(getenv("VOID_TIME_SCALE"), NULL));
+    const char *time_scale = getenv("VOID_TIME_SCALE");
+    if (time_scale) void_set_time_scale(strtod(time_scale, NULL));
     char binaries[1100];
     snprintf(binaries, sizeof binaries, "%s/EP9/TSBin", game);
     if (!void_modules_init(binaries)) return 67;

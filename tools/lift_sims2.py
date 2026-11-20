@@ -166,16 +166,20 @@ def static_traps(directory, sources):
 
 
 def load_tables(module):
-    """Declared jump tables (config/<name>.jump-tables.json) and IDA's switch
-    tables (tools/ida_switches.py) by `jmp` address, for make_decoder."""
+    """Load declared tables and IDA switches keyed by jump address.
+
+    IDA metadata defaults to research/ida/<name>.switches.json.
+    """
     tables_path = ROOT / f"config/{module['name']}.jump-tables.json"
     declared = {}
     if tables_path.is_file():
         declared = {int(r["address"], 0): (r.get("first_index", 0), r["count"])
                     for r in json.loads(tables_path.read_text())}
     switches = {}
-    if module.get("ida_switches") and not NO_CATALOG:
-        data = json.loads((ROOT / module["ida_switches"]).read_text())
+    custom_switches = module.get("ida_switches")
+    switches_path = ROOT / (custom_switches or f"research/ida/{module['name']}.switches.json")
+    if not NO_CATALOG and (custom_switches or switches_path.is_file()):
+        data = json.loads(switches_path.read_text())
         switches = {s["jump"]: (s["table"], s["count"]) for s in data["switches"] if s["element_size"] == 4}
     # Code patches (config/<name>.patches.json): bytes the lifter decodes in
     # place of the image's, each checked against what it replaces. The image

@@ -1,4 +1,4 @@
-/* The Sims 2's DXVK renderers. With the launcher's "DXVK (Vulkan)" or "DXVK (Turnip)"
+/* The Sims 2's DXVK renderers. With the launcher's Vulkan, Turnip, or PanVK
  * (Renderers.java; GameActivity.nativeRenderer before the engine starts), Direct3DCreate9
  * (d3d9_device.c) hands the game DXVK's IDirect3D9 instead of the GLES one. DXVK runs natively in
  * libdxvk_d3d9.so through libs2dxvk.so (android/dxvk), both from the APK's native library
@@ -17,10 +17,12 @@
 
 #ifndef SIMS2_LEGACY_UI
 #if defined(VOID_ANDROID_APP)
+#include <android/native_window.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <jni.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <time.h>
 #include "../dxvk/bridge_abi.h"
 
@@ -28,13 +30,15 @@ void *void_android_window_current(uint32_t *serial, int wait);
 void void_android_window_ack(uint32_t serial);
 void *void_android_window_acquire(uint32_t *serial);
 void void_android_frame_presented(void);
+int void_android_game_started(void);
 
 /* Kinds as tools/generate_dxvk_bridge.py numbers them (checked against dxvk_classes on opening). */
 enum { KIND_D3D9 = 1, KIND_DEVICE = 2, KIND_TEXTURE = 5, KIND_CUBE = 6, KIND_SURFACE = 9, KIND_STATEBLOCK = 15, KIND_QUERY = 16, KIND_SWAPCHAIN = 17 };
 enum { SLOT_CREATE_DEVICE = 16, SLOT_CREATE_ADDITIONAL_SWAPCHAIN = 13, SLOT_RESET = 16, SLOT_PRESENT = 17, SLOT_BEGIN_SCENE = 41, SLOT_END_SCENE = 42,
        SLOT_BEGIN_STATE_BLOCK = 60, SLOT_END_STATE_BLOCK = 61, SLOT_SWAPCHAIN_PRESENT = 3, SLOT_GET_DATA = 7 };
-static const char *const mode_names[] = {"OpenGL ES", "DXVK (Vulkan)", "DXVK (Turnip)"};
-static int dxvk_mode, dxvk_state;    /* state: 0 not started, 1 DXVK running, -1 GLES for this session */
+static const char *const mode_names[] = {"OpenGL ES", "DXVK (Vulkan)", "DXVK (Turnip)", "DXVK (PanVK)"};
+static int dxvk_mode;
+static _Atomic int dxvk_state;      /* 0 not started, 1 DXVK running, -1 GLES for this session */
 static char native_dir[512], cache_dir[512];
 static const sims2_dxvk_bridge *bridge;
 static d3d_device shadow;
@@ -153,11 +157,13 @@ static const sims2_dxvk_host host = {
 static void dxvk_wait_window(const char *what)
 {
     uint32_t serial;
-    if (void_android_window_current(&serial, 0)) return;
+    ANativeWindow *window = void_android_window_current(&serial, 0);
+    if (window) { ANativeWindow_release(window); return; }
     void_android_window_ack(serial);
     void_log("[dxvk] %s: no surface, the game waits for the activity", what);
     void_blocking_begin();
-    void_android_window_current(&serial, 1);
+    window = void_android_window_current(&serial, 1);
+    if (window) ANativeWindow_release(window);
     void_blocking_end();
     frame_deadline_ns = 0;
 }
@@ -343,7 +349,7 @@ static void turnip_environment(const char *path)
 static void dxvk_environment(void)
 {
     char folder[600], conf[640], user[600];
-    snprintf(folder, sizeof folder, "%s/dxvk", cache_dir);
+    snprintf(folder, sizeof folder, "%s/%s", cache_dir, dxvk_mode == SIMS2_RENDERER_PANVK ? "dxvk-panvk" : "dxvk");
     mkdir(folder, 0700);
     snprintf(conf, sizeof conf, "%s/dxvk.conf", folder);
     snprintf(user, sizeof user, "%s", void_data_dir());
@@ -375,6 +381,13 @@ static void dxvk_environment(void)
             snprintf(slash, sizeof user - (size_t)(slash - user), "/turnip.env");
             turnip_environment(user);
         }
+    } else if (dxvk_mode == SIMS2_RENDERER_PANVK) {
+        setenv("MESA_SHADER_CACHE_DIR", folder, 0);
+        char product[PROP_VALUE_MAX] = "";
+        __system_property_get("ro.product.device", product);
+        /* Linear swapchain buffers avoid corrupted PanVK frames on these devices. */
+        if (!strcmp(product, "TB373FU") || !strcmp(product, "begonia"))
+            setenv("MESA_GRALLOC_LINEAR", "1", 0);
     }
 }
 
@@ -389,7 +402,7 @@ uint32_t void_dxvk_create9(uint32_t sdk)
     if (!dxvk_state) dxvk_environment();
     char library[600];
     snprintf(library, sizeof library, "%s/libdxvk_d3d9.so", native_dir);
-    uint32_t guest = bridge->create9(sdk, library, dxvk_mode == SIMS2_RENDERER_TURNIP ? native_dir : NULL);
+    uint32_t guest = bridge->create9(sdk, library, native_dir, dxvk_mode);
     if (!guest) {
         dxvk_state = -1;
         void_log("[dxvk] %s could not start: OpenGL ES renders this session", mode_names[dxvk_mode]);
@@ -506,14 +519,16 @@ JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeRenderer(JNIEnv *e
     jstring library_dir, jstring cache)
 {
     (void)type;
-    if (mode < SIMS2_RENDERER_GLES || mode > SIMS2_RENDERER_TURNIP || !library_dir || !cache || dxvk_state) return;
-    const char *l = (*env)->GetStringUTFChars(env, library_dir, NULL), *c = (*env)->GetStringUTFChars(env, cache, NULL);
+    if (mode < SIMS2_RENDERER_GLES || mode > SIMS2_RENDERER_PANVK || !library_dir || !cache || void_android_game_started()) return;
+    const char *l = (*env)->GetStringUTFChars(env, library_dir, NULL);
+    if (!l) return;
+    const char *c = (*env)->GetStringUTFChars(env, cache, NULL);
     if (l && c) {
         snprintf(native_dir, sizeof native_dir, "%s", l);
         snprintf(cache_dir, sizeof cache_dir, "%s", c);
         dxvk_mode = mode;
     }
-    if (l) (*env)->ReleaseStringUTFChars(env, library_dir, l);
+    (*env)->ReleaseStringUTFChars(env, library_dir, l);
     if (c) (*env)->ReleaseStringUTFChars(env, cache, c);
 }
 

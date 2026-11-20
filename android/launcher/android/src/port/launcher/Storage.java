@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.system.Os;
 import java.io.File;
@@ -206,6 +207,22 @@ final class Storage {
             if (f.isFile() && (size < 0 || f.length() == size)) return f;
         }
         return null;
+    }
+
+    /** The name shown in the picker, even when the document URI has an opaque ID. */
+    static String displayName(Context context, Uri uri, File fallback) {
+        try (android.database.Cursor c = context.getContentResolver().query(uri,
+                new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                String name = c.getString(0);
+                if (name != null && !name.isEmpty()) return name;
+            }
+        } catch (RuntimeException e) {
+            android.util.Log.w("Launcher", "document name: " + e);
+        }
+        if (fallback != null) return fallback.getName();
+        String segment = uri.getLastPathSegment();
+        return segment != null ? new File(segment).getName() : null;
     }
 
     /** Whether the descriptor can be read at any offset: a cloud provider's pipe cannot back a game. */

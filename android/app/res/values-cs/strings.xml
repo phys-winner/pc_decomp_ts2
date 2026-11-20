@@ -44,4 +44,5 @@
   <string name="target_ground">Země</string>
   <string name="target_object">Objekt %1$d</string>
   <string name="target_changed">Cíl se pohnul. Klepněte znovu.</string>
+  <string name="floor_swipe_hint">Přejetím třemi prsty nahoru nebo dolů změníte patro.</string>
 </resources>

@@ -9,12 +9,14 @@
  *   PORT_RENDERER            the renderer id the launcher chose (absent when started without it)
  *   PORT_SKIP_INTRO          "1" or "0" (only for distributions with an intro in port.json)
  *   PORT_PART_<ID>           a part's folder, e.g. PORT_PART_GAME=/storage/emulated/0/UT3/game
+ *   PORT_TEXTURE_CACHE_ROOT  writable cache root for a textures.separateCache backend
  *   PORT_MOUNT_<ID>          a part played from a stored ZIP: its index (zipmount.h); PORT_PART_<ID>
  *                            is then the folder of the archive's few unpacked (compressed) files
  *   PORT_MOUNT_FD_<ID>       that archive's open descriptor, owned by the process
  *   PORT_OPTION_<KEY>        an option of port.json ("1"/"0" for switches)
- *   PORT_TURNIP_DRIVER       the player's own Turnip driver (TurnipDriver.java): the library's full
+ *   PORT_TURNIP_DRIVER       the player's own Turnip driver (VulkanDriver.java): the library's full
  *                            path, for adrenotools in place of the port's; empty for the port's own
+ *   PORT_PANVK_DRIVER        the app-local PanVK library path, empty for the bundled driver
  *   PORT_UPDATE_VERSION      a newer port release the launcher found (its versionName), else absent
  *   PORT_UPDATE_PAGE         its release page
  *

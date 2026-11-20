@@ -14,7 +14,7 @@ import java.io.File;
  *  built-in browser. Some firmwares and debloat scripts turn "Files" off or remove it; some boxes
  *  ship a stub that closes at once. The player can also prefer the built-in browser. */
 final class Pickers {
-    static final int FOLDER = 1, ZIP = 2, GOG = 3;
+    static final int FOLDER = 1, ZIP = 2, GOG = 3, DRIVER = 4;
     static final int OK = 0, DISABLED = 1, MISSING = 2;
     static final String[] DOCUMENTS_UI = {"com.google.android.documentsui", "com.android.documentsui"};
     private static final long INSTANT_CANCEL_MS = 400;
@@ -57,8 +57,10 @@ final class Pickers {
             intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         } else {
             intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
-            intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed",
-                "application/x-zip", "application/octet-stream"});
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, kind == DRIVER
+                ? new String[] {"application/zip", "application/x-zip-compressed", "application/x-zip",
+                    "application/x-sharedlib", "application/x-shared-library", "application/octet-stream"}
+                : new String[] {"application/zip", "application/x-zip-compressed", "application/x-zip", "application/octet-stream"});
         }
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         Uri initial = near != null ? Storage.documentOf(near) : null;

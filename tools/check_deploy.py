@@ -19,10 +19,6 @@ def main():
         (base / 'build/android-game').mkdir(parents=True)
         with zipfile.ZipFile(base / 'build/android-game/sims2.apk', 'w') as archive:
             archive.writestr('classes.dex', b'test')
-        binaries = base / 'game/EP9/TSBin'
-        binaries.mkdir(parents=True)
-        for name in ('Sims2EP9.exe', 'ijl15.dll'):
-            (binaries / name).write_bytes(b'PE')
         for pack, size in [('Base', 2 * 1024**3), ('EP9', 1024**2)]:
             path = base / f'game/{pack}/TSData/data.package'
             path.parent.mkdir(parents=True)
@@ -58,9 +54,8 @@ else:
         result, calls = run('Base', 'EP9')
         assert result.returncode == 0, result.stdout + result.stderr
         pushed = [c for c in calls if c[2] == 'push']
-        assert len(pushed) == 4, pushed
+        assert len(pushed) == 2, pushed
         assert all('/lifted' not in ' '.join(c) for c in calls)
-        assert any('/EP9/TSBin/Sims2EP9.exe' in ' '.join(c) for c in pushed)
         assert any('/Base/TSData' in c[-2] for c in pushed), pushed
         assert any('/EP9/TSData' in c[-2] for c in pushed), pushed
         result, calls = run('EP0')

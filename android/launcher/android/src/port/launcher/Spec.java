@@ -51,12 +51,14 @@ final class Spec {
         int vulkan;                   /* VK_MAKE_API_VERSION of the needed Vulkan; 0 none */
         int minSdk;
         int adrenoMin, adrenoMax;     /* Turnip: the Adreno models its driver supports */
-        String driver = "";           /* Turnip: the driver library adrenotools loads */
+        String driver = "";           /* Turnip or PanVK: library adrenotools loads */
+        String probe = "";
         boolean needsBC = true;       /* a Vulkan mode needs BC1-3 (DXT) sampling: the game's textures */
         List<String> libraries = new ArrayList<>();
         Object description;
 
-        boolean vulkanKind() { return "vulkan".equals(kind) || "turnip".equals(kind); }
+        boolean vulkanKind() { return "vulkan".equals(kind) || "turnip".equals(kind) || "panvk".equals(kind); }
+        boolean versionProbe() { return vulkanKind() && ("version".equals(probe) || ("panvk".equals(kind) && probe.isEmpty())); }
     }
 
     /** A license text the APK carries (an asset file), with the name the player reads. */
@@ -88,6 +90,7 @@ final class Spec {
 
     final JSONObject json;
     final String label, logTag, storage, github, hooks, textureBackend, gogInstaller;
+    final boolean separateTextureCache;
     final Object title, subtitle, gameFilesHint, optionsHint;
     final boolean allFilesAccess, localNetwork, updates, autoLaunch;
     final List<String> languages = new ArrayList<>();
@@ -160,7 +163,8 @@ final class Spec {
                 JSONArray adreno = m.optJSONArray("adreno");
                 if (adreno != null) { mode.adrenoMin = adreno.getInt(0); mode.adrenoMax = adreno.getInt(1); }
                 mode.driver = m.optString("driver", "");
-                mode.needsBC = m.optBoolean("needsBC", true);
+                mode.probe = m.optString("probe", "");
+                mode.needsBC = m.optBoolean("needsBC", !mode.versionProbe());
                 strings(m.optJSONArray("libraries"), mode.libraries);
                 modes.add(mode);
             }
@@ -252,6 +256,7 @@ final class Spec {
         }
         JSONObject textures = json.optJSONObject("textures");
         textureBackend = textures != null ? textures.optString("backend", "") : "";
+        separateTextureCache = textures != null && textures.optBoolean("separateCache", false);
     }
 
     Distribution distribution(String id) {

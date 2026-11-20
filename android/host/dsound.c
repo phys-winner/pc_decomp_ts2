@@ -104,8 +104,8 @@ __attribute__((weak)) uint32_t void_audio_output(const int16_t *frames, uint32_t
 
 static void signal_event(uint32_t handle)
 {
-    void_object *o = void_handle_get(handle, VOID_OBJ_EVENT);
-    if (o) void_object_signal(o);
+    void_object *o = void_handle_acquire(handle, VOID_OBJ_EVENT);
+    if (o) { void_object_signal(o); void_object_release(o); }
 }
 
 /* Read one sample (as float, channel c) of buffer b at byte position pos. */
@@ -766,9 +766,21 @@ COM_METHOD(ds, GetCaps, 2)
 
 COM_METHOD(ds, DuplicateSoundBuffer, 3)
 {
-    dsbuf_t *src = buffer_of(ARG(1));
+    uint32_t out = ARG(2);
+    if (!void_vm_writable(out, 4)) return DSERR_INVALIDPARAM;
+    MEM32(out) = 0;
+    uint32_t guest = ARG(1);
+    if (!void_vm_readable(guest, 8)) return DSERR_INVALIDPARAM;
+    uint32_t index = MEM32(guest + 4);
+    void_com_object *original = index < VOID_COM_MAX_OBJECTS ? void_com_objects[index] : NULL;
+    if (!original || original->guest != guest || original->cls != &buffer_class) return DSERR_INVALIDPARAM;
+    dsbuf_t *src = (dsbuf_t *)original;
+    if (src->primary) return DSERR_INVALIDPARAM;
     dsbuf_t *b = (dsbuf_t *)calloc(1, sizeof *b);
+    if (!b) return E_OUTOFMEMORY_;
+    pthread_mutex_lock(&mix_lock);
     *b = *src;
+    pthread_mutex_unlock(&mix_lock);
     memset(&b->com, 0, sizeof b->com);
     memset(&b->f3d, 0, sizeof b->f3d);
     memset(&b->notify, 0, sizeof b->notify);
@@ -777,8 +789,9 @@ COM_METHOD(ds, DuplicateSoundBuffer, 3)
     b->lock_ns = b->max_refill_ns = 0;
     /* A duplicate shares the PCM in D3D; copy it so lifetimes stay simple. */
     b->data = void_galloc(src->size);
+    if (!b->data) { free(b); return E_OUTOFMEMORY_; }
     memcpy(GPTR(b->data), GPTR(src->data), src->size);
-    MEM32(ARG(2)) = void_com_wrap(&b->com, &buffer_class, 0);
+    MEM32(out) = void_com_wrap(&b->com, &buffer_class, 0);
     b->com.destroy = buffer_destroy;
     pthread_mutex_lock(&mix_lock);
     b->next = buffers;

@@ -69,6 +69,7 @@ NATIVE_OVERRIDES = (
     "sub_A08281E0",   # CRT memset
     "sub_A0831280",   # CRT strlen
     "sub_A0C52180",   # crashpad::CrashpadClient::StartHandler (android/host/sims2_patches.c)
+    "sub_A01C906A",   # cRZTimer: publish the host's fixed QPC and TSC rates (kernel32.c)
     "sub_A0145325",   # cGZCOM unique ID: borrow the next second instead of sleeping for it (sims2_patches.c)
     "sub_A01453AB",   # cGZCOM unique IDs in bulk: the same (sims2_patches.c)
     "sub_A064B9C7",   # Graphics Options: allow shadow choices in every scene (sims2_patches.c)
@@ -97,6 +98,7 @@ NATIVE_OVERRIDES = (
     "sub_A0619C09", "sub_A061A796",   # Neighborhood UI mode lifetime: touch context
     "sub_A0619E26", "sub_A061A919",   # Options UI mode lifetime: allow its category buttons on a lot
     "sub_A0619F86", "sub_A061A9F2",   # Rewards UI mode: same touch controls as Buy, original reward currency
+    "sub_A060AFF1", "sub_A0609486",   # Bon Voyage framing window open/close for touchscreen shutter
     "sub_A0973692", "sub_A0973E55",   # Native UI manager lifetime: main-thread touch queries
     "sub_A05BDFD7", "sub_A05BE0F2",   # Actual scene viewport attach/detach: touch ownership
     "sub_A076C5EB", "sub_A076CABE",   # Native active tool handler lifetime: touch profile
@@ -107,6 +109,7 @@ NATIVE_OVERRIDES = (
     "sub_A076662A",   # chooser destructor: release any remaining fit (sims2_settings.c)
     "sub_A05C0B82",   # game loading window attach: fit its fixed layout (sims2_settings.c)
     "sub_A05C0C89",   # game loading window detach: restore the requested scale (sims2_settings.c)
+    "sub_A05BE74D",   # cTSWinProcLotIntro: fit the visible loading window through detach (sims2_settings.c)
     "sub_A0C47EFC", "sub_A0C471DA", "sub_A0C46C58",   # asynchronous town-load fit through original completion/failure
     "sub_A0C44B8C", "sub_A0C42D84", "sub_A0C42483",   # asynchronous lot-load fit through original completion/failure
     "sub_A07B7B27",   # lot information card show: fit the fixed preview (sims2_settings.c)
@@ -123,6 +126,7 @@ NATIVE_OVERRIDES = (
     "sub_A01BEFFF",   # a name's offset in a packed name table (property sets), with libc strlen (sims2_fast.c)
     "sub_A01BF191",   # the same, adding an absent name (sims2_fast.c)
     "sub_A01D5B50",   # persistence filename buckets: per-lookup original locale snapshot (sims2_fast.c)
+    "sub_A01EC080",   # Russian fallback for shipped University catalog descriptions (sims2_shims.c)
     "sub_A09187BE",   # guarded font-parser substring search with native first-byte skipping (sims2_fast.c)
     "sub_A0845799",   # CRT _stricmp without a locale: ASCII folding (sims2_fast.c)
     "sub_A0229E45",   # a job queue's pump: no spinning on an empty queue (sims2_fast.c)
@@ -569,6 +573,15 @@ def override_source(source, local_xmm):
             text = default_neighborhood_flythrough_off(text)
             if RELEASE is None:
                 text = touch_camera_hover_guard(text)
+                if source.name == "sims2_A0670000.c":
+                    # Compare the cTSMainToolbar floor around the UCP button handler's setter.
+                    call = b"    RECOMP_ICALL(MEM32(edx + 0x6C)); /* 0xA06739F9: call dword ptr [edx + 0x6c] */"
+                    if text.count(call) != 1:
+                        raise ValueError("expected one UCP floor button call")
+                    before = b"    const uint32_t toolbar = esi, old_floor = MEM32(toolbar + 0x34);\n"
+                    after = b"\n    if (MEM32(toolbar + 0x34) != old_floor) s2_touch_note_floor_button();"
+                    text = b"void s2_touch_note_floor_button(void);\n" + text.replace(
+                        call, before + call + after, 1)
             text = inline_dot(text)
         if local_xmm:
             text = localize_registers(text)

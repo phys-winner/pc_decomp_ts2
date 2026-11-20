@@ -11,26 +11,31 @@ import java.util.*;
 public class RendererDefaultsCheck {
  static Spec.Mode mode(String id){Spec.Mode m=new Spec.Mode();m.id=id;return m;}
  static List<Renderers.Status> states(boolean stock,boolean turnip){return Arrays.asList(
-  new Renderers.Status(mode("dxvk"),true,stock,null),new Renderers.Status(mode("turnip"),true,turnip,null),new Renderers.Status(mode("gles"),true,true,null));}
+  new Renderers.Status(mode("gles"),true,true,null),new Renderers.Status(mode("dxvk"),true,stock,null),new Renderers.Status(mode("turnip"),true,turnip,null));}
  public static void main(String[] args){
-  assert Renderers.effective("dxvk",states(true,true),"dxvk",false).equals("dxvk");
-  assert Renderers.effective("dxvk",states(false,true),"dxvk",false).equals("turnip");
-  assert Renderers.effective("dxvk",states(false,false),"dxvk",false).equals("gles");
-  assert Renderers.effective("dxvk",states(true,true),"gles",true).equals("gles");
-  List<Renderers.Status> unavailable=Arrays.asList(new Renderers.Status(mode("dxvk"),false,false,null),new Renderers.Status(mode("turnip"),true,true,null),new Renderers.Status(mode("gles"),true,true,null));
-  assert Renderers.effective("dxvk",unavailable,"dxvk",false).equals("turnip");
-  System.out.println("PASS actual launcher selection: system DXVK first, verified Turnip fallback, GLES fallback, explicit GLES preserved");
+  assert Renderers.effective("gles",states(true,true),"gles",false).equals("gles");
+  assert Renderers.effective("gles",states(false,false),"gles",false).equals("gles");
+  assert Renderers.effective("gles",states(true,true),"dxvk",true).equals("dxvk");
+  assert Renderers.effective("gles",states(false,true),"turnip",true).equals("turnip");
+  List<Renderers.Status> unavailable=Arrays.asList(new Renderers.Status(mode("gles"),true,true,null),new Renderers.Status(mode("dxvk"),false,false,null),new Renderers.Status(mode("turnip"),true,true,null));
+  assert Renderers.effective("gles",unavailable,"dxvk",true).equals("gles");
+  for (String model : Arrays.asList("Mali-G76 MC4", "Immortalis-G720", ""))
+   assert Probe.mali(null,Probe.parse("stock.vendor=13b5\nstock.device="+model)) : model;
+  assert !Probe.mali(null,Probe.parse("stock.vendor=1010\nstock.device=PowerVR"));
+  System.out.println("PASS actual launcher selection: OpenGL ES default and fallback, explicit Vulkan choices preserved");
+  System.out.println("PASS PanVK probing uses the ARM Vulkan vendor without a model allowlist");
  }
 }'''
 
 
 def main():
     spec=json.loads((ROOT/'android/port.json').read_text(encoding='utf-8'))
-    assert spec['renderers']['default']=='dxvk'
-    assert spec['distributions'][0]['renderers']==['dxvk','turnip','gles']
+    assert spec['renderers']['default']=='gles'
+    assert spec['distributions'][0]['renderers']==['gles','dxvk','turnip','panvk']
     modes={m['id']:m for m in spec['renderers']['modes']}
     assert modes['dxvk']['vulkan']=='1.3' and modes['dxvk']['minSdk']==30
     assert modes['turnip']['kind']=='turnip' and modes['turnip']['minSdk']==30
+    assert modes['panvk']['kind']=='panvk' and modes['panvk']['minSdk']==30
     with tempfile.TemporaryDirectory(prefix='sims2-renderer-default-') as folder:
         out=Path(folder);test=out/'RendererDefaultsCheck.java';test.write_text(CHECK,encoding='utf-8')
         sources=sorted((launcher_root()/'android/src/port/launcher').glob('*.java'))

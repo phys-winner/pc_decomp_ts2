@@ -19,23 +19,21 @@ extern "C" {
 
 /* {textures, bytes, convertedFormat, convertedTextures, convertedBytes, stale}, or null with the
  * reason in nativeMessage(). */
-JNIEXPORT jlongArray JNICALL Java_org_sims2_port_TextureCache_nativeScan(JNIEnv *env, jclass, jstring game, jstring index, jint fd)
+JNIEXPORT jlongArray JNICALL Java_org_sims2_port_TextureCache_nativeScan(JNIEnv *env, jclass, jstring game, jstring cache, jstring index, jint fd)
 {
-    Utf dir(env, game), mount(env, index);
-    if (!dir.chars) return nullptr;
+    Utf dir(env, game), output(env, cache), mount(env, index);
     s2texconv_status s;
-    if (s2texconv_scan_zip(dir.chars, &s, mount.chars, fd)) return nullptr;
+    if (s2texconv_scan_at(dir.chars, output.chars, &s, mount.chars, fd)) return nullptr;
     jlong values[] = {s.textures, s.bytes, s.converted_format, s.converted_textures, s.converted_bytes, s.stale};
     jlongArray out = env->NewLongArray(6);
     if (out) env->SetLongArrayRegion(out, 0, 6, values);
     return out;
 }
 
-JNIEXPORT jint JNICALL Java_org_sims2_port_TextureCache_nativeConvert(JNIEnv *env, jclass, jstring game, jint format, jint threads, jstring index, jint fd)
+JNIEXPORT jint JNICALL Java_org_sims2_port_TextureCache_nativeConvert(JNIEnv *env, jclass, jstring game, jstring cache, jint format, jint threads, jstring index, jint fd)
 {
-    Utf dir(env, game);
-    Utf mount(env, index);
-    return dir.chars ? s2texconv_convert_zip(dir.chars, format, threads, mount.chars, fd) : -1;
+    Utf dir(env, game), output(env, cache), mount(env, index);
+    return s2texconv_convert_at(dir.chars, output.chars, format, threads, mount.chars, fd);
 }
 
 JNIEXPORT jint JNICALL Java_org_sims2_port_TextureCache_nativeRemove(JNIEnv *env, jclass, jstring game)

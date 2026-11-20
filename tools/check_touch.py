@@ -45,7 +45,7 @@ STUBS = {'android/content/Context.java': 'package android.content; public class 
                             '}',
  'android/view/View.java': 'package android.view;\n'
                            'public class View {\n'
-                           '    public View(android.content.Context c){}\n'
+                           '    private final android.content.Context context;public View(android.content.Context c){context=c;}public android.content.Context getContext(){return context;}\n'
                            '    public static int width=2400,height=1080;\n'
                            '    public int getWidth(){return width;} public int getHeight(){return height;}\n'
                            '    public static final int VISIBLE=0,GONE=8,LAYOUT_DIRECTION_LTR=0;public float rotation;public void setRotation(float a){rotation=a;}public void setLayoutDirection(int n){}public int visibility;public boolean enabled=true;public float alpha=1;public Object background;public String description;\n'
@@ -153,6 +153,11 @@ STUBS.update({
  'android/widget/OverScroller.java': 'package android.widget;public class OverScroller {int vx,vy,x,y,ticks;boolean finished=true;public OverScroller(android.content.Context c){}public void forceFinished(boolean b){finished=b;}public void fling(int x,int y,int vx,int vy,int minX,int maxX,int minY,int maxY){assert minX<maxX&&minY<maxY;this.x=x;this.y=y;this.vx=vx;this.vy=vy;ticks=0;finished=false;}public boolean computeScrollOffset(){if(finished||ticks++>=5){finished=true;return false;}x+=vx/30;y+=vy/30;return true;}public int getCurrX(){return x;}public int getCurrY(){return y;}}'
 })
 STUBS['android/view/View.java']=STUBS['android/view/View.java'].replace('protected void onDraw(', 'public void announceForAccessibility(CharSequence text){} protected void onDraw(')
+STUBS['android/view/View.java']=STUBS['android/view/View.java'].replace('protected void onDraw(', 'public static final int IMPORTANT_FOR_ACCESSIBILITY_NO=2;public void setImportantForAccessibility(int mode){} protected void onDraw(')
+STUBS['org/sims2/port/GamePreferences.java']=STUBS['org/sims2/port/GamePreferences.java'].replace('static boolean swipes=', '''static boolean tools,floorHint;
+static boolean showGameTools(){return tools;}static void showGameTools(boolean value){tools=value;}
+static boolean floorHintShown(){return floorHint;}static void markFloorHintShown(){floorHint=true;}
+static boolean swipes=''')
 
 NATIVE = r'''package org.sims2.port;
 import android.app.AlertDialog;import android.widget.*;import android.view.*;import android.text.*;
@@ -178,9 +183,11 @@ public class GameActivity extends ActivityBase {
  static java.util.function.BiFunction<Float,Float,Integer> hitAt;
  static int nativeTouchContext(){return context;}static long nativeTouchToolToken(){return(generation<<32)|(tool&0xffffffffL);}
  static boolean rewards;static boolean nativeTouchRewards(){return rewards;}
+ static boolean photo;static boolean nativeTouchPhoto(){return photo;}
  static float pickX=-1,pickY=-1;static long swipeFeedback;static int flings;
  static float[] nativeTouchUiPick(float x,float y,float diameter){assert diameter>0;int k=nativeTouchHitKind(x,y);return new float[]{k,pickX<0?x:pickX,pickY<0?y:pickY};}
  static long nativeTouchSwipeFeedback(){return swipeFeedback;}
+ static boolean floorButtonUsed;static boolean nativeTouchFloorButtonUsed(){return floorButtonUsed;}
  static long nativeTouchScrollOwner(){return 123;}
  static int flingStops;static void nativeTouchStopFling(){flingStops++;}
  static boolean nativeTouchFling(float x,float y,int amount,int mode,long size,long epoch,long owner){assert owner==123;flings++;return nativeTouchScroll(x,y,amount,mode,size,epoch);}
@@ -254,6 +261,9 @@ public class GameActivity extends ActivityBase {
  GamepadLayer gamepad;TouchLayer touch=new TouchLayer(this);android.os.Handler controlHandler=new android.os.Handler(android.os.Looper.getMainLooper());Runnable updateControls=()->{};
  AlertDialog settingsDialog,textDialog,languageDialog,cheatDialog;EditText textEditor;TextView scaleStatus;int textSerial,desiredScale,lastSubmittedScale,cheatSerial;boolean scaleRequested;String textDraft="";
  LinearLayout objectControls,targetRadiusTextPanel;TextView objectCost,targetRadiusHint;Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;FrameLayout root=new FrameLayout(this),toolMenu,targetRadiusPanel;int toolMenuContext;long toolMenuSize,toolMenuEpoch;
+ LinearLayout photoControls;View fpsOverlay;
+ FrameLayout.LayoutParams fpsLayout(){return new FrameLayout.LayoutParams(-1,-1);}
+ void updateFpsOverlay(){}void stopFpsOverlay(){}
  int safeLeft,safeTop,safeRight,safeBottom;
  File base;
  void hideSystemUi(){}
@@ -348,6 +358,14 @@ public class TouchCheck {
   android.app.AlertDialog hint=a.settingsDialog;a.showTimeHint();assert a.settingsDialog==hint;
   hint.dismiss();a.showTimeHint();assert a.settingsDialog==null;
   a=new GameActivity();GameActivity.active=a;a.firstFrame=true;a.showTimeHint();assert a.settingsDialog==null;
+  int notices=GameActivity.notices;
+  a.showFloorHint();assert GameActivity.notices==notices&&!GamePreferences.floorHintShown();
+  GameActivity.floorButtonUsed=true;GameActivity.context=TouchLayer.MODAL|TouchLayer.LIVE;
+  a.showFloorHint();assert GameActivity.notices==notices&&!GamePreferences.floorHintShown();
+  GameActivity.context=TouchLayer.BUILD;a.showFloorHint();a.showFloorHint();
+  assert GameActivity.notices==notices+1&&GamePreferences.floorHintShown();
+  assert GameActivity.lastNotice.equals(GameActivity.text(R.string.floor_swipe_hint));
+  GameActivity.floorButtonUsed=false;GameActivity.context=TouchLayer.LIVE;
   GameActivity.active=null;noExtra(t);
  }
  static void navigationMouseMoves(){
@@ -706,7 +724,8 @@ public class TouchCheck {
  }
  static void radialMenu(){
   GameActivity a=new GameActivity();GameActivity.active=a;GameActivity.context=256;GameActivity.tool=1;
-  a.createObjectControls(a.root);a.refreshObjectControls();assert a.toolsButton.visibility==0;
+  a.createObjectControls(a.root);a.refreshObjectControls();a.showToolMenu();assert a.toolsButton.visibility==8&&a.toolMenu==null;
+  GamePreferences.showGameTools(true);a.refreshObjectControls();assert a.toolsButton.visibility==0;
   int clicks=GameActivity.clicks,requests=GameActivity.toolMenuRequests;
   a.toolsButton.performClick();assert a.toolMenu!=null&&a.toolMenu.children.size()==10;
   assert a.objectControls.visibility==8&&a.toolsButton.visibility==8;
@@ -717,6 +736,8 @@ public class TouchCheck {
   a.showToolMenu();FrameLayout stale=a.toolMenu;GameActivity.layoutEpoch++;
   ((Button)stale.children.get(0)).performClick();assert a.toolMenu==null&&GameActivity.toolMenuRequests==requests+1;
   GameActivity.context=128;a.showToolMenu();assert a.toolMenu==null;a.refreshObjectControls();assert a.toolsButton.visibility==8;
+  GameActivity.photo=true;a.refreshObjectControls();assert a.photoControls.visibility==0;
+  GameActivity.context|=1;a.refreshObjectControls();assert a.photoControls.visibility==8;GameActivity.photo=false;
   a.onDestroy();GameActivity.active=null;clean();
  }
  static void objectRotation(){
@@ -1187,16 +1208,17 @@ def method(source,signature):
 
 def main():
     activity=(ROOT/'android/app/src/org/sims2/port/GameActivity.java').read_text(encoding='utf-8')
-    for obsolete in ['touchPanel','addTouchControls','profileButton','HorizontalScrollView','nativeText(','loadControls(','hudScale']:
+    for obsolete in ['touchPanel','addTouchControls','profileButton','HorizontalScrollView','nativeText(','loadControls(','int hudScale','float hudScale']:
         assert obsolete not in activity,obsolete
     assert 'root.addView(surface' in activity and 'root.addView(touch' in activity
     assert 'touch.pollCommands();' in activity, 'command polls reuse the existing Activity context timer'
     native=NATIVE
     for signature in ['static final class WorldTarget','static void touchObjectControlsChanged(','private Button objectButton(',
                       'private void createObjectControls(','private android.graphics.drawable.GradientDrawable objectControlBackground(','private TextView targetRadiusText(','private void positionTargetRadiusControls(','private void refreshObjectControls(',
+                      'private boolean canUsePhotoControls(','private void photoKey(',
                       'private boolean toolMenuValid(','private void closeToolMenu(','private void showToolMenu(',
                       'private void applySafeInsets(','static String userdataName(','static String displayRates(',
-                      'private boolean ownsInput(','private void submitScale(','private void showTouchSettings(','private void showTimeHint(',
+                      'private boolean ownsInput(','private void submitScale(','private void controlOption(','private void showTouchSettings(','private void showTimeHint(','private void showFloorHint(',
                       'private void showTextEditor(','private void handleTextReceipt(','private void cancelTextSession(',
                       'public void onWindowFocusChanged(','public void onBackPressed(','public void surfaceCreated(',
                       'public void surfaceDestroyed(','protected void onPause(','protected void onResume(','protected void onDestroy(']:

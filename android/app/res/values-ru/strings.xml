@@ -41,6 +41,8 @@
   <string name="time_controls">Управление временем</string>
   <string name="time_swipe_hint">Проведите пальцем по часам или кнопкам скорости: вправо — быстрее, влево — медленнее, до паузы. Шкала в центре показывает выбранную скорость.</string>
   <string name="tools_menu">Инструменты игры</string>
+  <string name="show_game_tools">Показывать кнопку инструментов</string>
+  <string name="take_photo">Сделать фото</string>
   <string name="tool_hand">Рука</string>
   <string name="tool_eyedropper">Пипетка</string>
   <string name="tool_design">Дизайн</string>
@@ -50,8 +52,9 @@
   <string name="tool_top_down">Вид сверху</string>
   <string name="tool_undo">Отменить</string>
   <string name="tool_redo">Повторить</string>
-  <string name="port_settings_restart">Настройки ниже сохраняются для следующего запуска игры. FSR, FXAA и MSAA требуют OpenGL ES; если MSAA недоступно, оно отключается. Масштаб интерфейса и свайпы выше применяются сразу.</string>
+  <string name="port_settings_restart">Настройки управления и счётчик FPS действуют сразу. Язык и параметры рендера применятся при следующем запуске. FSR, FXAA и MSAA требуют OpenGL ES. Игра отключает MSAA, если устройство его не поддерживает.</string>
   <string name="settings_save_failed">Не удалось сохранить настройку. Повторите попытку.</string>
+  <string name="engine_start_failed">Не удалось запустить игровой движок. Подробности в sims2.log.</string>
   <string name="enable">Включить</string>
   <string name="swipe_paused">Пауза</string>
   <string name="swipe_speed1">Обычная скорость</string>
@@ -98,4 +101,5 @@
     <string name="target_area_diameter">Диаметр области касания: %1$d пикс.</string>
     <string name="target_area_label">Размер касания</string>
     <string name="target_area_hint">Ползунок меняет область поиска предметов вокруг точки касания. Круг показывает её размер.</string>
+  <string name="floor_swipe_hint">Чтобы сменить этаж, проведите тремя пальцами вверх или вниз.</string>
 </resources>

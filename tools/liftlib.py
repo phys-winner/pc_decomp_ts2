@@ -25,7 +25,7 @@ from tools.lift.lift32 import Lifter
 from tools.lift.generate import lift_function_linear as _vendor_lift_function_linear
 from sse_ext import lift_ext
 import tools.lift.eh32 as _eh32
-from tools.lift.eh32 import resume_points, catch_funclets, PROLOGUE_WINDOW, EH_MAGICS
+from tools.lift.eh32 import resume_points, catch_funclets, funclet_returns, PROLOGUE_WINDOW, EH_MAGICS
 from capstone.x86 import (X86_OP_IMM, X86_OP_MEM, X86_OP_REG, X86_REG_XMM0,
                          X86_REG_XMM7, X86_REG_EBP, X86_REG_ESP)
 
@@ -244,19 +244,32 @@ def complete_eh_owner(decoder, function, imports):
                 bias = -memory.disp
                 # Normalize only the metadata scanner; emitted guest instructions stay exact.
                 scanner_instructions = [instructions[0], replace(lea, mnemonic="mov", op_str="ebp, esp"), *instructions[2:]]
-    candidates = resume_points(decoder.md, decoder.read_bytes, scanner_instructions)
+    fi = None
+    if len(instructions) >= 2:
+        first, second = instructions[:2]
+        if (first.address == function.address and second.address == first.end_address
+                and first.mnemonic == "mov" and first.op_str.startswith("eax, 0x")
+                and second.mnemonic == "call" and second.op_str == "0xa08248b0"):
+            # MSVC's shared __EH_prolog pushes the handler in EAX and sets EBP to entry ESP - 4.
+            fi = funcinfo(decoder.read_bytes, int(first.op_str[5:], 16))
+    if fi is not None:
+        candidates = set().union(*(funclet_returns(decoder.md, decoder.read_bytes, entry)
+                                  for entry in catch_funclets(decoder.read_bytes, fi)))
+    else:
+        candidates = resume_points(decoder.md, decoder.read_bytes, scanner_instructions)
     function.eh_frame_bias = bias if candidates is not None else 0
     function.eh_resume = None if candidates is None else set()
     function.eh_added_instructions = 0
     if not candidates:
         return
-    handler, fi = None, None
-    for instruction in instructions[:PROLOGUE_WINDOW]:
-        if instruction.mnemonic == "push" and instruction.op_str.startswith("0x"):
-            handler = int(instruction.op_str, 16)
-        elif instruction.mnemonic == "mov" and instruction.op_str.endswith("dword ptr fs:[0]") and handler is not None:
-            fi = funcinfo(decoder.read_bytes, handler)
-            break
+    if fi is None:
+        handler = None
+        for instruction in instructions[:PROLOGUE_WINDOW]:
+            if instruction.mnemonic == "push" and instruction.op_str.startswith("0x"):
+                handler = int(instruction.op_str, 16)
+            elif instruction.mnemonic == "mov" and instruction.op_str.endswith("dword ptr fs:[0]") and handler is not None:
+                fi = funcinfo(decoder.read_bytes, handler)
+                break
     if fi is None:
         raise ValueError(f"EH owner {function.address:#x} has no verified FuncInfo")
     funclets = set(catch_funclets(decoder.read_bytes, fi))

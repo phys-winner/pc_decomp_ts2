@@ -102,6 +102,18 @@
    "Turnip-LICENSE-NOTE.txt": "99b28b946c1d4fd3470f6f10f072c91eb9f547abdc178f21c375eb94b8ce556f"
   }
  },
+ "panvk": {
+  "url": "https://github.com/JimVulkan/mali-panvk",
+  "revision": "58f2c55854",
+  "source": "Frostpunk tools/build_panvk.sh with its GPU patch and Android gralloc support",
+  "note": "Pinned output in the sibling frostpunk/build/gpu-runtime/panvk, or in S2_PANVK_RUNTIME. The bundled kbase build uses 4 KiB kernel pages.",
+  "runtime": {
+   "libvulkan_panfrost.so": "6e85bc6f076289101b9da04373f1e36640f8cb2aea6132b9f31c49cf4285a836"
+  },
+  "licenses": {
+   "PanVK-JimVulkan-NOTICE.txt": "a0dda6f48f48df50c29d07e1f4721b42a6ed861010efe51296c488465179d6ac"
+  }
+ },
  "libcxx_shared": {
   "source": "Android NDK 27.2.12479018, sysroot/usr/lib/aarch64-linux-android/libc++_shared.so",
   "license": "Apache-2.0 WITH LLVM-exception",

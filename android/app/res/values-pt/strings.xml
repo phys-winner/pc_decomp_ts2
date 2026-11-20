@@ -44,4 +44,5 @@
   <string name="target_ground">Chão</string>
   <string name="target_object">Objeto %1$d</string>
   <string name="target_changed">O alvo moveu-se. Toque novamente.</string>
+  <string name="floor_swipe_hint">Desliza três dedos para cima ou para baixo para mudar de andar.</string>
 </resources>

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <mutex>
 #include <string>
@@ -683,23 +684,35 @@ int hardware_threads()
 
 /* Workers over the packages: each takes the next one and handles its TXTR (pass 1) or LIFO (pass 2) entries. */
 template <typename Work>
-void for_each_package(const std::vector<PackageIndex> &packages, int threads, Work work)
+bool for_each_package(const std::vector<PackageIndex> &packages, int threads, Work work)
 {
     std::atomic<size_t> next{0};
-    std::vector<std::thread> pool;
-    for (int t = 0; t < threads; ++t)
-        pool.emplace_back([&]() {
+    std::atomic<bool> failed{false};
+    auto run = [&]() {
+        try {
             std::vector<uint8_t> raw, data, rgba, out;
-            for (;;) {
+            while (!failed && !cancelled) {
                 size_t k = next++;
-                if (k >= packages.size() || cancelled) break;
+                if (k >= packages.size()) break;
                 work(packages[k], raw, data, rgba, out);
             }
-        });
+        } catch (const std::exception &) {
+            failed = true;
+        }
+    };
+    std::vector<std::thread> pool;
+    try {
+        for (int t = 1; t < threads && static_cast<size_t>(t) < packages.size(); ++t)
+            pool.emplace_back(run);
+    } catch (const std::exception &) {
+        /* Work with the threads already created when Android rejects another. */
+    }
+    run();
     for (std::thread &t : pool) t.join();
+    return !failed;
 }
 
-int convert(const Source &source, int format, int threads)
+int convert(const Source &source, const std::string &output, int format, int threads)
 {
     const std::string &game = source.game;
     begin(S2TEXCONV_SCANNING);
@@ -721,19 +734,26 @@ int convert(const Source &source, int format, int threads)
     }
     set_totals(static_cast<int64_t>(packages.size()) * 2, total_bytes);
     uint64_t signature = packages_signature(source);
-    mkdir(cache_dir(game).c_str(), 0775);
-    std::string final_path = cache_path(game), temporary = final_path + ".tmp";
+    const std::string directory = cache_dir(output);
+    if (mkdir(directory.c_str(), 0775) && errno != EEXIST)
+        return fail("Cannot create %s: %s", directory.c_str(), strerror(errno));
+    std::string final_path = cache_path(output), temporary = final_path + ".tmp";
+    Fd file(::open(temporary.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0664));
+    if (file.fd < 0) return fail("Cannot create %s: %s", temporary.c_str(), strerror(errno));
+    struct PartialCache {
+        const char *path;
+        ~PartialCache() { if (path) unlink(path); }
+    } partial{temporary.c_str()};
     Cache cache;
     cache.format = format;
-    cache.fd = ::open(temporary.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0664);
-    if (cache.fd < 0) return fail("Cannot create %s: %s", temporary.c_str(), strerror(errno));
+    cache.fd = file.fd;
     if (threads <= 0) threads = hardware_threads();
     set_state(S2TEXCONV_CONVERTING);
 
     /* Pass 1: TXTR resources; their inline (small) levels and the names of the LIFO levels. */
     std::mutex refs_lock;
     std::unordered_map<std::string, int> lifo_source;
-    for_each_package(packages, threads, [&](const PackageIndex &p, std::vector<uint8_t> &raw, std::vector<uint8_t> &data,
+    if (!for_each_package(packages, threads, [&](const PackageIndex &p, std::vector<uint8_t> &raw, std::vector<uint8_t> &data,
                                             std::vector<uint8_t> &rgba, std::vector<uint8_t> &out) {
         PackageFile f(source, p.path);
         std::vector<std::pair<std::string, int>> refs;
@@ -756,10 +776,10 @@ int convert(const Source &source, int format, int threads)
             else if (it->second != r.second) it->second = 0;      /* named with two formats: leave it */
         }
         done_packages++;
-    });
+    })) return fail("A texture worker failed while processing TXTR resources");
 
     /* Pass 2: LIFO resources (the large levels), in the format their TXTR gave. */
-    for_each_package(packages, threads, [&](const PackageIndex &p, std::vector<uint8_t> &raw, std::vector<uint8_t> &data,
+    if (!for_each_package(packages, threads, [&](const PackageIndex &p, std::vector<uint8_t> &raw, std::vector<uint8_t> &data,
                                             std::vector<uint8_t> &rgba, std::vector<uint8_t> &out) {
         PackageFile f(source, p.path);
         for (const Entry &e : p.textures) {
@@ -776,17 +796,13 @@ int convert(const Source &source, int format, int threads)
             convert_level(cache, Level{it->second, w, h, pixels, bytes}, rgba, out);
         }
         done_packages++;
-    });
+    })) return fail("A texture worker failed while processing LIFO resources");
 
     if (cancelled) {
-        ::close(cache.fd);
-        unlink(temporary.c_str());
         set_state(S2TEXCONV_CANCELLED);
         return 1;
     }
     if (cache.failed) {
-        ::close(cache.fd);
-        unlink(temporary.c_str());
         return fail("Writing %s failed (is the storage full?)", temporary.c_str());
     }
     set_state(S2TEXCONV_FINISHING);
@@ -809,17 +825,17 @@ int convert(const Source &source, int format, int threads)
     h.signature = signature;
     bool ok = (index_bytes == 0 || write_exact(cache.fd, cache.index.data(), index_bytes, index_at)) &&
               write_exact(cache.fd, &h, sizeof h, 0) && fsync(cache.fd) == 0;
-    ok = ::close(cache.fd) == 0 && ok;
-    if (!ok || rename(temporary.c_str(), final_path.c_str())) {
-        int e = errno;
-        unlink(temporary.c_str());
-        return fail("Finishing %s failed: %s", final_path.c_str(), strerror(e));
-    }
+    if (ok) ok = ::close(file.fd) == 0;
+    else { int error = errno; ::close(file.fd); errno = error; }
+    file.fd = -1;
+    if (!ok || rename(temporary.c_str(), final_path.c_str()))
+        return fail("Finishing %s failed: %s", final_path.c_str(), strerror(errno));
+    partial.path = nullptr;
     set_state(S2TEXCONV_DONE);
     return 0;
 }
 
-int scan(const Source &source, s2texconv_status *out)
+int scan(const Source &source, const std::string &output, s2texconv_status *out)
 {
     const std::string &game = source.game;
     begin(S2TEXCONV_SCANNING);
@@ -831,7 +847,7 @@ int scan(const Source &source, s2texconv_status *out)
     for (const Entry &e : p.textures) out->textures += e.type == TYPE_TXTR;
     out->bytes = p.bytes;
     s2tc_header h;
-    if (read_header(cache_path(game), h)) {
+    if (read_header(cache_path(output), h)) {
         if (h.signature == packages_signature(source)) {
             out->converted_format = static_cast<int>(h.format);
             out->converted_textures = static_cast<int64_t>(h.textures);
@@ -869,23 +885,39 @@ extern "C" int s2texconv_convert(const char *game_dir, int format, int threads)
 
 extern "C" int s2texconv_scan_zip(const char *game_dir, s2texconv_status *out, const char *index, int fd)
 {
-    if (!game_dir || !out) return -1;
-    Source source(game_dir, index, fd);
-    if (index && !source.mount) return fail("Cannot open game ZIP index");
-    return scan(source, out);
+    return s2texconv_scan_at(game_dir, game_dir, out, index, fd);
 }
 
 extern "C" int s2texconv_convert_zip(const char *game_dir, int format, int threads, const char *index, int fd)
 {
-    if (!game_dir) return -1;
+    return s2texconv_convert_at(game_dir, game_dir, format, threads, index, fd);
+}
+
+extern "C" int s2texconv_scan_at(const char *game_dir, const char *output, s2texconv_status *out, const char *index, int fd)
+try {
+    if (!game_dir || !output || !out) return -1;
     Source source(game_dir, index, fd);
     if (index && !source.mount) return fail("Cannot open game ZIP index");
-    return convert(source, format, threads);
+    return scan(source, output, out);
+} catch (const std::exception &e) {
+    return fail("Texture scan failed: %s", e.what());
+}
+
+extern "C" int s2texconv_convert_at(const char *game_dir, const char *output, int format, int threads, const char *index, int fd)
+try {
+    if (!game_dir || !output) return -1;
+    Source source(game_dir, index, fd);
+    if (index && !source.mount) return fail("Cannot open game ZIP index");
+    return convert(source, output, format, threads);
+} catch (const std::exception &e) {
+    return fail("Texture conversion failed: %s", e.what());
 }
 
 extern "C" int s2texconv_remove(const char *game_dir)
-{
+try {
     return game_dir ? remove_conversion(game_dir) : -1;
+} catch (const std::exception &e) {
+    return fail("Removing the texture cache failed: %s", e.what());
 }
 
 extern "C" void s2texconv_cancel(void) { cancelled = true; }

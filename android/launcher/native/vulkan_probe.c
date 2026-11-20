@@ -12,6 +12,7 @@
 #include <string.h>
 #include <vulkan/vulkan_core.h>
 #include "vulkan_requirements.h"
+#include "panvk_identity.h"
 
 #ifndef PORT_PROBE_CLASS
 #define PORT_PROBE_CLASS "port/launcher/Probe"
@@ -47,7 +48,7 @@ static int port_has(const VkExtensionProperties *list, uint32_t count, const cha
     return 0;
 }
 
-static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int turnip, port_report *r)
+static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int turnip, const char *panvk, port_report *r)
 {
     PFN_vkEnumerateInstanceVersion instance_version =
         (PFN_vkEnumerateInstanceVersion)gipa(NULL, "vkEnumerateInstanceVersion");
@@ -190,7 +191,12 @@ static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int t
         size_t used = strlen(missing);
         snprintf(missing + used, sizeof missing - used, "%snotTurnip", gaps++ ? "," : "");
     }
-    port_line(r, prefix, "status", gaps ? "missing" : "ok");
+    if (panvk && (p.vendorID != 0x13b5 || driver_id != VK_DRIVER_ID_MESA_PANVK || !port_panvk_mapped(panvk))) {
+        port_line(r, prefix, "status", "error");
+        port_line(r, prefix, "error", "PanVK driver not active");
+    } else {
+        port_line(r, prefix, "status", gaps ? "missing" : "ok");
+    }
     port_line(r, prefix, "device", p.deviceName);
     snprintf(text, sizeof text, "%04x", p.vendorID);
     port_line(r, prefix, "vendor", text);
@@ -238,8 +244,9 @@ static PFN_vkGetInstanceProcAddr port_open_turnip(const char *directory, const c
     return get;
 }
 
-/* driver null: the system driver (libvulkan.so); else the Turnip library of that name, or at that full path. */
-static jstring JNICALL port_native_probe(JNIEnv *env, jclass cls, jstring directory, jstring driver)
+/* driver null: the system driver (libvulkan.so); else the Turnip library of that name, or at that full path;
+ * `panvk`: the driver is Mesa PanVK (the same custom loading, reported as "panvk."). */
+static jstring JNICALL port_native_probe(JNIEnv *env, jclass cls, jstring directory, jstring driver, jboolean panvk)
 {
     (void)cls;
     port_report report = { calloc(1, 8192), 8192, 0 };
@@ -249,18 +256,22 @@ static jstring JNICALL port_native_probe(JNIEnv *env, jclass cls, jstring direct
     if (!name) {
         void *vulkan = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
         PFN_vkGetInstanceProcAddr gipa = vulkan ? (PFN_vkGetInstanceProcAddr)dlsym(vulkan, "vkGetInstanceProcAddr") : NULL;
-        if (gipa) port_probe(gipa, "stock", 0, &report);
+        if (gipa) port_probe(gipa, "stock", 0, NULL, &report);
         else {
             port_line(&report, "stock", "status", "error");
             port_line(&report, "stock", "error", "no system Vulkan loader");
         }
     } else {
         char error[512] = "";
-        PFN_vkGetInstanceProcAddr gipa = port_open_turnip(dir, name, error, sizeof error);
-        if (gipa) port_probe(gipa, "turnip", 1, &report);
+        const char *prefix = panvk ? "panvk" : "turnip";
+        char bundled[1024];
+        snprintf(bundled, sizeof bundled, "%s/%s", dir ? dir : "", name);
+        const char *page_error = panvk ? port_panvk_page_size_error(name[0] != '/') : NULL;
+        PFN_vkGetInstanceProcAddr gipa = page_error ? NULL : port_open_turnip(dir, name, error, sizeof error);
+        if (gipa) port_probe(gipa, prefix, !panvk, panvk ? (name[0] == '/' ? name : bundled) : NULL, &report);
         else {
-            port_line(&report, "turnip", "status", "error");
-            port_line(&report, "turnip", "error", error);
+            port_line(&report, prefix, "status", "error");
+            port_line(&report, prefix, "error", page_error ? page_error : error);
         }
     }
     if (dir) (*env)->ReleaseStringUTFChars(env, directory, dir);
@@ -279,7 +290,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     jclass cls = (*env)->FindClass(env, PORT_PROBE_CLASS);
     if (!cls) return JNI_ERR;
     static const JNINativeMethod methods[] = {
-        { "nativeProbe", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", (void *)port_native_probe },
+        { "nativeProbe", "(Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;", (void *)port_native_probe },
     };
     if ((*env)->RegisterNatives(env, cls, methods, 1) != JNI_OK) return JNI_ERR;
     return JNI_VERSION_1_6;

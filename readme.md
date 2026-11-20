@@ -1,6 +1,6 @@
 # The Sims 2 Legacy for ARM64 Android
 
-Development build: **0.1.1-dev**.
+Development build: **0.1.2-dev**.
 
 An unofficial Android port of the PC version of **The Sims 2 Legacy Collection**.
 The original x86 executable is statically recompiled to C and built for ARM64,
@@ -14,18 +14,18 @@ Project repository: [phys-winner/pc_decomp_ts2](https://github.com/phys-winner/p
 This project is compatible with **The Sims 2 Legacy Collection, Steam build
 18015495**, released on **10 April 2025**:
 [The Sims 2 Legacy Patch Notes #8 on SteamDB](https://steamdb.info/patchnotes/18015495/).
-The port requires the matching original executable and DLL. Compatibility with
+The APK bundles the matching original executable and DLL in `assets/runtime.zip`. Compatibility with
 other executable revisions, older disc releases, Ultimate Collection and mods
 has not been established.
 
-| Required file in the installed game | SHA-256 |
+| Original PC file used by the build | SHA-256 |
 | --- | --- |
 | `EP9/TSBin/Sims2EP9.exe` | `7b65c2e8cb3100368d3e10db422768d99ef07169a7cee3aa30e6908aefd0ea88` |
 | `EP9/TSBin/ijl15.dll` | `41d37bfb0a39017497e0aa373dc01f71ac9c5046c75f7cd269bee52112a5f3a1` |
 
 Use your own installed copy of the game. The source repository excludes original
 EXE/DLL files, game packages, generated game code, saves and personal settings.
-The APK requires the full game installation; it does not include that installation.
+The APK requires the data packages from your game installation.
 Port resource overlays are generated from the user's original files during the build
 and embedded in the APK.
 
@@ -33,8 +33,8 @@ and embedded in the APK.
 
 - An **ARM64 Android** device running **Android 10 / API 29 or later**.
 - **OpenGL ES 3.2**. The app targets API 37 and includes only `arm64-v8a` libraries.
-- A complete installation of the compatible Legacy Collection, including `Base`,
-  expansion and stuff-pack folders, and the original `EP9/TSBin` files.
+- The data from a compatible Legacy Collection installation, including `Base`
+  and the expansion and stuff-pack folders.
 - Enough storage for the original game, saves, optional converted textures and
   the app's extracted native libraries. Texture conversion requires extra space.
 - Storage access granted through the launcher; Android 11+ uses All files access.
@@ -66,9 +66,9 @@ The launcher accepts game files on a mounted SD card. Select the installed
 folder or ZIP from the card in **Game files**. For FAT32 cards, copy the game
 folder because FAT32 cannot hold a single ZIP of 4 GiB or more.
 
-The engine reads the original EXE/DLL directly from the selected game installation.
-Port resources are installed into private app storage automatically. A separate
-`lifted` folder or manually copied resource overlay is unnecessary.
+The engine reads its bundled EXE and DLL from private app storage, where it also
+installs the port overlays. A game folder or ZIP containing the data packages
+is sufficient.
 
 The ZIP is read-only. New or modified installation files are stored separately
 in the app's sidecar; original data is copied there only when actually written.
@@ -114,10 +114,11 @@ thumbnail callbacks remain synchronous and can cause stalls.
 | OpenGL ES | Available on supported GLES 3.2 devices. Includes render scaling, optional UI FSR 1, FXAA, MSAA and spatial upscaling. |
 | DXVK (Vulkan) | Android 11+ and a system Vulkan 1.3 driver with the required features, including the game's texture and query support. |
 | DXVK (Turnip) | Android 11+, supported Adreno 6xx/7xx hardware and the bundled Mesa Turnip driver. The driver runs inside the app. |
+| DXVK (PanVK) | Android 11+, an ARM Mali or Immortalis GPU, and a driver that passes the DXVK Vulkan 1.3 check. The bundled kbase driver requires 4 KiB kernel pages. The launcher can also probe an imported PanVK driver. |
 
 The launcher probes the driver before offering Vulkan modes. With no saved choice,
-it prefers verified system DXVK, then verified Turnip, then OpenGL ES. A saved
-explicit choice takes priority. Driver capability checks do not guarantee correct
+it uses OpenGL ES by default. An available renderer explicitly selected by the player
+takes priority. Driver capability checks do not guarantee correct
 rendering: system DXVK showed incorrect character poses and family thumbnails on
 the tested Adreno 735 device, while Turnip passed those scenarios. Adreno 6xx
 Turnip uses system-memory rendering by default to avoid a reproduced queue hang.
@@ -151,7 +152,7 @@ The current build scripts target **Windows with PowerShell** and require:
 - The compatible original game installed at `C:/Games/The Sims 2 Legacy`.
   `tools/build_overlay.py` currently uses this fixed path. If you keep the game
   elsewhere, update its `GAME` constant and `port.json` consistently.
-- The pinned DXVK Native/adrenotools/Turnip binary inputs described below.
+- The pinned DXVK Native, adrenotools, Turnip and PanVK binary inputs described below.
 - A pristine checkout of the pinned FSR 3 Android source revision.
 - A signing keystore at `build/android/debug.keystore`. Keep the existing key
   for updates. A new development installation may use its own key with alias
@@ -173,6 +174,9 @@ as required by `tools/build_dxvk.py`. These are local build inputs excluded from
 Git. The DXVK headers come from its pinned `include/native/directx` submodule; the C++ runtime comes
 from the NDK. All imported runtime binaries are checked against their SHA-256 pins.
 The Turnip asset URL and component source revisions are in `dependencies.json`.
+For PanVK, `tools/build_dxvk.py` reads `libvulkan_panfrost-fixed.so` and
+`NOTICE-fixed.txt` from `S2_PANVK_RUNTIME` or the sibling Frostpunk project's
+`build/gpu-runtime/panvk` directory. The hashes are pinned in `dependencies.json`.
 
 Initialize dependencies after cloning (or clone with `--recurse-submodules`):
 
@@ -247,12 +251,12 @@ python -X utf8 -B tools/build_game_apk.py --skip-native --install --serial DEVIC
 
 ## Local release artifacts
 
-Version `0.1.1-dev` and version code `3` are stored in
+Version `0.1.2-dev` and version code `4` are stored in
 `android/app/AndroidManifest.xml`. Increase the code for subsequent published updates.
 
 Package a published release from its reviewed commit so that the launcher's
 `assets/launcher/build.json` records that source commit. Name the artifact
-**`pub/sims2-0.1.1-dev-COMMIT.apk`**, where `COMMIT`
+**`pub/sims2-0.1.2-dev-COMMIT.apk`**, where `COMMIT`
 is the first eight characters of the Git commit, with a matching `.apk.sha256`.
 For a local build with uncommitted changes, append `-dirty` to the commit suffix.
 
@@ -260,7 +264,7 @@ For a local build with uncommitted changes, append `-dirty` to the commit suffix
 python -X utf8 -B tools/build_game_apk.py --skip-native
 $sims2Commit = git rev-parse --short=8 HEAD
 if (git status --porcelain) { $sims2Commit += "-dirty" }
-$sims2ApkName = "sims2-0.1.1-dev-$sims2Commit.apk"
+$sims2ApkName = "sims2-0.1.2-dev-$sims2Commit.apk"
 New-Item -ItemType Directory -Force pub | Out-Null
 Copy-Item build/android-game/sims2.apk (Join-Path pub $sims2ApkName)
 $sims2Hash = (Get-FileHash (Join-Path pub $sims2ApkName) -Algorithm SHA256).Hash.ToLowerInvariant()

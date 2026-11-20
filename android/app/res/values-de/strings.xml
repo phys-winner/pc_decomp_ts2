@@ -41,6 +41,8 @@
   <string name="time_controls">Zeitsteuerung</string>
   <string name="time_swipe_hint">Wische über die Uhr oder die Geschwindigkeitstasten: nach rechts zum Beschleunigen, nach links zum Verlangsamen bis zur Pause. Die Skala in der Mitte zeigt die gewählte Geschwindigkeit.</string>
   <string name="tools_menu">Spielwerkzeuge</string>
+  <string name="show_game_tools">Schaltfläche für Spielwerkzeuge anzeigen</string>
+  <string name="take_photo">Foto aufnehmen</string>
   <string name="tool_hand">Hand</string>
   <string name="tool_eyedropper">Pipette</string>
   <string name="tool_design">Design</string>
@@ -50,8 +52,9 @@
   <string name="tool_top_down">Draufsicht</string>
   <string name="tool_undo">Rückgängig</string>
   <string name="tool_redo">Wiederholen</string>
-  <string name="port_settings_restart">Die folgenden Optionen gelten beim nächsten Spielstart. FSR, FXAA und MSAA benötigen OpenGL ES; nicht unterstütztes MSAA wird deaktiviert. Oberflächenskalierung und Wischsteuerung oben gelten sofort.</string>
+  <string name="port_settings_restart">Die Steuerung oben und die FPS-Anzeige ändern sich sofort. Sprache und Renderer-Einstellungen gelten beim nächsten Spielstart. FSR, FXAA und MSAA benötigen OpenGL ES. Nicht unterstütztes MSAA wird deaktiviert.</string>
   <string name="settings_save_failed">Einstellung konnte nicht gespeichert werden. Erneut versuchen.</string>
+  <string name="engine_start_failed">Die Spiel-Engine konnte nicht gestartet werden. Details stehen in sims2.log.</string>
   <string name="enable">Aktivieren</string>
   <string name="swipe_paused">Pause</string>
   <string name="swipe_speed1">Normales Tempo</string>
@@ -98,4 +101,5 @@
     <string name="target_area_diameter">Durchmesser des Tippbereichs: %1$d px</string>
     <string name="target_area_label">Tippbereich</string>
     <string name="target_area_hint">Der Regler ändert, wie weit das Spiel um die Tippstelle nach Objekten sucht. Der Kreis zeigt den Suchbereich.</string>
+  <string name="floor_swipe_hint">Wische mit drei Fingern nach oben oder unten, um die Etage zu wechseln.</string>
 </resources>

@@ -85,12 +85,13 @@ static uint32_t words[8192];
 #define MEM32(a) words[(uint32_t)(a)/4]
 #define MEM8(a) (*(uint8_t *)GPTR(a))
 static unsigned touch_modal_depth,touch_mode_flags,ui_pie_depth;
+static uint32_t touch_modal_window;
 static unsigned touch_input_flags;
 static uint32_t touch_mode_owner;
 static _Atomic unsigned touch_context;
 static _Atomic int touch_rewards;
 static uint32_t ui_fit_option,ui_fit_cas,ui_fit_chooser,ui_fit_loading,ui_fit_lot_info;
-static uint32_t ui_fit_town_loading,ui_fit_lot_loading;
+static uint32_t ui_fit_town_loading,ui_fit_lot_loading,ui_fit_loading_screen;
 static unsigned fit_depth,nest_modal,modal_calls;
 static int ui_modal_floor_right,ui_modal_floor_bottom;
 static int readable=1,logs,calls,bad;
@@ -140,15 +141,20 @@ void s2_catalog_track(uint32_t proc){(void)proc;}
 uint32_t s2_catalog_clear_request(void){return 1;}
 int s2_catalog_clear_owner(uint32_t serial){return serial==1;}
 static void sub_A0972F48(void);
+static unsigned modal_messages;
+static unsigned void_begin_modal_messages(void){return modal_messages++;}
+static void void_end_modal_messages(unsigned previous){if(modal_messages!=previous+1)bad=11;modal_messages=previous;}
 static void sub_A0972F48_lifted(void) {
     ++modal_calls;
-    if(!(s2_touch_context() & S2_TOUCH_MODAL) || (ui_pie_depth ? fit_depth!=0 : fit_depth==0))bad=2;
+    if(!(s2_touch_context() & S2_TOUCH_MODAL) || modal_messages!=touch_modal_depth || touch_modal_window!=MEM32(g_esp+4) ||
+        (ui_pie_depth ? fit_depth!=0 : fit_depth==0))bad=2;
     if(nest_modal){nest_modal=0;sub_A0972F48();}
     g_eax=0x1234;
 }
 static void sub_A0973692_lifted(void) { g_eax=1;g_esp+=4; }
 static void sub_A0973E55_lifted(void) { g_eax=0;g_esp+=4; }
 static void sub_A05BDFD7_lifted(void) { g_eax=1;g_esp+=12; }
+static void s2_fit_scene_attached(void){}
 static void sub_A05BE0F2_lifted(void) { g_eax=1;g_esp+=12; }
 static void sub_A076C5EB_lifted(void) { g_eax=1;g_esp+=8; }
 static void sub_A076CABE_lifted(void) { g_eax=1;g_esp+=4; }
@@ -187,8 +193,10 @@ static uint32_t *checked_word(uint32_t address) {
     stubs += 'void sub_A06815D7_lifted(void){}void sub_A067D8A4_lifted(void){}void sub_A067D1BD_lifted(void){}\n'
     actual = (function(settings, 'static void touch_publish(') + function(settings, 'void s2_touch_input_context(') + function(settings, 'static void touch_mode(') +
               'unsigned s2_touch_context(void) { return atomic_load(&touch_context); }\n' + next(line for line in settings.splitlines() if line.startswith('int s2_touch_rewards(')) + '\n' +
+              next(line for line in settings.splitlines() if line.startswith('uint32_t s2_touch_modal_window(')) + '\n' +
               '\n'.join(line for line in settings.splitlines() if any(line.startswith('void sub_' + a + '(void)') for a in modes)) + '\n' +
-              function(settings, 'static void ui_owner_fit(') + function(settings, 'static int ui_modal_gen(') + function(settings, 'static int ui_story_window(') + function(settings, 'static int ui_modal_fits(') +
+              function(settings, 'static void ui_owner_fit(uint32_t *owner, uint32_t self, int open)\n{') +
+              function(settings, 'static int ui_modal_gen(') + function(settings, 'static int ui_story_window(') + function(settings, 'static int ui_modal_fits(') +
               function(settings, 'void sub_A0972F48(void)') +
               function(settings, 'uint32_t s2_ui_pick(') +
               '\n'.join(line for line in touch.splitlines() if not line.startswith('#include')) +

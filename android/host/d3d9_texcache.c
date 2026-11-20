@@ -70,8 +70,15 @@ static void open_cache(void)
     char path[1200];
     snprintf(path, sizeof path, "%s/notexcache", void_data_dir());
     if ((env && *env == '0') || !access(path, F_OK)) { void_log("[texcache] off"); return; }
-    snprintf(path, sizeof path, "%s/%s/%s", void_root_dir(), S2TC_DIR, S2TC_FILE);
-    fd = open(path, O_RDONLY | O_CLOEXEC);
+    const char *root = getenv("PORT_TEXTURE_CACHE_ROOT");
+    if (root && *root && strcmp(root, void_root_dir())) {
+        snprintf(path, sizeof path, "%s/%s/%s", root, S2TC_DIR, S2TC_FILE);
+        fd = open(path, O_RDONLY | O_CLOEXEC);
+    }
+    if (fd < 0) {
+        snprintf(path, sizeof path, "%s/%s/%s", void_root_dir(), S2TC_DIR, S2TC_FILE);
+        fd = open(path, O_RDONLY | O_CLOEXEC);
+    }
     if (fd < 0) return;
     if (pread(fd, &header, sizeof header, 0) != (ssize_t)sizeof header || header.magic != S2TC_MAGIC ||
         header.version != S2TC_VERSION || !(header.flags & 1) || !header.entry_count ||

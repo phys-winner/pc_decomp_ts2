@@ -21,7 +21,8 @@
 
 static _Atomic int ui_scale = 300;
 static int adaptive_ui;
-static int fps_limit = 60, render_scale = 100;
+static _Atomic int fps_limit = 60;
+static int render_scale = 100;
 static int ui_fsr,render_aa,render_upscaler,render_msaa;
 static int ui_scale_choice;
 static int ui_startup_fit;
@@ -34,17 +35,21 @@ static int ui_modal_floor_right, ui_modal_floor_bottom;
 static uint32_t ui_fit_option;
 static uint32_t ui_fit_cas;
 static uint32_t ui_fit_chooser;
-static uint32_t ui_fit_loading;
+static unsigned ui_chooser_attach_depth;
+static uint32_t ui_fit_loading, ui_fit_loading_screen;
 static uint32_t ui_fit_town_loading, ui_fit_lot_loading;
+static uint32_t ui_fit_lot_until_scene;
 static uint32_t ui_fit_lot_info;
 static unsigned ui_option_resize_depth;
 static unsigned ui_lot_info_refresh_depth;
 static unsigned touch_modal_depth, touch_mode_flags;
+static uint32_t touch_modal_window;
 static unsigned ui_pie_depth;
 static unsigned touch_input_flags;
 static uint32_t touch_mode_owner;
 static _Atomic unsigned touch_context;
 static _Atomic int touch_rewards;
+static _Atomic uint32_t touch_photo_owner;
 static int phys_w = 2780, phys_h = 1264;
 static char props_path[1200];
 static int display_rates[10] = {0, 30, 60}, display_rate_count = 3;
@@ -84,7 +89,9 @@ int s2_render_aa(void) { return render_aa; }
 int s2_render_msaa(void) { return render_msaa; }
 int s2_render_upscaler(void) { return render_upscaler; }
 unsigned s2_touch_context(void) { return atomic_load(&touch_context); }
+uint32_t s2_touch_modal_window(void) { return touch_modal_window; }
 int s2_touch_rewards(void) { return atomic_load(&touch_rewards); }
+int s2_touch_photo(void) { return atomic_load(&touch_photo_owner) != 0; }
 void s2_physical_size(int *w, int *h) { *w = phys_w; *h = phys_h; }
 
 static void touch_publish(void)
@@ -94,7 +101,7 @@ static void touch_publish(void)
     atomic_store(&touch_context, mode | (touch_input_flags&~world) |
         (touch_modal_depth ? S2_TOUCH_MODAL : 0) | (ui_fit_option ? S2_TOUCH_OPTIONS : 0) |
         (ui_fit_cas ? S2_TOUCH_CAS : 0) | (ui_fit_chooser ? S2_TOUCH_CHOOSER : 0) |
-        ((ui_fit_loading || ui_fit_town_loading || ui_fit_lot_loading) ? S2_TOUCH_LOADING : 0) |
+        ((ui_fit_loading || ui_fit_loading_screen || ui_fit_town_loading || ui_fit_lot_loading) ? S2_TOUCH_LOADING : 0) |
         (ui_fit_lot_info ? S2_TOUCH_LOT_INFO : 0));
 }
 
@@ -140,11 +147,29 @@ void sub_A061A919(void) { touch_mode(g_ecx, 0); sub_A061A919_lifted(); }
 void sub_A061A9F2_lifted(void);
 void sub_A061A9F2(void) { touch_mode(g_ecx, 0); sub_A061A9F2_lifted(); }
 
+/* The album manager owns the EP6 framing window. The game's C and Escape handlers finish it. */
+void sub_A060AFF1_lifted(void);
+void sub_A060AFF1(void)
+{
+    uint32_t self = g_ecx;
+    sub_A060AFF1_lifted();
+    if (g_eax & 0xFF) atomic_store(&touch_photo_owner, self);
+}
+
+void sub_A0609486_lifted(void);
+void sub_A0609486(void)
+{
+    uint32_t self = g_ecx;
+    sub_A0609486_lifted();
+    if (atomic_load(&touch_photo_owner) == self) atomic_store(&touch_photo_owner, 0);
+}
+
 static int clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 static double ui_applied_factor = 1.0;
 static int ui_layout_pending;
 
 double s2_ui_factor(void) { return ui_applied_factor; }
+void s2_fit_scene_attached(void) { ui_fit_lot_until_scene = 0; }
 
 uint32_t s2_ui_pick(uint32_t root, int x, int y)
 {
@@ -157,7 +182,7 @@ static double ui_desired_factor(void)
     int width, height;
     s2_game_resolution(&width, &height);
     double factor = ui_scale / 100.0;
-    int full = !adaptive_ui || ui_startup_fit || ui_fit_height_depth || ui_fit_linger == 2;
+    int full = !adaptive_ui || ui_startup_fit || ui_fit_height_depth || ui_fit_linger == 2 || ui_fit_lot_until_scene;
     int floor_width = adaptive_ui && ui_modal_floor_right > 800 ? ui_modal_floor_right : 800;
     int floor_height = full ? 600 : 360;
     if (adaptive_ui && ui_modal_floor_bottom > floor_height) floor_height = ui_modal_floor_bottom;
@@ -183,6 +208,28 @@ static void ui_reposition_card(uint32_t manager, uint32_t root)
     uint32_t position[4] = { (uint32_t)x, (uint32_t)y, (uint32_t)(x + width), (uint32_t)(y + height) };
     /* Base SetArea preserves size/clipping; Gen MoveTo also notifies the portrait-rebuilding proc. */
     void_call_guest_this(0xA0932914u, window, 4, position);
+}
+
+static void ui_owner_fit(uint32_t *owner, uint32_t self, int open);
+
+static void ui_sync_chooser(void)
+{
+    uint32_t self = ui_fit_chooser;
+    if (!self || ui_chooser_attach_depth) return;
+    uint32_t manager = s2_touch_owner_manager();
+    if (!manager || !void_vm_readable(manager, 0x48)) return;
+    uint32_t root = MEM32(manager + 0x44);
+    if (!root) return;
+    /* Closing the in-town modal chooser can hide its window without detaching its controller. */
+    if (void_vm_readable(self, 0x19C) && MEM32(self) == 0xA0DF9358u) {
+        uint32_t window = MEM32(self + 0x198);
+        for (unsigned depth = 0; depth < 16 && void_vm_readable(window, 0xEC); ++depth) {
+            if (window == root) return;
+            if (MEM32(window + 4) != manager || !(MEM32(window + 0xE8) & 1)) break;
+            window = MEM32(window + 0x58);
+        }
+    }
+    ui_owner_fit(&ui_fit_chooser, self, 0);
 }
 
 void s2_game_resolution(int *w, int *h)
@@ -226,6 +273,7 @@ static void ui_fit(int enter, int full_height)
  * or before a hidden card builds its layout, without rebuilding the scene. */
 void s2_fit_tick(void)
 {
+    ui_sync_chooser();
     if (ui_fit_linger && void_monotonic_ns() >= ui_fit_linger_until) {
         ui_fit_linger = 0;
         ui_layout_pending = 1;
@@ -256,7 +304,8 @@ void s2_fit_tick(void)
 static const char *fit_owner_name(const uint32_t *owner)
 {
     return owner == &ui_fit_option ? "options" : owner == &ui_fit_cas ? "cas" : owner == &ui_fit_chooser ? "chooser" :
-        owner == &ui_fit_loading ? "loading" : owner == &ui_fit_town_loading ? "town-loading" :
+        owner == &ui_fit_loading ? "loading" : owner == &ui_fit_loading_screen ? "loading-screen" :
+        owner == &ui_fit_town_loading ? "town-loading" :
         owner == &ui_fit_lot_loading ? "lot-loading" : owner == &ui_fit_lot_info ? "lot-info" : "?";
 }
 
@@ -415,6 +464,7 @@ void sub_A0972F48_lifted(void);
 void sub_A0972F48(void)
 {
     uint32_t window = MEM32(g_esp + 4);
+    uint32_t previous_window = touch_modal_window;
     int pie = void_vm_readable(window, 4) && MEM32(window) == 0xA0DDA24Cu;
     /* A dialog right after a fitted one fits only by its size: it continues
      * the fit instead (no resize now, and none to a floor in between). */
@@ -428,9 +478,12 @@ void sub_A0972F48(void)
     }
     if (pie) ++ui_pie_depth;
     ++touch_modal_depth;
+    touch_modal_window = window;
     touch_publish();
     if (fit) { void_log("[fit] modal open %08X (depth %u)", window, ui_fit_depth + 1); ui_fit(1, 1); }
+    unsigned previous_depth = void_begin_modal_messages();
     sub_A0972F48_lifted();
+    void_end_modal_messages(previous_depth);
     if (fit) { void_log("[fit] modal close %08X (depth %u)", window, ui_fit_depth ? ui_fit_depth - 1 : 0); ui_fit(0, 1); }
     else if (!pie) {
         int old_w, old_h, new_w, new_h;
@@ -442,6 +495,7 @@ void sub_A0972F48(void)
     }
     if (pie) --ui_pie_depth;
     --touch_modal_depth;
+    touch_modal_window = previous_window;
     touch_publish();
 }
 
@@ -502,7 +556,9 @@ void sub_A0769278_lifted(void);
 void sub_A0769278(void)
 {
     ui_owner_fit(&ui_fit_chooser, g_ecx, 1);
+    ++ui_chooser_attach_depth;
     sub_A0769278_lifted();
+    --ui_chooser_attach_depth;
 }
 
 void sub_A0769B01_lifted(void);
@@ -526,6 +582,7 @@ void sub_A05C0B82(void)
 {
     ui_owner_fit(&ui_fit_loading, g_ecx, 1);
     ui_startup_fit = 0;
+    s2_fit_tick();
     sub_A05C0B82_lifted();
 }
 
@@ -537,11 +594,28 @@ void sub_A05C0C89(void)
     ui_owner_fit(&ui_fit_loading, self, 0);
 }
 
-/* Neighborhood/lot loading runs an asynchronous controller after GameLoad closes. */
+/* LotIntro draws town, district and lot screens independently of their loaders. */
+void sub_A05BE74D_lifted(void);
+void sub_A05BE74D(void)
+{
+    uint32_t self = g_ecx, message = MEM32(g_esp + 8);
+    uint32_t event = MEM32(g_esp + 4) && void_vm_readable(message, 4) ? MEM32(message) : 0;
+    if (event == 0xA2BF8AD5u) {
+        ui_owner_fit(&ui_fit_loading_screen, self, 1);
+        s2_fit_tick();
+    }
+    sub_A05BE74D_lifted();
+    if (event == 0xA2BF8AD6u || (event == 0xA2BF8AD5u && !(g_eax & 0xFF)))
+        ui_owner_fit(&ui_fit_loading_screen, self, 0);
+}
+
+/* Loaders can draw during setup, before the next window-message pump. */
 void sub_A0C47EFC_lifted(void);
 void sub_A0C47EFC(void)
 {
+    ui_fit_lot_until_scene = 0;
     ui_owner_fit(&ui_fit_town_loading, g_ecx, 1);
+    s2_fit_tick();
     sub_A0C47EFC_lifted();
 }
 void sub_A0C471DA_lifted(void);
@@ -561,7 +635,10 @@ void sub_A0C46C58(void)
 void sub_A0C44B8C_lifted(void);
 void sub_A0C44B8C(void)
 {
+    /* The last loading frame can still draw after the loader controller closes. */
+    ui_fit_lot_until_scene = g_ecx;
     ui_owner_fit(&ui_fit_lot_loading, g_ecx, 1);
+    s2_fit_tick();
     sub_A0C44B8C_lifted();
 }
 void sub_A0C42D84_lifted(void);
@@ -569,7 +646,12 @@ void sub_A0C42D84(void)
 {
     uint32_t self = g_ecx;
     sub_A0C42D84_lifted();
-    if (!(g_eax & 0xFF)) ui_owner_fit(&ui_fit_lot_loading, self, 0);
+    if (!(g_eax & 0xFF)) {
+        /* State 35 means the load finished and the scene is about to attach. */
+        if (ui_fit_lot_until_scene == self &&
+            (!void_vm_readable(self + 20, 4) || MEM32(self + 20) != 35)) ui_fit_lot_until_scene = 0;
+        ui_owner_fit(&ui_fit_lot_loading, self, 0);
+    }
 }
 void sub_A0C42483_lifted(void);
 void sub_A0C42483(void)
@@ -721,7 +803,8 @@ void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
     ui_scale = clamp(ui_scale, 100, 300);
     fps_limit = fps_limit ? clamp(fps_limit, 15, 240) : 0;
     render_scale = clamp(render_scale, 25, 200);
-    adaptive_ui = getenv("PORT_OPTION_ADAPTIVE_UI") && !strcmp(getenv("PORT_OPTION_ADAPTIVE_UI"), "1");
+    const char *adaptive = getenv("PORT_OPTION_ADAPTIVE_UI");
+    adaptive_ui = adaptive && !strcmp(adaptive, "1");
     void_log("[settings] adaptive UI %s", adaptive_ui ? "on" : "off");
     /* The user's values go back to the file; S2_* overrides last one run. */
     int saved_ui = ui_scale, saved_fps = fps_limit, saved_render = render_scale;
@@ -731,16 +814,22 @@ void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
     const char *cap=getenv("PORT_OPTION_FRAME_RATE_LIMIT");
     if (cap && (!strcmp(cap,"0") || !strcmp(cap,"30") || !strcmp(cap,"60") || !strcmp(cap,"90") || !strcmp(cap,"120")))
         saved_fps=fps_limit=atoi(cap);
-    ui_fsr=getenv("PORT_OPTION_UI_FSR") && !strcmp(getenv("PORT_OPTION_UI_FSR"),"1");
-    render_aa=getenv("PORT_OPTION_RENDER_AA") && !strcmp(getenv("PORT_OPTION_RENDER_AA"),"1");
+    const char *fsr = getenv("PORT_OPTION_UI_FSR"), *aa = getenv("PORT_OPTION_RENDER_AA");
+    ui_fsr = fsr && !strcmp(fsr, "1");
+    render_aa = aa && !strcmp(aa, "1");
     const char *msaa=getenv("PORT_OPTION_RENDER_MSAA");
     render_msaa=msaa && !strcmp(msaa,"4")?4:msaa && !strcmp(msaa,"2")?2:0;
     const char *upscaler=getenv("PORT_OPTION_RENDER_UPSCALER");
     render_upscaler=upscaler && !strcmp(upscaler,"3")?3:upscaler && !strcmp(upscaler,"1")?1:0;
     void_log("[settings] launcher resolution %d%%, UI FSR1 %d, FXAA %d, render upscaler %d",percent,ui_fsr,render_aa,render_upscaler);
-    if (getenv("S2_UI_SCALE")) ui_scale = clamp(atoi(getenv("S2_UI_SCALE")), 100, 300);
-    if (getenv("S2_FPS_LIMIT")) fps_limit = atoi(getenv("S2_FPS_LIMIT")) ? clamp(atoi(getenv("S2_FPS_LIMIT")), 5, 240) : 0;
-    if (getenv("S2_RENDER_SCALE")) render_scale = clamp(atoi(getenv("S2_RENDER_SCALE")), 25, 200);
+    const char *ui_override = getenv("S2_UI_SCALE"), *fps_override = getenv("S2_FPS_LIMIT"),
+               *render_override = getenv("S2_RENDER_SCALE");
+    if (ui_override) ui_scale = clamp(atoi(ui_override), 100, 300);
+    if (fps_override) {
+        int fps = atoi(fps_override);
+        fps_limit = fps ? clamp(fps, 5, 240) : 0;
+    }
+    if (render_override) render_scale = clamp(atoi(render_override), 25, 200);
     ui_scale_choice = ui_scale;
     /* Start with the fitted UI; later owner-thread ticks only update its transform. */
     ui_startup_fit = 1;

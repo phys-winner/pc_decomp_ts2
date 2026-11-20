@@ -259,6 +259,7 @@ typedef struct void_object {
 
 uint32_t void_handle_new(void_object *object);
 void_object *void_handle_get(uint32_t handle, int kind);
+void_object *void_handle_acquire(uint32_t handle, int kind);
 int void_handle_close(uint32_t handle);
 uint32_t void_handle_dup(uint32_t handle);
 void_object *void_object_new(int kind, size_t extra);
@@ -282,6 +283,7 @@ const char *void_root_dir(void);
 const char *void_data_dir(void);
 int void_files_init(const char *game_root, const char *data_root);
 void void_files_overlay(const char *dir);
+const char *void_overlay_path(const char *windows_path);
 uint32_t void_cwd_get(char *out, uint32_t cap);
 int void_cwd_set(const char *windows_path);
 uint32_t void_errno_to_win32(int e);
@@ -308,6 +310,8 @@ void void_raise_cxx(void);
 uint32_t void_window_main(void);
 void void_window_client_size(uint32_t hwnd, int *w, int *h);
 uint32_t void_send_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lparam);
+unsigned void_begin_modal_messages(void);
+void void_end_modal_messages(unsigned previous_depth);
 void void_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lparam);
 
 /* --------------------------------------------------------- Win32 values */

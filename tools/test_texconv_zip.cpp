@@ -70,6 +70,17 @@ int main(int argc, char **argv)
     assert(*opened.begin() == join(side, probe_package));
     puts("PASS: launcher probe opens only Objects06.package");
 
+    const std::string separate = join(argv[1], "cache-output");
+    assert(!mkdir(separate.c_str(), 0775) || errno == EEXIST);
+    assert(!s2texconv_convert_at(side.c_str(), separate.c_str(), S2TC_FORMAT_ETC2, 2, index.c_str(), fd.fd));
+    assert(!s2texconv_scan_at(side.c_str(), separate.c_str(), &status, index.c_str(), fd.fd));
+    assert(status.converted_format == S2TC_FORMAT_ETC2 && status.converted_textures == 3);
+    assert(!s2texconv_convert_at(plain.c_str(), separate.c_str(), S2TC_FORMAT_ASTC, 2, nullptr, -1));
+    assert(!s2texconv_scan_at(plain.c_str(), separate.c_str(), &status, nullptr, -1));
+    assert(status.converted_format == S2TC_FORMAT_ASTC && status.converted_textures == 3);
+    assert(!s2texconv_remove(separate.c_str()) && access(cache_path(separate).c_str(), F_OK));
+    puts("PASS: folder and ZIP conversion can publish and remove a cache outside the source");
+
     {
         Source source(side.c_str(), index.c_str(), fd.fd);
         PackageFile f(source, join(side, probe_package));

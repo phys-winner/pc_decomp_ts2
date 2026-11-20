@@ -153,9 +153,15 @@ public final class Launch {
         }
         for (Spec.Option o : spec.options(distribution.id))
             set("PORT_OPTION_" + o.key.toUpperCase(Locale.ROOT), option(o.key));
+        if (spec.separateTextureCache) {
+            File game = folder(distribution.parts.get(0).id);
+            set("PORT_TEXTURE_CACHE_ROOT", Install.textureCacheRoot(activity, spec, distribution, game).getAbsolutePath());
+        }
         /* Empty for the port's own Turnip driver: an earlier start's choice must not linger. */
-        File turnip = TurnipDriver.chosen(activity);
+        File turnip = VulkanDriver.TURNIP.chosen(activity);
         set("PORT_TURNIP_DRIVER", turnip != null ? turnip.getAbsolutePath() : "");
+        File panvk = VulkanDriver.PANVK.chosen(activity);
+        set("PORT_PANVK_DRIVER", panvk != null ? panvk.getAbsolutePath() : "");
         Updates.Info update = Updates.available(activity);
         if (update != null) {
             set("PORT_UPDATE_VERSION", update.versionName);

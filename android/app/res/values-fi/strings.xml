@@ -44,4 +44,5 @@
   <string name="target_ground">Maa</string>
   <string name="target_object">Esine %1$d</string>
   <string name="target_changed">Kohde siirtyi. Napauta uudelleen.</string>
+  <string name="floor_swipe_hint">Vaihda kerrosta pyyhkäisemällä kolmella sormella ylös tai alas.</string>
 </resources>

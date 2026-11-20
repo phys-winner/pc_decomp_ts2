@@ -37,6 +37,12 @@ public class PreferencesCheck {public static void main(String[] args){
  GamePreferences prefs=new GamePreferences();android.content.Context c=new android.content.Context();
  assert GamePreferences.uiSwipeControls();GamePreferences.initControls(c);assert GamePreferences.uiSwipeControls();
  GamePreferences.uiSwipeControls(false);assert !GamePreferences.uiSwipeControls();GamePreferences.initControls(c);assert !GamePreferences.uiSwipeControls();GamePreferences.uiSwipeControls(true);assert GamePreferences.uiSwipeControls();
+ assert !GamePreferences.showGameTools();
+ GamePreferences.showGameTools(true);GamePreferences.initControls(c);assert GamePreferences.showGameTools();
+ GamePreferences.showGameTools(false);GamePreferences.initControls(c);
+ assert !GamePreferences.showGameTools();
+ assert !GamePreferences.floorHintShown();GamePreferences.markFloorHintShown();
+ GamePreferences.initControls(c);assert GamePreferences.floorHintShown()&&!GamePreferences.timeHintShown();
  assert !GamePreferences.timeHintShown();GamePreferences.markTimeHintShown();assert GamePreferences.timeHintShown()&&GamePreferences.uiSwipeControls();GamePreferences.initControls(c);assert GamePreferences.timeHintShown();
  assert GamePreferences.targetRadius()==16&&GamePreferences.targetRadius()*3==GamePreferences.MAX_TARGET_RADIUS;
  assert !GamePreferences.targetRadiusHintShown();GamePreferences.markTargetRadiusHintShown();
@@ -51,7 +57,12 @@ public class PreferencesCheck {public static void main(String[] args){
  TouchLayer.old="russian\\n";prefs.migrate(c);assert Launch.choices.get("option.game_language").equals("russian");
  Launch.choices.put("option.game_language","system");prefs.migrate(c);assert Launch.choices.get("option.game_language").equals("system");
  Launch.choices.clear();TouchLayer.old="unrecognized";prefs.migrate(c);assert Launch.choices.isEmpty();
- System.out.println("PASS system locales, English fallback, regional Chinese/Portuguese, Norwegian aliases, saved-language migration without overwriting launcher choices");
+ c.getSharedPreferences("controls",0).edit().putBoolean("show_fps",true).apply();
+ prefs.migrate(c);assert Launch.choices.get("option.fps_counter").equals("1");
+ for(String mode:new String[]{"0","2"}){
+  Launch.choices.put("option.fps_counter",mode);prefs.migrate(c);assert Launch.choices.get("option.fps_counter").equals(mode);
+ }
+ System.out.println("PASS system locales and migration of language and FPS preferences without overwriting launcher choices");
 }}''',
 }
 
@@ -81,6 +92,7 @@ def main():
         nodes=list(ET.parse(resources/folder/'strings.xml').getroot())
         rows={node.attrib['name']:node.text for node in nodes}
         assert len(rows)==len(nodes) and len(rows)>=40, folder
+        assert rows.get('floor_swipe_hint'), folder
         assert all(rows.values()), folder
         translations.append(rows)
     english=translations[0]

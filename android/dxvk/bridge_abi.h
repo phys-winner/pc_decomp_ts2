@@ -7,11 +7,11 @@
 #define SIMS2_DXVK_BRIDGE_ABI_H
 #include <stdint.h>
 
-#define SIMS2_DXVK_ABI 1u
+#define SIMS2_DXVK_ABI 2u
 #define SIMS2_DXVK_OPEN "sims2_dxvk_bridge_open"
 
 /* The renderer modes, as the launcher stores them (Renderers.java) and JNI passes them. */
-enum { SIMS2_RENDERER_GLES = 0, SIMS2_RENDERER_DXVK = 1, SIMS2_RENDERER_TURNIP = 2 };
+enum { SIMS2_RENDERER_GLES = 0, SIMS2_RENDERER_DXVK = 1, SIMS2_RENDERER_TURNIP = 2, SIMS2_RENDERER_PANVK = 3 };
 
 typedef struct sims2_dxvk_host {
     uint32_t abi, size, slots_digest;
@@ -35,9 +35,8 @@ typedef struct sims2_dxvk_host {
 
 typedef struct sims2_dxvk_bridge {
     uint32_t abi, size, slots_digest;
-    /* Direct3DCreate9 on the system Vulkan driver, or with turnip_dir on the app-local Turnip driver
-     * loaded through adrenotools from that directory. 0 (logged) when DXVK cannot start. */
-    uint32_t (*create9)(uint32_t sdk, const char *dxvk_library, const char *turnip_dir);
+    /* Direct3DCreate9 with the system driver or an app-local driver through adrenotools. */
+    uint32_t (*create9)(uint32_t sdk, const char *dxvk_library, const char *native_dir, int renderer);
     /* A guest COM call: the arguments as the guest pushed them, the result as EAX. */
     uint32_t (*call)(unsigned kind, void *native, unsigned slot, const uint32_t *args);
     uint32_t (*addref)(void *native);

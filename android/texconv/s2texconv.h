@@ -53,6 +53,9 @@ S2TEXCONV_API int s2texconv_convert(const char *game_dir, int format, int thread
 /* Stored ZIP variants: borrowed read-only descriptor, launcher ZMI1 index, output in game_dir sidecar. */
 S2TEXCONV_API int s2texconv_scan_zip(const char *game_dir, s2texconv_status *out, const char *index, int fd);
 S2TEXCONV_API int s2texconv_convert_zip(const char *game_dir, int format, int threads, const char *index, int fd);
+/* The launcher may place the cache on a different volume; index is null for plain folders. */
+S2TEXCONV_API int s2texconv_scan_at(const char *game_dir, const char *output, s2texconv_status *out, const char *index, int fd);
+S2TEXCONV_API int s2texconv_convert_at(const char *game_dir, const char *output, int format, int threads, const char *index, int fd);
 /* Deletes the conversion. 0, or -1. */
 S2TEXCONV_API int s2texconv_remove(const char *game_dir);
 S2TEXCONV_API void s2texconv_cancel(void);

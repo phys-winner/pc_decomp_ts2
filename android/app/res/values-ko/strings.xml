@@ -44,4 +44,5 @@
   <string name="target_ground">땅</string>
   <string name="target_object">물건 %1$d</string>
   <string name="target_changed">대상이 움직였습니다. 다시 터치하세요.</string>
+  <string name="floor_swipe_hint">세 손가락으로 화면을 위나 아래로 밀면 층을 바꿀 수 있습니다.</string>
 </resources>

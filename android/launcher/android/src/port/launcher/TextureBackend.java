@@ -27,6 +27,9 @@ public interface TextureBackend {
     /** Stored ZIP: the read-only descriptor remains open until this call returns. */
     default Scan scan(File game, File index, int archiveFd) { return scan(game); }
 
+    /** The cache root can be on a different volume from the original files. */
+    default Scan scan(File game, File cache, File index, int archiveFd) { return scan(game, index, archiveFd); }
+
     /** Blocking: converts, reporting through progress(); 0 when done, else message() says why. */
     int convert(File game, int format, int threads);
 
@@ -34,8 +37,14 @@ public interface TextureBackend {
         return convert(game, format, threads);
     }
 
+    default int convert(File game, File cache, int format, int threads, File index, int archiveFd) {
+        return convert(game, format, threads, index, archiveFd);
+    }
+
     /** Blocking: removes a conversion; 0 when done. */
     int undo(File game);
+
+    default int undo(File game, File cache) { return undo(game); }
 
     /** Blocking, optional (Scan.removable offers it): removes the original textures a conversion
      *  replaced from the game's files, for space; the conversion can no longer be undone then.
