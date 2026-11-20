@@ -11,6 +11,13 @@ import android.widget.Toast;
 public final class PortOptions {
     private PortOptions() {}
 
+    /** FSR 3.1 left the port (too slow on phones): a saved choice of it ("3") becomes FSR 1, which
+     *  the game also takes "3" for (sims2_settings.c), so the option shows what the game uses. */
+    public static void migrateUpscaler(Context context) {
+        if ("3".equals(State.get(context, State.CHOICES, "option.render_upscaler", null)))
+            State.put(context, State.CHOICES, "option.render_upscaler", "1");
+    }
+
     public static void append(Context context, LinearLayout content, Launch launch) {
         Spec spec = Spec.get(context);
         for (Spec.Option option : spec.options(launch.distribution())) {

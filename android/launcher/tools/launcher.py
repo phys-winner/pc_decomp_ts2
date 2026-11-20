@@ -39,6 +39,18 @@ PROBE_LIBRARY = "libportprobe.so"
 LANGUAGES = ("en", "ru", "de", "pl")
 KINDS = ("gles", "vulkan", "turnip", "panvk")
 OPTION_TYPES = ("bool", "choice", "text")
+FPS_COUNTER = {
+    "key": "fps_counter", "type": "choice", "default": "0",
+    "title": {"en": "Performance overlay", "ru": "Оверлей производительности",
+              "de": "Leistungsanzeige", "pl": "Nakładka wydajności"},
+    "choices": [
+        {"value": "0", "title": {"en": "Off", "ru": "Выключен", "de": "Aus", "pl": "Wyłączona"}},
+        {"value": "1", "title": {"en": "FPS and frame times", "ru": "FPS и время кадра",
+                                 "de": "FPS und Bildzeiten", "pl": "FPS i czasy klatek"}},
+        {"value": "2", "title": {"en": "FPS, frame times and system metrics", "ru": "FPS, время кадра и метрики системы",
+                                 "de": "FPS, Bildzeiten und Systemdaten", "pl": "FPS, czasy klatek i dane systemu"}},
+    ],
+}
 ANDROID = "http://schemas.android.com/apk/res/android"
 
 
@@ -74,6 +86,7 @@ def validate(spec):
     need(spec.get("schema") == 1, "schema must be 1")
     app = spec.get("app") or {}
     need(isinstance(app.get("label"), str) and app.get("label"), "app.label is required")
+    need(type(app.get("performanceHud", False)) is bool, "app.performanceHud must be true or false")
     for key in ("title", "subtitle"):
         if key in app:
             need(text_ok(app[key]), f"app.{key} must be a text or a map of texts")
@@ -183,6 +196,13 @@ def validate(spec):
             need(o.get("choices"), f"option {o.get('key')}: choices are required")
     for key, value in (spec.get("hints") or {}).items():
         need(key in ("gameFiles", "options") and text_ok(value), f"hints.{key}: a text or a map of texts for gameFiles or options")
+    for f in spec.get("folders", []):
+        path = f.get("path", "") if isinstance(f, dict) else ""
+        need(isinstance(f, dict) and text_ok(f.get("title")) and (f.get("hint") is None or text_ok(f.get("hint"))),
+             "folders: each needs a title (text or map of texts) and an optional hint")
+        need(isinstance(path, str) and re.match(r"^\{(storage|files|private)\}/", path) and "\\" not in path
+             and all(part not in ("", ".", "..") for part in path.split("/")[1:]),
+             f"folders: path {path!r} must start with {{storage}}/, {{files}}/ or {{private}}/ and stay inside it")
     for c in (spec.get("cleanup") or {}).get("categories", []):
         need(c.get("id") and c.get("globs"), "cleanup categories need an id and globs")
         for glob in c.get("globs", []):
@@ -313,6 +333,10 @@ def git_commit(folder):
 def write_assets(spec, manifest_text, out, game_root):
     folder = Path(out) / "launcher"
     folder.mkdir(parents=True, exist_ok=True)
+    if spec["app"].get("performanceHud"):
+        options = spec.get("options", [])
+        if not any(option["key"] == FPS_COUNTER["key"] for option in options):
+            spec = dict(spec, options=[*options, FPS_COUNTER])
     (folder / "port.json").write_text(json.dumps(spec, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     build = {
         "versionName": manifest_attribute(manifest_text, "android:versionName") or "",

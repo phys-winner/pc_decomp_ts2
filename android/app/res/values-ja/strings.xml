@@ -36,7 +36,6 @@
   <string name="scale_pending">%1$d%%への変更はまだ確認できません。適用済み：%2$d%%。</string>
   <string name="image_mismatch">ゲームファイルがないか非対応です。Legacy Collection 2025 の Sims2EP9.exe と ijl15.dll を復元してください。</string>
   <string name="gamepad_help">左スティック：ポインター、A：選択して配置、B：キャンセル／戻る、X：右クリック、Y：一時停止。右スティック：カメラ移動、押し込みながら：傾き。トリガー：ズーム、ショルダー：カメラまたはオブジェクトの回転。十字キー：ポインター下のリストをスクロール。Start：UI設定、Select：操作説明。左スティック押し込み：精密なポインター移動。</string>
-  <string name="upscale_fallback">FSR 3 は使用できません（コード %1$d）。FSR 1 を使用します。</string>
   <string name="ui_swipe_controls">スワイプで UI を操作</string>
   <string name="time_controls">時間の操作</string>
   <string name="time_swipe_hint">時計または速度ボタンの上をスワイプすると、右で加速、左で減速して一時停止できます。中央の目盛りに選択した速度が表示されます。</string>

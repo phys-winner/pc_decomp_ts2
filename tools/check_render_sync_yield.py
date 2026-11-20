@@ -13,9 +13,9 @@ from check_virtual_query import function
 def main():
     threads = (ROOT / 'android/host/threads.c').read_text(encoding='utf-8')
     render = (ROOT / 'android/host/d3d9_thread.c').read_text(encoding='utf-8')
-    source = PRELUDE + '\n#define VS_MACHINE 0\n#define void_stat_add(k,n,b) ((void)0)\n'
+    source = PRELUDE + '\n'
     source += '\n'.join(function(threads, signature) for signature in (
-        'static uint64_t now_ns(', 'static void machine_wait(', 'static void machine_acquire(',
+        'static uint64_t now_ns(', 'static int thread_urgent(', 'static void machine_poke(', 'static int park_ticket(', 'static void unpark_ticket(', 'static int skip_parked(', 'static void handoff_note(', 'static void machine_wait(', 'static uint64_t take_ticket(', 'static void machine_acquire(',
         'static void machine_release(', 'static int machine_contended(', 'static void yield_hook('))
     source += r'''
 #include <string.h>

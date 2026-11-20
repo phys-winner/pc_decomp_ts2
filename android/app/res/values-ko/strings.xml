@@ -36,7 +36,6 @@
   <string name="scale_pending">%1$d%% 변경이 아직 확인되지 않았습니다. 적용됨: %2$d%%.</string>
   <string name="image_mismatch">게임 파일이 없거나 지원되지 않습니다. Legacy Collection 2025의 Sims2EP9.exe와 ijl15.dll을 복원하세요.</string>
   <string name="gamepad_help">왼쪽 스틱: 포인터; A: 선택 후 배치; B: 취소/뒤로; X: 오른쪽 클릭; Y: 일시 정지. 오른쪽 스틱: 카메라; 누른 채 이동: 기울이기. 트리거: 확대/축소; 범퍼: 카메라 또는 물건 회전. 방향 패드: 포인터 아래 목록 스크롤. Start: 인터페이스 설정; Select: 도움말. 왼쪽 스틱 누르기: 정밀 포인터.</string>
-  <string name="upscale_fallback">FSR 3을 사용할 수 없습니다(코드 %1$d). FSR 1을 사용합니다.</string>
   <string name="ui_swipe_controls">스와이프로 UI 조작</string>
   <string name="time_controls">시간 조작</string>
   <string name="time_swipe_hint">시계나 속도 버튼 위를 스와이프하세요. 오른쪽으로 밀면 빨라지고, 왼쪽으로 밀면 느려지다가 일시 정지됩니다. 중앙 눈금에 선택한 속도가 표시됩니다.</string>

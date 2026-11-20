@@ -108,7 +108,7 @@ __declspec(dllexport) unsigned state(unsigned k){
 def main():
     OUT.mkdir(parents=True,exist_ok=True)
     actual=(ROOT/'android/host/sims2_text.c').read_text(encoding='utf-8')
-    helper='uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}'
+    helper='uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}\nuint32_t s2_ui_mouse_pick(uint32_t root,int x,int y){return s2_ui_pick(root,x,y);}\n'
     source=PRELUDE+helper+'\n'.join(line for line in actual.splitlines() if not line.startswith('#include'))+CHECK
     cfile=OUT/'threads.c';cfile.write_text(source,encoding='utf-8')
     cases=[]

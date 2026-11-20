@@ -29,6 +29,7 @@ void void_process_exit(uint32_t code, int run_detach)
         void_modules_detach_all(1);
     }
     void_readcache_flush_all();
+    void_registry_flush();
     void_android_game_exited((int)code);
     void_log("[void] process exit %u", code);
     void_log_flush();
@@ -89,6 +90,8 @@ static void seed_registry(uint32_t language)
     void_reg_set_dword(UC_KEY "\\1.0", "language", language);
 }
 
+void s2r_lib_set_folder(const char *folder);
+
 int void_game_main(const char *game, const char *data, const char *images, int selftest)
 {
     void_install_fault_handlers();
@@ -107,6 +110,10 @@ int void_game_main(const char *game, const char *data, const char *images, int s
     char overlay[1100];
     snprintf(overlay, sizeof overlay, "%s/overlay", images);
     void_files_overlay(overlay);
+    /* The native renderers' shader library (runtime.zip: shaders/s2r_shaderlib.bin). */
+    char shaders[1100];
+    snprintf(shaders, sizeof shaders, "%s/shaders", images);
+    s2r_lib_set_folder(shaders);
     void_registry_init(data);
     /* The screen the game is shown on: the activity's window, or S2_SCREEN
      * (WxH) for a shell run; the UI scale turns it into the game's size. */

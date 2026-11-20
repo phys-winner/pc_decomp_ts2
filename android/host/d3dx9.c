@@ -8,7 +8,6 @@
 #include "d3d9_internal.h"
 #include "zip_files.h"
 #include "hud.h"
-#include "dxvk.h"
 #include <errno.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -175,10 +174,6 @@ COM_METHOD(ct, GetConstantElement, 3)
 /* Write float4 registers of the table's stage. */
 static void write_f(ctable_t *t, uint32_t reg, const float *v, uint32_t count)
 {
-    if (g_d3d_device && void_dxvk_native(g_d3d_device->com.guest)) {
-        void_dxvk_constants(g_d3d_device->com.guest, t->pixel, 0, reg, v, count);
-        return;
-    }
     d3d_device *d = g_d3d_device;
     if (!d) return;
     uint32_t limit = t->pixel ? 224 : D3D_SOFTWARE_VS_CONSTANTS;
@@ -191,10 +186,6 @@ static void write_f(ctable_t *t, uint32_t reg, const float *v, uint32_t count)
 
 static void write_i(ctable_t *t, uint32_t reg, const int32_t *v, uint32_t count)
 {
-    if (g_d3d_device && void_dxvk_native(g_d3d_device->com.guest)) {
-        void_dxvk_constants(g_d3d_device->com.guest, t->pixel, 1, reg, v, count);
-        return;
-    }
     d3d_device *d = g_d3d_device;
     if (!d) return;
     uint32_t limit = t->pixel ? 16 : D3D_SOFTWARE_VS_INT_CONSTANTS;
@@ -207,10 +198,6 @@ static void write_i(ctable_t *t, uint32_t reg, const int32_t *v, uint32_t count)
 
 static void write_b(ctable_t *t, uint32_t reg, const int32_t *v, uint32_t count)
 {
-    if (g_d3d_device && void_dxvk_native(g_d3d_device->com.guest)) {
-        void_dxvk_constants(g_d3d_device->com.guest, t->pixel, 2, reg, v, count);
-        return;
-    }
     d3d_device *d = g_d3d_device;
     if (!d) return;
     uint32_t limit = t->pixel ? 16 : D3D_SOFTWARE_VS_BOOL_CONSTANTS;
@@ -603,32 +590,6 @@ static void tx_level(int proc, int cube, int face, uint32_t w, uint32_t h, uint3
     }
 }
 
-static uint32_t dxvk_tx_fill(void *texture, int cube, int proc)
-{
-    uint32_t levels = void_dxvk_texture_levels(texture), hr = D3D_OK;
-    for (int face = 0; face < (cube ? 6 : 1) && !hr; ++face) {
-        for (uint32_t l = 0; l < levels && !hr; ++l) {
-            void *surface = void_dxvk_texture_surface(texture, cube, (uint32_t)face, l);
-            uint32_t desc[5];
-            if (!surface || void_dxvk_surface_desc(surface, desc)) { void_dxvk_release(surface); return D3DERR_INVALIDCALL; }
-            const d3d_format *f = d3d_format_find(desc[2]);
-            if (!tx_format(desc[2], f)) {
-                void_log("[d3dx] texture shader fill into format %u unsupported", desc[2]);
-                void_dxvk_release(surface);
-                return D3DERR_INVALIDCALL;
-            }
-            uint32_t pitch = d3d_format_pitch(f, desc[0]);
-            uint8_t *data = (uint8_t *)calloc((size_t)pitch * desc[1], 1);
-            if (!data) { void_dxvk_release(surface); return E_OUTOFMEMORY_; }
-            tx_level(proc, cube, face, desc[0], desc[1], desc[2], f->bits / 8, data, pitch);
-            hr = void_dxvk_surface_write(surface, NULL, data, pitch, desc[1], pitch);
-            free(data);
-            void_dxvk_release(surface);
-        }
-    }
-    return hr;
-}
-
 static uint32_t tx_fill(d3d_texture *t, int proc)
 {
     const d3d_format *f = t->fmt;
@@ -659,15 +620,11 @@ static uint32_t tx_fill(d3d_texture *t, int proc)
 
 WINAPI_EXPORT(D3DX, D3DXFillTextureTX, 2)
 {
-    void *native = void_dxvk_native(ARG(0));
-    if (native) return dxvk_tx_fill(native, 0, ((txshader_t *)void_com_host(ARG(1)))->proc);
     return tx_fill((d3d_texture *)void_com_host(ARG(0)), ((txshader_t *)void_com_host(ARG(1)))->proc);
 }
 
 WINAPI_EXPORT(D3DX, D3DXFillCubeTextureTX, 2)
 {
-    void *native = void_dxvk_native(ARG(0));
-    if (native) return dxvk_tx_fill(native, 1, ((txshader_t *)void_com_host(ARG(1)))->proc);
     return tx_fill((d3d_texture *)void_com_host(ARG(0)), ((txshader_t *)void_com_host(ARG(1)))->proc);
 }
 
@@ -967,131 +924,6 @@ static void fill_image_info(uint32_t out, const dds_info *info)
     MEM32(out + 20) = info->rtype; MEM32(out + 24) = 4;           /* D3DXIFF_DDS */
 }
 
-static int dxvk_write_rgba(void *surface, const d3d_format *f, const uint32_t *rect, const float *rgba)
-{
-    if (!f || f->block_bytes || f->depth) return 0;
-    uint32_t w = rect[2] - rect[0], h = rect[3] - rect[1], pitch = d3d_format_pitch(f, w);
-    uint8_t *data = (uint8_t *)malloc((size_t)pitch * h);
-    if (!data) return 0;
-    int ok = 1;
-    for (uint32_t y = 0; y < h && ok; ++y) ok = d3d_format_encode(f->d3d, rgba + (size_t)y * w * 4, w, data + (size_t)y * pitch);
-    const int32_t r[4] = {(int32_t)rect[0], (int32_t)rect[1], (int32_t)rect[2], (int32_t)rect[3]};
-    if (ok) ok = !void_dxvk_surface_write(surface, r, data, pitch, h, pitch);
-    free(data);
-    return ok;
-}
-
-static int dxvk_read_rgba(void *surface, const d3d_format *f, const uint32_t *rect, float *rgba)
-{
-    if (!f || f->block_bytes || f->depth) return 0;
-    int32_t pitch;
-    void *held;
-    const uint8_t *bits = void_dxvk_surface_map(surface, &pitch, &held);
-    if (!bits) return 0;
-    int decoded = pitch > 0 && d3d_format_decode(f, bits + (size_t)rect[1] * (uint32_t)pitch + (size_t)rect[0] * (f->bits / 8),
-                     rect[2] - rect[0], rect[3] - rect[1], (uint32_t)pitch, rgba);
-    void_dxvk_surface_unmap(held);
-    return decoded;
-}
-
-static uint32_t dxvk_filter_levels(void *texture, int cube, uint32_t first, uint32_t count)
-{
-    for (int face = 0; face < (cube ? 6 : 1); ++face) {
-        for (uint32_t l = first ? first : 1; l < count; ++l) {
-            void *above = void_dxvk_texture_surface(texture, cube, (uint32_t)face, l - 1);
-            void *below = void_dxvk_texture_surface(texture, cube, (uint32_t)face, l);
-            uint32_t ad[5], bd[5], ok = 0;
-            if (above && below && !void_dxvk_surface_desc(above, ad) && !void_dxvk_surface_desc(below, bd)) {
-                const d3d_format *f = d3d_format_find(ad[2]);
-                float *a = (float *)malloc((size_t)ad[0] * ad[1] * 16), *b = (float *)malloc((size_t)bd[0] * bd[1] * 16);
-                const uint32_t ar[4] = {0, 0, ad[0], ad[1]}, br[4] = {0, 0, bd[0], bd[1]};
-                if (a && b && dxvk_read_rgba(above, f, ar, a)) {
-                    d3d_rgba_resample(a, ad[0], ad[1], b, bd[0], bd[1]);
-                    ok = (uint32_t)dxvk_write_rgba(below, f, br, b);
-                }
-                free(a);
-                free(b);
-            }
-            void_dxvk_release(above);
-            void_dxvk_release(below);
-            if (!ok) return D3DERR_INVALIDCALL;
-        }
-    }
-    return D3D_OK;
-}
-
-static uint32_t dxvk_load_texture(uint32_t device, const uint8_t *data, uint32_t size, const dds_info *info,
-    uint32_t w, uint32_t h, uint32_t skip, uint32_t levels, uint32_t file_levels, uint32_t usage, uint32_t format,
-    uint32_t pool, uint32_t out, int cube)
-{
-    const d3d_format *ff = d3d_format_find(info->format);
-    if (ff->block_bytes && !(usage & D3DUSAGE_AUTOGENMIPMAP) && (!levels || levels > file_levels)) levels = file_levels;
-    void *texture;
-    uint32_t hr = void_dxvk_texture_create(device, cube, w, h, levels, usage, format, pool, &texture);
-    if (hr) {
-        void_log("[d3dx] DXVK texture %ux%u levels %u format %u pool %u failed %08X", w, h, levels, format, pool, hr);
-        return hr;
-    }
-    uint32_t count = void_dxvk_texture_levels(texture), offset = info->data_offset;
-    for (int face = 0; face < (cube ? 6 : 1); ++face) {
-        for (uint32_t l = 0; l < info->mips; ++l) {
-            uint32_t lw = info->width >> l ? info->width >> l : 1, lh = info->height >> l ? info->height >> l : 1;
-            uint32_t bytes = level_bytes(ff, lw, lh), pitch = d3d_format_pitch(ff, lw);
-            if (offset + bytes > size) { void_log("[d3dx] truncated DDS"); goto done; }
-            if (l >= skip && l - skip < count) {
-                void *surface = void_dxvk_texture_surface(texture, cube, (uint32_t)face, l - skip);
-                hr = surface ? void_dxvk_surface_write(surface, NULL, data + offset, pitch, d3d_format_rows(ff, lh), pitch)
-                             : D3DERR_INVALIDCALL;
-                void_dxvk_release(surface);
-                if (hr) void_log("[d3dx] DXVK texture level %u upload failed %08X", l - skip, hr);
-            }
-            offset += bytes;
-        }
-    }
-done:
-    if (count > file_levels) {
-        if (usage & D3DUSAGE_AUTOGENMIPMAP) void_dxvk_texture_generate_mips(texture);
-        else dxvk_filter_levels(texture, cube, file_levels, count);
-    }
-    MEM32(out) = void_dxvk_texture_wrap(texture, cube);
-    VLOG("[d3dx] DXVK texture %ux%u levels %u/%u format %.4s pool %u = %08X", w, h, count, file_levels,
-         info->format > 0xFFFF ? (const char *)&info->format : "num", pool, MEM32(out));
-    return D3D_OK;
-}
-
-static uint32_t dxvk_load_surface(void *dst, uint32_t dst_rect, void *src, uint32_t src_rect, uint32_t filter)
-{
-    uint32_t dd[5], sd[5];
-    if (!src || void_dxvk_surface_desc(dst, dd) || void_dxvk_surface_desc(src, sd)) return D3DERR_INVALIDCALL;
-    uint32_t dr[4] = {0, 0, dd[0], dd[1]}, sr[4] = {0, 0, sd[0], sd[1]};
-    if (dst_rect) for (int i = 0; i < 4; ++i) dr[i] = MEM32(dst_rect + 4u * (uint32_t)i);
-    if (src_rect) for (int i = 0; i < 4; ++i) sr[i] = MEM32(src_rect + 4u * (uint32_t)i);
-    if (sr[2] <= sr[0] || sr[3] <= sr[1] || dr[2] <= dr[0] || dr[3] <= dr[1] ||
-        sr[2] > sd[0] || sr[3] > sd[1] || dr[2] > dd[0] || dr[3] > dd[1]) return D3DERR_INVALIDCALL;
-    const int32_t dri[4] = {(int32_t)dr[0], (int32_t)dr[1], (int32_t)dr[2], (int32_t)dr[3]};
-    const int32_t sri[4] = {(int32_t)sr[0], (int32_t)sr[1], (int32_t)sr[2], (int32_t)sr[3]};
-    if (sd[2] == dd[2] && sd[4] == D3DPOOL_DEFAULT && dd[4] == D3DPOOL_DEFAULT &&
-        !void_dxvk_surface_copy(src, sri, dst, dri, (filter & 0xFF) >= 3 ? 2 : 1)) return D3D_OK;
-    uint32_t sw = sr[2] - sr[0], sh = sr[3] - sr[1], dw = dr[2] - dr[0], dh = dr[3] - dr[1];
-    float *px = (float *)malloc((size_t)sw * sh * 16);
-    if (!px || !dxvk_read_rgba(src, d3d_format_find(sd[2]), sr, px)) {
-        void_log("[d3dx] D3DXLoadSurfaceFromSurface: format %u source cannot be read", sd[2]);
-        free(px);
-        return D3DERR_INVALIDCALL;
-    }
-    if (sw != dw || sh != dh) {
-        float *scaled = (float *)malloc((size_t)dw * dh * 16);
-        if (scaled) d3d_rgba_resample(px, sw, sh, scaled, dw, dh);
-        free(px);
-        px = scaled;
-    }
-    int ok = px && dxvk_write_rgba(dst, d3d_format_find(dd[2]), dr, px);
-    free(px);
-    if (!ok) void_log("[d3dx] D3DXLoadSurfaceFromSurface: format %u destination unsupported", dd[2]);
-    return ok ? D3D_OK : D3DERR_INVALIDCALL;
-}
-
-
 /* Shared body of the texture loaders. `cube` selects cube textures. */
 static uint32_t load_texture(uint32_t device, const uint8_t *data, uint32_t size, uint32_t width, uint32_t height,
     uint32_t mips, uint32_t usage, uint32_t format, uint32_t pool, uint32_t filter, uint32_t mipfilter,
@@ -1140,8 +972,6 @@ static uint32_t load_texture(uint32_t device, const uint8_t *data, uint32_t size
         VLOG("[d3dx] texture format %u requested for a %u file: kept file format", fmt, info.format);
         fmt = info.format;
     }
-    if (void_dxvk_native(device))
-        return dxvk_load_texture(device, data, size, &info, w, h, skip, levels, file_levels, usage, fmt, pool, out, cube);
     d3d_texture *t = d3d_texture_new(g_d3d_device, cube ? D3DRTYPE_CUBETEXTURE : D3DRTYPE_TEXTURE, w, h, 1, levels, usage, fmt, pool);
     if (!t) return D3DERR_INVALIDCALL;
     t->hud_tag = void_hud_tag_for(data, size);   /* the touch layer follows the cursor and helpers */
@@ -1253,8 +1083,6 @@ WINAPI_EXPORT(D3DX, D3DXCreateCubeTextureFromFileExW, 13)
 
 WINAPI_EXPORT(D3DX, D3DXFilterTexture, 4)
 {
-    void *native = void_dxvk_native(ARG(0));
-    if (native) return dxvk_filter_levels(native, void_dxvk_cube(ARG(0)), ARG(2) + 1, void_dxvk_texture_levels(native));
     d3d_texture *t = (d3d_texture *)void_com_host(ARG(0));
     d3d_generate_mips_later(t);
     return D3D_OK;
@@ -1282,8 +1110,6 @@ WINAPI_EXPORT(D3DX, D3DXCheckCubeTextureRequirements, 6) { return check_requirem
 /* D3DXLoadSurfaceFromSurface(dst, dstpal, dstrect, src, srcpal, srcrect, filter, colorkey) */
 WINAPI_EXPORT(D3DX, D3DXLoadSurfaceFromSurface, 8)
 {
-    void *native = void_dxvk_native(ARG(0));
-    if (native) return dxvk_load_surface(native, ARG(2), void_dxvk_native(ARG(3)), ARG(5), ARG(6));
     d3d_surface *dst = (d3d_surface *)void_com_host(ARG(0)), *src = (d3d_surface *)void_com_host(ARG(3));
     uint32_t dr[4] = {0, 0, dst->width, dst->height}, sr[4] = {0, 0, src->width, src->height};
     if (ARG(2)) for (int i = 0; i < 4; ++i) dr[i] = MEM32(ARG(2) + 4u * (uint32_t)i);

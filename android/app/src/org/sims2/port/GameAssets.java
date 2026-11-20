@@ -30,7 +30,8 @@ final class GameAssets {
             byte[] buffer=new byte[65536];ZipEntry entry;
             while((entry=archive.getNextEntry())!=null){
                 File output=new File(staging,entry.getName());
-                if(!output.getCanonicalPath().startsWith(prefix)||!entry.getName().startsWith("overlay/"))
+                /* overlay/: the port's resource overlays; shaders/: the native renderers' shader library */
+                if(!output.getCanonicalPath().startsWith(prefix)||!(entry.getName().startsWith("overlay/")||entry.getName().startsWith("shaders/")))
                     throw new IOException("Invalid port resource path");
                 File directory=entry.isDirectory()?output:output.getParentFile();
                 if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("Cannot create "+directory);

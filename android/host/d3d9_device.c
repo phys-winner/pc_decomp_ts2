@@ -1,6 +1,5 @@
 /* IDirect3D9 and IDirect3DDevice9. */
 #include "d3d9_internal.h"
-#include "dxvk.h"
 #include "input.h"
 #include "sims2_settings.h"
 #include <unistd.h>
@@ -225,8 +224,6 @@ static void_com_class d3d9_class = { "IDirect3D9", 17, d3d9_methods, 0 };
 
 WINAPI_EXPORT("d3d9.dll", Direct3DCreate9, 1)
 {
-    uint32_t dxvk = void_dxvk_create9(ARG(0));
-    if (dxvk) return dxvk;
     d3d9_t *d = (d3d9_t *)calloc(1, sizeof *d);
     uint32_t guest = void_com_wrap(&d->com, &d3d9_class, 0);
     void_log("[d3d9] Direct3DCreate9(%u) = %08X", ARG(0), guest);
@@ -473,7 +470,8 @@ static void run_present(void *args)
 {
     present_args *a = (present_args *)args;
     d3d_device *m = d3d_rt_device();
-    d3d_gl_present(m, a->game_cpu_ns, a->game_wait_ns, a->syncs, a->rt_wait_ns);
+    if (s2r_on()) s2r_present(m, a->game_cpu_ns, a->game_wait_ns, a->syncs, a->rt_wait_ns);
+    else d3d_gl_present(m, a->game_cpu_ns, a->game_wait_ns, a->syncs, a->rt_wait_ns);
     ++m->frame;
     d3d_rt_frame_done();
 }
@@ -490,6 +488,7 @@ void d3d_present(d3d_device *d)
 {
     static uint64_t frame_start;
     uint64_t now = void_monotonic_ns();
+    if (frame_start) s2_load_present(now - frame_start);
     if (frame_start) {
         if (d->frame == 2) void_perf_hint_start((int32_t)gettid(), (int32_t)d3d_rt_render_tid(), frame_budget_ns());
         void_perf_hint_report((int64_t)(now - frame_start), frame_budget_ns());
@@ -627,7 +626,12 @@ COM_METHOD(dev, UpdateTexture, 3)
 }
 
 typedef struct { d3d_surface *src; uint32_t mem, pitch; } read_args;
-static void run_read(void *args) { read_args *a = (read_args *)args; d3d_gl_read_surface(a->src, a->mem, a->pitch); }
+static void run_read(void *args)
+{
+    read_args *a = (read_args *)args;
+    if (s2r_on()) s2r_read_surface(a->src, a->mem, a->pitch);
+    else d3d_gl_read_surface(a->src, a->mem, a->pitch);
+}
 
 /* A GPU surface into guest memory: the game waits for the render thread. */
 void d3d_read_surface(d3d_device *d, d3d_surface *src, uint32_t mem, uint32_t pitch)
@@ -638,7 +642,11 @@ void d3d_read_surface(d3d_device *d, d3d_surface *src, uint32_t mem, uint32_t pi
 }
 
 typedef struct { d3d_surface *s; const uint32_t *rect; float *out; int ok; } rgba_args;
-static void run_read_rgba(void *args) { rgba_args *a = (rgba_args *)args; a->ok = d3d_gl_read_rgba(a->s, a->rect, a->out); }
+static void run_read_rgba(void *args)
+{
+    rgba_args *a = (rgba_args *)args;
+    a->ok = s2r_on() ? s2r_read_rgba(a->s, a->rect, a->out) : d3d_gl_read_rgba(a->s, a->rect, a->out);
+}
 
 int d3d_read_rgba(d3d_surface *s, const uint32_t *rect, float *out)
 {
@@ -672,7 +680,12 @@ static int read_rect(uint32_t va, d3d_surface *s, uint32_t r[4])
 }
 
 typedef struct { d3d_surface *src, *dst; uint32_t sr[4], dr[4], filter; } blit_args;
-static void run_blit(void *args) { blit_args *a = (blit_args *)args; d3d_gl_blit(a->src, a->sr, a->dst, a->dr, a->filter); }
+static void run_blit(void *args)
+{
+    blit_args *a = (blit_args *)args;
+    if (s2r_on()) s2r_blit(a->src, a->sr, a->dst, a->dr, a->filter);
+    else d3d_gl_blit(a->src, a->sr, a->dst, a->dr, a->filter);
+}
 
 /* StretchRect between GPU surfaces (d3dx9.c too). */
 void d3d_blit(d3d_device *d, d3d_surface *src, const uint32_t *sr, d3d_surface *dst, const uint32_t *dr, uint32_t filter)
@@ -693,7 +706,12 @@ COM_METHOD(dev, StretchRect, 6)
 }
 
 typedef struct { d3d_surface *s; uint32_t r[4], color; } fill_args;
-static void run_fill(void *args) { fill_args *a = (fill_args *)args; d3d_gl_fill(a->s, a->r, a->color); }
+static void run_fill(void *args)
+{
+    fill_args *a = (fill_args *)args;
+    if (s2r_on()) s2r_fill(a->s, a->r, a->color);
+    else d3d_gl_fill(a->s, a->r, a->color);
+}
 
 COM_METHOD(dev, ColorFill, 4)
 {
@@ -761,7 +779,9 @@ typedef struct { uint32_t count, flags, color, stencil; float z; } clear_args;  
 static void run_clear(void *args)
 {
     clear_args *a = (clear_args *)args;
-    d3d_gl_clear(d3d_rt_device(), a->count, a->count ? (const uint32_t *)(a + 1) : NULL, a->flags, a->color, a->z, a->stencil);
+    const uint32_t *rects = a->count ? (const uint32_t *)(a + 1) : NULL;
+    if (s2r_on()) s2r_clear(d3d_rt_device(), a->count, rects, a->flags, a->color, a->z, a->stencil);
+    else d3d_gl_clear(d3d_rt_device(), a->count, rects, a->flags, a->color, a->z, a->stencil);
 }
 
 COM_METHOD(dev, Clear, 7)
@@ -1097,9 +1117,14 @@ static void run_draw(void *args)
     d3d_rt_device()->ui_draw=a->ui;
     memcpy(d3d_rt_device()->projection,a->projection,sizeof a->projection);
     const uint8_t *data = (const uint8_t *)args + ALIGN16((uint32_t)sizeof *a);
-    d3d_gl_draw(d3d_rt_device(), a->primitive, a->start_vertex, a->vertex_count, a->prim_count, a->indexed, a->base_vertex,
-        a->start_index, a->min_index, a->up_vertex_bytes ? data : NULL, a->up_stride,
-        a->up_index_bytes ? data + ALIGN16(a->up_vertex_bytes) : NULL, (int)a->up_index32);
+    if (s2r_on())
+        s2r_draw_call(d3d_rt_device(), a->primitive, a->start_vertex, a->vertex_count, a->prim_count, (int)a->indexed, a->base_vertex,
+            a->start_index, a->min_index, a->up_vertex_bytes ? data : NULL, a->up_stride,
+            a->up_index_bytes ? data + ALIGN16(a->up_vertex_bytes) : NULL, (int)a->up_index32);
+    else
+        d3d_gl_draw(d3d_rt_device(), a->primitive, a->start_vertex, a->vertex_count, a->prim_count, a->indexed, a->base_vertex,
+            a->start_index, a->min_index, a->up_vertex_bytes ? data : NULL, a->up_stride,
+            a->up_index_bytes ? data + ALIGN16(a->up_vertex_bytes) : NULL, (int)a->up_index32);
 }
 
 void d3d_buffer_flush(d3d_buffer *b);
@@ -1191,6 +1216,7 @@ COM_METHOD(dev, DrawIndexedPrimitiveUP, 9)
 
 COM_METHOD(dev, ProcessVertices, 7)
 {
+    /* the native renderers run it too: an OpenGL ES context for the transform feedback (s2r_process.c) */
     return d3d_process_vertices(DEV, ARG(1), ARG(2), ARG(3),
         (d3d_buffer *)host_or_null(ARG(4)), (d3d_decl *)host_or_null(ARG(5)), ARG(6));
 }
@@ -1488,7 +1514,12 @@ static void device_destroy(void_com_object *o)
     free(dev);
 }
 
-static void run_gl_init(void *arg) { *(int *)arg = d3d_gl_init(); if (*(int *)arg) d3d_rt_apply_cores(); }
+/* The native backend the launcher chose (android/render), else the Direct3D 9 -> GLES layer. */
+static void run_gl_init(void *arg)
+{
+    *(int *)arg = s2r_init(d3d_rt_device()) || d3d_gl_init();
+    if (*(int *)arg) d3d_rt_apply_cores();
+}
 
 uint32_t d3d_device_create(uint32_t d3d9, uint32_t window, uint32_t behavior, uint32_t pp, uint32_t *out)
 {

@@ -36,7 +36,6 @@
   <string name="scale_pending">Ändringen till %1$d%% är ännu inte bekräftad. Tillämpad skala: %2$d%%.</string>
   <string name="image_mismatch">Spelfiler saknas eller stöds inte. Återställ Sims2EP9.exe och ijl15.dll från Legacy Collection 2025.</string>
   <string name="gamepad_help">Vänster spak: pekare; A: välj, sedan placera; B: avbryt/Tillbaka; X: högerklick; Y: paus. Höger spak: kamera; nedtryckt: lutning. Avtryckare: zoom; axelknappar: rotera kamera eller föremål. Styrkors: rulla listan under pekaren. Start: gränssnitt; Select: hjälp. Vänster spak nedtryckt: exakt pekare.</string>
-  <string name="upscale_fallback">FSR 3 är inte tillgängligt (kod %1$d). FSR 1 används.</string>
   <string name="ui_swipe_controls">Svep på gränssnittets reglage</string>
   <string name="time_controls">Tidskontroll</string>
   <string name="time_swipe_hint">Svep över klockan eller hastighetsknapparna: åt höger för att öka hastigheten, åt vänster för att sakta ned och pausa. Skalan i mitten visar vald hastighet.</string>

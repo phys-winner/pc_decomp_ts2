@@ -701,27 +701,45 @@ void void_heap_stats(uint64_t *footprint, uint64_t *peak, int *count, uint64_t *
 
 /* The [mem] report (iostat.c): guest pages committed and reserved, and how
  * many of the committed ones are resident (mincore over the committed runs).
- * A diagnostic every few seconds: the scan holds vm_lock for well under a
- * millisecond and mincore only reads the page tables. */
+ * Only the page-state scan holds vm_lock: mincore over ~600 MB took ~13 ms on
+ * the Helio G90T, and the game's VirtualAlloc waited for the lock meanwhile
+ * while holding the guest machine. A run freed between the two is counted as
+ * it was: the guest range stays mapped, and this is a diagnostic. */
 void void_vm_stats(uint64_t *committed, uint64_t *reserved, uint64_t *resident)
 {
     static unsigned char *vec;
+    static uint32_t *runs;                       /* pairs: first page, end page (host-page aligned) */
+    static uint32_t run_cap;
     uint64_t c = 0, r = 0, in_core = 0;
-    uint32_t step = host_page / GUEST_PAGE;
-    if (!vec) vec = (unsigned char *)malloc(PAGES / (step ? step : 1) + 1);
+    uint32_t step = host_page / GUEST_PAGE, run_count = 0;
+    if (!step) step = 1;
+    if (!vec) vec = (unsigned char *)malloc(PAGES / step + 1);
     pthread_mutex_lock(&vm_lock);
     for (uint32_t p = 0; p < PAGES; ++p) { c += page_state[p] == ST_COMMIT; r += page_state[p] == ST_RESERVE; }
-    for (uint32_t p = 0; vec && p < PAGES;) {
+    for (uint32_t p = 0; p < PAGES;) {
         if (page_state[p] != ST_COMMIT) { ++p; continue; }
         uint32_t first = p & ~(step - 1), last = p;
         while (last + 1 < PAGES && page_state[last + 1] == ST_COMMIT) ++last;
         uint32_t end = (last | (step - 1)) + 1;               /* exclusive, host-page aligned */
-        size_t bytes = (size_t)(end - first) << 12, pages = bytes / host_page;
-        if (!mincore(GPTR(first << 12), bytes, vec))
-            for (size_t i = 0; i < pages; ++i) in_core += vec[i] & 1;
+        if (run_count == run_cap) {
+            uint32_t cap = run_cap ? run_cap * 2u : 256u;
+            uint32_t *grown = (uint32_t *)realloc(runs, (size_t)cap * 2u * sizeof *runs);
+            if (!grown) break;
+            runs = grown;
+            run_cap = cap;
+        }
+        runs[2u * run_count] = first;
+        runs[2u * run_count + 1u] = end;
+        ++run_count;
         p = end;
     }
     pthread_mutex_unlock(&vm_lock);
+    for (uint32_t i = 0; vec && i < run_count; ++i) {
+        uint32_t first = runs[2u * i], end = runs[2u * i + 1u];
+        size_t bytes = (size_t)(end - first) << 12, pages = bytes / host_page;
+        if (!mincore(GPTR(first << 12), bytes, vec))
+            for (size_t k = 0; k < pages; ++k) in_core += vec[k] & 1;
+    }
     *committed = c << 12;
     *reserved = r << 12;
     *resident = in_core * host_page;

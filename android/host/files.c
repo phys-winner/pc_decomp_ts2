@@ -1100,12 +1100,31 @@ WINAPI_EXPORT(K32, GetFileType, 1)
     return f->std_stream ? 2u : 1u;    /* FILE_TYPE_CHAR / FILE_TYPE_DISK */
 }
 
+/* Write the cache's dirty blocks of a file back, and with `size` >= 0 make
+ * it that long, with the machine released: up to 16 MB go to FUSE storage,
+ * which held off the audio producer for 50-200 ms while a neighborhood was
+ * created. The cache touches no guest state; the caller holds the handle, so
+ * the descriptor stays open. Returns 0, or an errno. */
+static int write_back_released(int fd, uint64_t key, off_t size)
+{
+    int error = 0;
+    void_blocking_begin();
+    void_readcache_flush_key(key);
+    if (size >= 0) {
+        if (ftruncate(fd, size)) error = errno;
+        else if (key) void_readcache_changed_key(key);
+    }
+    void_blocking_end();
+    return error;
+}
+
 WINAPI_EXPORT(K32, FlushFileBuffers, 1)
 {
-    file_t *f = file_get(ARG(0));
+    void_object *object __attribute__((cleanup(release_file_operation))) = void_handle_acquire(ARG(0), VOID_OBJ_FILE);
+    file_t *f = object ? object->data : NULL;
     if (!f) return 0;
     if (file_flush(f)) { void_set_last_error(void_errno_to_win32(f->werr)); f->werr = 0; return 0; }
-    void_readcache_flush_key(f->path_key);
+    if (f->path_key) write_back_released(f->fd, f->path_key, -1);
     return 1;
 }
 
@@ -1126,9 +1145,8 @@ WINAPI_EXPORT(K32, SetEndOfFile, 1)
         ? void_readcache_set_end(f->fd, f->path_key, f->host_path, pos) : 1;
     IOTRACE("E %08X %lld %d\n", ARG(0), (long long)pos, kept);
     if (!kept) { f->cache_wrote = 1; return 1; }
-    void_readcache_flush_key(f->path_key);
-    if (ftruncate(f->fd, pos)) { void_set_last_error(void_errno_to_win32(errno)); return 0; }
-    if (f->path_key) void_readcache_changed_key(f->path_key);
+    int error = write_back_released(f->fd, f->path_key, pos);
+    if (error) { void_set_last_error(void_errno_to_win32(error)); return 0; }
     return 1;
 }
 
@@ -1208,10 +1226,19 @@ static uint32_t delete_file(const char *path)
     files_flush_all();
     VSTAT_BEGIN(start);
     char *host = to_host(path, NULL, NULL);
-    int ok = host && !unlink(host);
-    if (ok) { dircache_removed(host); void_readcache_changed(host); }
+    int ok = 0, error = errno;
+    if (host) {
+        /* An unlink on FUSE storage took 20-30 ms while a neighborhood loaded:
+         * not with the machine, which the audio producer waits for. The caches
+         * keep their own locks; the last error goes to the guest afterwards. */
+        void_blocking_begin();
+        ok = !unlink(host);
+        error = errno;
+        if (ok) { dircache_removed(host); void_readcache_changed(host); }
+        void_blocking_end();
+    }
     VSTAT_END(start, VS_DIROP, 0);
-    if (!ok) void_set_last_error(void_errno_to_win32(errno));
+    if (!ok) void_set_last_error(void_errno_to_win32(error));
     free(host);
     return ok;
 }

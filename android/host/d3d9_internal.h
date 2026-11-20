@@ -12,6 +12,7 @@
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 #include "../../reference/mojoshader/mojoshader.h"
+#include "../render/s2r.h"   /* the native renderers under this front end (android/render) */
 
 /* Interface IDs (d3d9.h), checked against the system d3d9.dll. */
 static const uint8_t IID_IUnknown[16] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x46};   /* {00000000-0000-0000-C000-000000000046} */
@@ -108,7 +109,8 @@ typedef struct d3d_device d3d_device;
 typedef struct d3d_texture d3d_texture;
 typedef struct d3d_surface d3d_surface;
 
-/* d3d9_texcache.c: 1 when a DXT level went up from the converted texture cache. */
+/* d3d9_texcache.c: 1 when a DXT level went up from the converted texture cache (the old layer; the
+ * native renderers: s2r_texcache.c). */
 int d3d_texcache_upload(d3d_texture *t, uint32_t face, uint32_t level, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     const uint8_t *data, uint32_t pitch);
 
@@ -134,6 +136,7 @@ struct d3d_surface {
     uint32_t lock_rect[4];
     int lock_whole;
     uint64_t gl_bytes;            /* estimated GL storage ([mem] report); render thread */
+    void *s2r;                    /* the native renderer's image (standalone surfaces); render thread */
 };
 
 struct d3d_texture {
@@ -157,9 +160,10 @@ struct d3d_texture {
     int screen_sized;             /* follows the render scale (d3d_scaled_*) */
     int has_storage;              /* GL storage was asked for (the game's thread's view of `gl`) */
     uint32_t gl_lod;              /* SetLOD as the render thread applies it */
-    GLenum gl_internal;           /* storage format other than fmt->internal (d3d9_texcache.c); render thread */
-    int cache_state;              /* d3d9_texcache.c: undecided, RGBA8 or compressed; render thread */
+    GLenum gl_internal;           /* storage format other than fmt->internal (converted or ATC blocks); render thread */
+    int cache_state;              /* D3D_TEXCACHE_* (d3d9_texcache.h): undecided, RGBA8, converted, ATC; render thread */
     uint64_t gl_bytes;            /* estimated GL storage ([mem] report); render thread */
+    void *s2r;                    /* the native renderer's image; render thread */
 };
 
 typedef struct d3d_buffer {
@@ -174,6 +178,7 @@ typedef struct d3d_buffer {
     uint32_t dirty_lo, dirty_hi;
     int discard_pending;
     int overwrite_pending;        /* a lock without D3DLOCK_NOOVERWRITE since the last flush */
+    void *s2r;                    /* the native renderer's buffer; render thread */
 } d3d_buffer;
 
 typedef struct d3d_vertex_element {
@@ -209,6 +214,7 @@ typedef struct d3d_shader {
     int ff_io_ready;              /* ff_io holds the io_ varyings of `source` (d3d9_ff.c) */
     uint32_t ff_io_count;
     uint32_t ff_io[32];           /* usage << 8 | index: what a generated other half must match */
+    void *s2r;                    /* the native renderer's library entries; render thread */
 } d3d_shader;
 
 typedef struct d3d_query {
@@ -218,6 +224,7 @@ typedef struct d3d_query {
     GLuint gl;
     int issued, ended;
     GLsync fence;
+    void *s2r;                    /* the native renderer's query; render thread */
 } d3d_query;
 
 /* Everything a state block can capture. */
@@ -338,6 +345,7 @@ void d3d_rt_call(d3d_rt_fn fn, const void *args, uint32_t size);
 void d3d_rt_sync(d3d_rt_fn fn, void *arg);         /* run fn(arg) there and wait for it */
 uint32_t d3d_process_vertices(d3d_device *d, uint32_t first, uint32_t dest, uint32_t count, d3d_buffer *buffer, d3d_decl *decl, uint32_t flags);
 int d3d_process_inputs(d3d_device *d, const MOJOSHADER_parseData *pd, uint32_t first, uint32_t count, int bind);
+void d3d_process_inputs_done(void);
 void d3d_rt_finish(void);
 void d3d_rt_flush(void);       /* hand over what is recorded now */
 int d3d_rt_render_tid(void);   /* 0 until it runs */
@@ -395,6 +403,10 @@ float d3d_scale_of(const d3d_surface *s);
 uint32_t d3d_scaled_size(uint32_t size, float scale);
 void d3d_scaled_add(d3d_surface *s, d3d_texture *t);
 void d3d_scaled_remove(void *object);
+/* Every registered target at scale k (storage again, no GL of the old layer): their count, 0 when
+   the scale did not change. The native renderers call it after a present (s2r_scale_follow). */
+int d3d_scaled_retarget(float k);
+float d3d_scaled_applied(void);
 void d3d_scaled_follow(d3d_device *dev);   /* at a present: apply a changed scale */
 void d3d_texture_storage(d3d_texture *t);
 void d3d_surface_storage(d3d_surface *s);
@@ -416,9 +428,6 @@ void d3d_gl_use_program(GLuint program);
 void d3d_gl_delete_program(GLuint program);
 GLuint d3d_filter_present(GLuint input,int width,int height,int output_width,int output_height);
 int d3d_filter_output(GLuint input,int x,int y,int width,int height);
-int d3d_filter_scene(d3d_device *device);
-void d3d_filter_jitter(d3d_device *device,float *x,float *y);
-unsigned d3d_fsr3_status(void);
 void d3d_gl_apply_state(d3d_device *dev);
 int d3d_gl_draw(d3d_device *dev, uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count,
     uint32_t prim_count, int indexed, uint32_t base_vertex, uint32_t start_index, uint32_t min_index,

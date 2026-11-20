@@ -27,6 +27,11 @@ typedef unsigned GLenum;
 #define GL_MAP_UNSYNCHRONIZED_BIT 16u
 #define D3DUSAGE_DYNAMIC 1u
 typedef struct {uint32_t gl,size,usage;void *storage;} d3d_buffer;
+/* the native renderers are off in these probes (s2r.h) */
+static int s2r_on(void){return 0;}
+__attribute__((unused)) static void s2r_buffer_upload(d3d_buffer *b,uint32_t lo,uint32_t n,int whole,int unsync,const uint8_t *src){(void)b;(void)lo;(void)n;(void)whole;(void)unsync;(void)src;assert(0);}
+__attribute__((unused)) static void s2r_buffer_create(d3d_buffer *b){(void)b;assert(0);}
+__attribute__((unused)) static void s2r_buffer_release(d3d_buffer *b){(void)b;assert(0);}
 static _Atomic int buffer_subdata=-1;
 static int buffer_storage_upload(d3d_buffer *b,int whole,int unsynchronized,uint32_t lo,uint32_t length,const uint8_t *src){
  (void)b;(void)whole;(void)unsynchronized;(void)lo;(void)length;(void)src;assert(0);return 0;

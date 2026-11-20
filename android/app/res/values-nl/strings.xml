@@ -36,7 +36,6 @@
   <string name="scale_pending">Wijziging naar %1$d%% nog niet bevestigd. Toegepaste schaal: %2$d%%.</string>
   <string name="image_mismatch">Spelbestanden ontbreken of worden niet ondersteund. Herstel Sims2EP9.exe en ijl15.dll van Legacy Collection 2025.</string>
   <string name="gamepad_help">Linkerstick: aanwijzer; A: selecteren, dan plaatsen; B: annuleren/Terug; X: rechtsklikken; Y: pauze. Rechterstick: camera; ingedrukt: kantelen. Triggers: zoom; schouderknoppen: camera of voorwerp draaien. Richtingsknoppen: lijst onder aanwijzer scrollen. Start: interface; Select: hulp. Linkerstick ingedrukt: nauwkeurige aanwijzer.</string>
-  <string name="upscale_fallback">FSR 3 niet beschikbaar (code %1$d). FSR 1 wordt gebruikt.</string>
   <string name="ui_swipe_controls">Interface bedienen met vegen</string>
   <string name="time_controls">Tijd bedienen</string>
   <string name="time_swipe_hint">Veeg over de klok of de snelheidsknoppen: naar rechts om te versnellen, naar links om te vertragen en te pauzeren. De schaal in het midden toont de gekozen snelheid.</string>

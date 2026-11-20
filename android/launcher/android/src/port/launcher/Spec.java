@@ -82,6 +82,13 @@ final class Spec {
         List<Object> choiceTitles = new ArrayList<>();
     }
 
+    /** A folder of the player's own files to show with the options (port.json "folders": the
+     *  game's mods folder), made when shared storage is writable. */
+    static final class Folder {
+        String path;
+        Object title, hint;
+    }
+
     static final class Category {
         String id, part;
         Object title, hint;
@@ -100,6 +107,7 @@ final class Spec {
     final List<String> autoModes = new ArrayList<>(), verifiedModes = new ArrayList<>();
     final List<Option> options = new ArrayList<>();
     final List<Category> categories = new ArrayList<>();
+    final List<Folder> folders = new ArrayList<>();
     final List<License> licenses = new ArrayList<>();
     final JSONObject theme, build;
 
@@ -238,6 +246,16 @@ final class Spec {
                 option.choiceTitles.add(c.opt("title") != null ? c.opt("title") : c.getString("value"));
             }
             options.add(option);
+        }
+
+        JSONArray shown = json.optJSONArray("folders");
+        if (shown != null) for (int i = 0; i < shown.length(); ++i) {
+            JSONObject f = shown.getJSONObject(i);
+            Folder folder = new Folder();
+            folder.path = f.getString("path");
+            folder.title = f.opt("title") != null ? f.opt("title") : folder.path;
+            folder.hint = f.opt("hint");
+            folders.add(folder);
         }
 
         JSONObject cleanup = json.optJSONObject("cleanup");

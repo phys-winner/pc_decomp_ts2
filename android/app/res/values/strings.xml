@@ -36,7 +36,6 @@
   <string name="scale_pending">Change to %1$d%% is not confirmed yet. Currently applied: %2$d%%.</string>
   <string name="image_mismatch">Game executables are missing or unsupported. Select the Legacy Collection 2025 installation containing Sims2EP9.exe and ijl15.dll in EP9/TSBin.</string>
   <string name="gamepad_help">Left stick: pointer; A: select, then place; B: cancel/Back; X: right click; Y: pause. Right stick: camera pan; hold right stick: tilt. Triggers: zoom; shoulders: rotate camera or selected object. D-pad: scroll list at pointer. Start: interface settings; Select: this help. Left stick pressed: precise pointer.</string>
-  <string name="upscale_fallback">FSR 3 is unavailable (code %1$d). Using FSR 1.</string>
   <string name="ui_swipe_controls">Swipe UI controls</string>
   <string name="time_controls">Time controls</string>
   <string name="time_swipe_hint">Swipe along the clock or speed buttons: right to speed up, left to slow down and pause. The scale in the centre shows the selected speed.</string>

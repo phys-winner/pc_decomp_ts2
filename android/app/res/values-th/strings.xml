@@ -36,7 +36,6 @@
   <string name="scale_pending">ยังไม่ยืนยันการเปลี่ยนเป็น %1$d%% ขนาดที่ใช้อยู่: %2$d%%</string>
   <string name="image_mismatch">ไฟล์เกมหายไปหรือไม่รองรับ โปรดกู้คืน Sims2EP9.exe และ ijl15.dll จาก Legacy Collection 2025</string>
   <string name="gamepad_help">สติกซ้าย: ตัวชี้; A: เลือกแล้ววาง; B: ยกเลิก/ย้อนกลับ; X: คลิกขวา; Y: หยุดชั่วคราว สติกขวา: กล้อง; กดค้าง: เอียง ทริกเกอร์: ซูม; ปุ่มไหล่: หมุนกล้องหรือวัตถุ ปุ่มทิศทาง: เลื่อนรายการใต้ตัวชี้ Start: ตั้งค่าส่วนติดต่อ; Select: วิธีใช้ กดสติกซ้ายค้าง: ตัวชี้ละเอียด</string>
-  <string name="upscale_fallback">ใช้ FSR 3 ไม่ได้ (รหัส %1$d) กำลังใช้ FSR 1</string>
   <string name="ui_swipe_controls">ปัดเพื่อควบคุมส่วนติดต่อ</string>
   <string name="time_controls">การควบคุมเวลา</string>
   <string name="time_swipe_hint">ปัดบนนาฬิกาหรือปุ่มความเร็ว: ไปทางขวาเพื่อเร่งเวลา ไปทางซ้ายเพื่อลดความเร็วจนหยุดชั่วคราว แถบตรงกลางจะแสดงความเร็วที่เลือก</string>

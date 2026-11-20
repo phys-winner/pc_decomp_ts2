@@ -36,6 +36,8 @@ public final class Probe extends Service {
     /** A check that has not reported by then crashed or hung in the stage it noted. */
     static final long TIMEOUT_MS = 15000;
     static final int QUALCOMM = 0x5143, ARM = 0x13B5;
+    /** The partial report's mark of the second pass after a crashed system driver. */
+    static final String RESUMED = "stock.resumed=1";
 
     private static native String nativeProbe(String libraryDir, String driver, boolean panvk);
     private static boolean started;
@@ -57,16 +59,25 @@ public final class Probe extends Service {
         File ownTurnip = VulkanDriver.TURNIP.chosen(this), ownPanvk = VulkanDriver.PANVK.chosen(this);
         String key = key(this, spec, ownTurnip, ownPanvk), libraries = getApplicationInfo().nativeLibraryDir;
         String stock, turnip = "turnip.status=skipped\n";
-        write(new File(dir, STAGE), key + "\nstock\n");
-        try {
-            System.loadLibrary(LIBRARY);
-            stock = nativeProbe(libraries, null, false);
-        } catch (UnsatisfiedLinkError e) {
-            stock = "stock.status=error\nstock.error=" + line(e.getMessage()) + "\n";
+        /* A system driver that crashed the previous check is not loaded again: the app-local drivers
+           do not depend on it (report() starts this second pass once). */
+        String resumed = read(new File(dir, PARTIAL));
+        boolean skipStock = resumed != null && resumed.startsWith(key + "\n") && resumed.contains(RESUMED);
+        if (skipStock) {
+            stock = resumed.substring(key.length() + 1);
+            try { System.loadLibrary(LIBRARY); } catch (UnsatisfiedLinkError e) { android.util.Log.w("Launcher", "Vulkan check: " + e); }
+        } else {
+            write(new File(dir, STAGE), key + "\nstock\n");
+            try {
+                System.loadLibrary(LIBRARY);
+                stock = nativeProbe(libraries, null, false);
+            } catch (UnsatisfiedLinkError e) {
+                stock = "stock.status=error\nstock.error=" + line(e.getMessage()) + "\n";
+            }
         }
         Map<String, String> stockReport = parse(stock);
         Spec.Mode mode = turnipMode(spec);
-        if (mode != null && vendor(stockReport, "stock") == QUALCOMM && Renderers.libraries(this).containsAll(mode.libraries)) {
+        if (mode != null && qualcomm(this, stockReport) && Renderers.libraries(this).containsAll(mode.libraries)) {
             write(new File(dir, PARTIAL), key + "\n" + stock);
             write(new File(dir, STAGE), key + "\nturnip\n");
             PortHooks hooks = PortHooks.of(this);
@@ -164,8 +175,19 @@ public final class Probe extends Service {
         String driver = running.substring(key.length() + 1).trim();
         String partial = read(new File(dir, PARTIAL));
         String done = partial != null && partial.startsWith(key + "\n") ? partial.substring(key.length() + 1) : "";
+        boolean stockStage = !"panvk".equals(driver) && !"turnip".equals(driver);
+        if (stockStage && !done.contains(RESUMED) && needsAppDrivers(Spec.get(context))) {
+            /* The system driver crashed (or the check never came up): check the app-local drivers once
+               more without it; until then the check counts as running. */
+            write(new File(dir, PARTIAL), key + "\nstock.status=crash\n" + RESUMED + "\n");
+            stage.delete();
+            android.util.Log.w("Launcher", "Vulkan check: the " + driver + " stage did not finish; checking the app's own drivers without it");
+            launch(context);
+            return null;
+        }
         String crashed = done + ("panvk".equals(driver) ? "panvk.status=crash\n"
             : "turnip".equals(driver) ? "turnip.status=crash\n"
+            : done.contains(RESUMED) ? "turnip.status=skipped\n"
             : "stock.status=crash\nturnip.status=skipped\n");
         write(new File(dir, REPORT), key + "\n" + crashed);
         stage.delete();
@@ -187,9 +209,16 @@ public final class Probe extends Service {
         return text != null && text.startsWith(key(context) + "\n");
     }
 
+    /** Whether a mode runs on an app-local driver (Turnip, PanVK), which the check can test without the system's. */
+    static boolean needsAppDrivers(Spec spec) { return turnipMode(spec) != null || panvkMode(spec) != null; }
+
     /** Starts the check unless this build and system have a report or a check runs now. */
     static void start(Context context, Spec spec) {
         if (!needed(spec) || !carried(context) || report(context) != null || running(context)) return;
+        launch(context);
+    }
+
+    private static void launch(Context context) {
         /* Noted before the service starts: a service that never comes up times out as a crash too. */
         write(new File(State.folder(context), STAGE), key(context) + "\nstart\n");
         try {
@@ -216,6 +245,14 @@ public final class Probe extends Service {
             if (equals > 0) values.put(row.substring(0, equals).trim(), row.substring(equals + 1).trim());
         }
         return values;
+    }
+
+    /** A Qualcomm GPU: by the system driver's report, else (no system Vulkan, an old one that failed or
+     *  crashed) by the GPU the launcher sees. The app-local Turnip does not need the system driver. */
+    static boolean qualcomm(Context context, Map<String, String> report) {
+        int id = report == null ? 0 : vendor(report, "stock");
+        if (id != 0) return id == QUALCOMM;
+        return Gpu.get(context).qualcomm();
     }
 
     static int vendor(Map<String, String> report, String driver) {

@@ -16,10 +16,13 @@ void s2_physical_size(int *w, int *h);
 void s2_game_resolution(int *w, int *h);
 double s2_ui_factor(void);
 uint32_t s2_ui_pick(uint32_t root, int x, int y);
+uint32_t s2_ui_mouse_pick(uint32_t root, int x, int y);
 void s2_ui_scale_requested(int scale);
 void s2_ui_resized(void);
 /* The main thread's message pump: a fit that closed returns the UI to its scale. */
 void s2_fit_tick(void);
+void s2_load_present(uint64_t work_ns);
+int s2_loading_animations(void);
 void s2_fit_scene_attached(void);
 enum { S2_UI_SCALE = 1, S2_UI_CAS_PAN = 2, S2_UI_TEXT_READ = 3, S2_UI_TEXT_WRITE = 4, S2_UI_CAMERA = 5, S2_UI_CATALOG = 6, S2_UI_CHEAT = 7, S2_UI_CLEAR_CATALOG = 8 };
 /* Explicit gesture settings; queued on the existing owner-thread input fence. */

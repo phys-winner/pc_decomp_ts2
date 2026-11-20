@@ -36,7 +36,6 @@
   <string name="scale_pending">A mudança para %1$d%% ainda não foi confirmada. Escala aplicada: %2$d%%.</string>
   <string name="image_mismatch">Arquivos do jogo ausentes ou incompatíveis. Restaure Sims2EP9.exe e ijl15.dll da Legacy Collection 2025.</string>
   <string name="gamepad_help">Analógico esquerdo: ponteiro; A: selecionar e colocar; B: cancelar/Voltar; X: botão direito; Y: pausa. Analógico direito: câmera; pressionado: inclinar. Gatilhos: zoom; botões superiores: girar câmera ou objeto. Direcional: rolar lista sob o ponteiro. Start: interface; Select: ajuda. Analógico esquerdo pressionado: ponteiro preciso.</string>
-  <string name="upscale_fallback">FSR 3 indisponível (código %1$d). Usando FSR 1.</string>
   <string name="ui_swipe_controls">Controlar a interface deslizando</string>
   <string name="time_controls">Controle do tempo</string>
   <string name="time_swipe_hint">Deslize sobre o relógio ou os botões de velocidade: para a direita para acelerar e para a esquerda para desacelerar e pausar. A escala no centro mostra a velocidade escolhida.</string>

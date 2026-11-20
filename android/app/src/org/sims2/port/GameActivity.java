@@ -1,6 +1,7 @@
 package org.sims2.port;
 
 import android.app.Activity;
+import org.sims2.port.launcher.FpsOverlay;
 import org.sims2.port.launcher.Launch;
 import android.app.AlertDialog;
 import android.content.Intent;
@@ -51,7 +52,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static native long nativeTouchCursor();
     static native int nativeTouchObjectCost();
     static native boolean nativeTouchObjectPreview(long token);
-    private static native int nativeUpscaleStatus();
     private static native long nativeFrameTimes(int[] intervalsUs);
     static native String nativeGpuStrings();
     static native int nativeFpsLimit();
@@ -122,7 +122,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private TextView scaleStatus;
     private int textSerial,desiredScale,lastSubmittedScale;
     private boolean scaleRequested;
-    private int upscaleStatus;
     private String textDraft="";
     private final android.os.Handler controlHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateControls=new Runnable(){public void run(){
@@ -138,7 +137,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         refreshObjectControls();
         showTimeHint();
         showFloorHint();
-        int status=nativeUpscaleStatus();if(status!=0&&status!=upscaleStatus){upscaleStatus=status;touchNotice(text(R.string.upscale_fallback,status));}
         if(textSerial!=0)handleTextReceipt(nativeTouchReplaceTextStatus(textSerial));
         if(cheatSerial!=0)handleCheatReceipt(nativeCheatsStatus(cheatSerial));
         if(settingsDialog!=null&&scaleStatus!=null)scaleStatus.setText(text(R.string.scale_status,desiredScale,nativeTouchUiScale()));
@@ -423,18 +421,23 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 fpsOverlay = null;
             }
             fpsMode = mode;
-            if (!"0".equals(mode)) {
-                android.view.Display display = root.getDisplay();
-                SystemInfo system = "2".equals(mode) ? new SystemInfo(this, root.getWidth(), root.getHeight(),
-                    display != null ? display.getRefreshRate() : 0) : null;
-                fpsOverlay = new FpsOverlay(this, FpsCounter.hudScale(getResources().getDisplayMetrics().density),
-                    GameActivity::nativeFrameTimes, system);
-                root.addView(fpsOverlay, 1, fpsLayout());
-            }
+            fpsOverlay = FpsOverlay.create(this, mode, GameActivity::nativeFrameTimes,
+                GameActivity::fpsRenderer, GameActivity::nativeFpsLimit, GameActivity::nativeGpuStrings);
+            if (fpsOverlay != null) root.addView(fpsOverlay, 1, fpsLayout());
         }
         if (fpsOverlay != null) {
             fpsOverlay.setVisibility(View.VISIBLE);
             fpsOverlay.start();
+        }
+    }
+
+    private static String fpsRenderer() {
+        switch (nativeRendererActive()) {
+            case 2: return "vulkan";
+            case 3: return "vulkan (turnip)";
+            case 4: return "vulkan (panvk)";
+            case 0: return "gles (Direct3D 9 layer)";
+            default: return "gles";   /* 1, or -1 before the device exists */
         }
     }
 
@@ -628,7 +631,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 System.load(dev.getAbsolutePath());
             }else System.loadLibrary("sims2");
             String renderer=launch.renderer();
-            nativeRenderer("panvk".equals(renderer)?3:"turnip".equals(renderer)?2:"dxvk".equals(renderer)?1:0,
+            /* The native renderers (android/render): OpenGL ES by default, Vulkan when chosen (on the system
+             * driver, Mesa Turnip or Mesa PanVK, also the player's own driver: PORT_TURNIP_DRIVER and
+             * PORT_PANVK_DRIVER); "legacy" (adb QA runs only) keeps the old Direct3D 9 -> GLES layer. */
+            nativeRenderer("vulkan".equals(renderer)?2:"turnip".equals(renderer)?3:"panvk".equals(renderer)?4
+                    :"legacy".equals(renderer)?0:1,
                     getApplicationInfo().nativeLibraryDir,getCacheDir().getAbsolutePath());
         }catch(LinkageError failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
         started = true;

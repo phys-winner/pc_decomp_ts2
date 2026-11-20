@@ -75,7 +75,10 @@ final class Renderers {
             return new Status(mode, false, false, Texts.t(context, Texts.R_CONVERTED));
         boolean turnip = "turnip".equals(mode.kind);
         if (turnip) {
-            if (!gpu.qualcomm() || (mode.adrenoMin > 0 && (gpu.adreno < mode.adrenoMin || gpu.adreno > mode.adrenoMax))) {
+            /* The Adreno range is the bundled driver's; the player's own driver may cover other models
+               (the check then decides). Neither depends on the system Vulkan driver's version. */
+            boolean own = VulkanDriver.TURNIP.chosen(context) != null;
+            if (!gpu.qualcomm() || (!own && mode.adrenoMin > 0 && gpu.adreno != 0 && (gpu.adreno < mode.adrenoMin || gpu.adreno > mode.adrenoMax))) {
                 String here = gpu.renderer.isEmpty() ? "?" : gpu.renderer;
                 return new Status(mode, false, false, Texts.fmt(context, Texts.R_ADRENO, mode.adrenoMin, mode.adrenoMax, here));
             }

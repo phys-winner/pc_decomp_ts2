@@ -6,9 +6,9 @@ import org.sims2.port.launcher.TextureBackend;
 /** The launcher base's texture card (port.json "textures.backend") over the port's converter
  *  (android/texconv, libs2texconv.so): every DXT mip level of the installed game re-encoded once
  *  into ETC2 or ASTC 4x4 and filed by a hash of its original blocks in
- *  port_textures/textures.s2tc under the launcher's cache root, which the renderer
- *  (android/host/d3d9_texcache.c)
- *  uploads instead of decoding DXT on the CPU. The game's own package files stay as they are;
+ *  port_textures/textures.s2tc under the launcher's cache root, which both native renderers
+ *  (android/render/s2r_texcache.c over android/host/d3d9_texcache.c) upload instead of decoding
+ *  DXT on the CPU. The game's own package files stay as they are;
  *  undoing the conversion deletes that folder. The base runs these on its background work and
  *  polls progress(); one operation at a time. */
 public final class TextureCache implements TextureBackend {

@@ -36,7 +36,6 @@
   <string name="scale_pending">更改为%1$d%%尚未确认。目前已应用：%2$d%%。</string>
   <string name="image_mismatch">游戏文件缺失或不受支持。请恢复Legacy Collection 2025的Sims2EP9.exe和ijl15.dll。</string>
   <string name="gamepad_help">左摇杆：指针；A：选择后放置；B：取消/返回；X：右键；Y：暂停。右摇杆：镜头移动；按住摇杆：倾斜。扳机：缩放；肩键：旋转镜头或物品。方向键：滚动指针下的列表。Start：界面设置；Select：帮助。按住左摇杆：精细移动指针。</string>
-  <string name="upscale_fallback">FSR 3不可用（代码%1$d）。正在使用FSR 1。</string>
   <string name="ui_swipe_controls">滑动操作界面控件</string>
   <string name="time_controls">时间控制</string>
   <string name="time_swipe_hint">在时钟或速度按钮上滑动：向右加速，向左减速直至暂停。中央刻度会显示所选速度。</string>

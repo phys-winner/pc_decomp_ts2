@@ -36,7 +36,6 @@
   <string name="scale_pending">Le passage à %1$d%% n\'est pas encore confirmé. Échelle appliquée : %2$d%%.</string>
   <string name="image_mismatch">Fichiers du jeu absents ou incompatibles. Restaurez Sims2EP9.exe et ijl15.dll de Legacy Collection 2025.</string>
   <string name="gamepad_help">Stick gauche : pointeur ; A : sélectionner puis placer ; B : annuler/Retour ; X : clic droit ; Y : pause. Stick droit : caméra ; maintenu enfoncé : inclinaison. Gâchettes : zoom ; boutons supérieurs : rotation de la caméra ou de l\'objet. Croix : faire défiler la liste sous le pointeur. Start : interface ; Select : aide. Stick gauche enfoncé : pointeur précis.</string>
-  <string name="upscale_fallback">FSR 3 indisponible (code %1$d). Utilisation de FSR 1.</string>
   <string name="ui_swipe_controls">Balayer les commandes de l’interface</string>
   <string name="time_controls">Contrôle du temps</string>
   <string name="time_swipe_hint">Glissez sur la pendule ou les boutons de vitesse : vers la droite pour accélérer, vers la gauche pour ralentir et mettre en pause. La jauge au centre indique la vitesse choisie.</string>

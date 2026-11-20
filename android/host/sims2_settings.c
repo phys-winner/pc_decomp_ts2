@@ -18,6 +18,9 @@
 #include <sys/stat.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 static _Atomic int ui_scale = 300;
 static int adaptive_ui;
@@ -175,6 +178,16 @@ uint32_t s2_ui_pick(uint32_t root, int x, int y)
 {
     uint32_t point[2] = { (uint32_t)(int)((float)x / (float)ui_applied_factor), (uint32_t)(int)((float)y / (float)ui_applied_factor) };
     return void_call_guest_this(MEM32(MEM32(root) + 0xBC), root, 2, point);
+}
+
+/* The window a mouse click at (x, y) reaches: vt+0xC0 (A0931458) is vt+0xBC without the
+ * children flagged winflag_ignoremouse (0x200000), as the manager's mouse dispatch
+ * (A0932462). Decorative bitmaps such as the "overlay" frame of the Choose a Pet dialog
+ * (EP4 UI FEEDBAAF) lie over its name field: vt+0xBC returns the bitmap, the mouse the field. */
+uint32_t s2_ui_mouse_pick(uint32_t root, int x, int y)
+{
+    uint32_t point[2] = { (uint32_t)(int)((float)x / (float)ui_applied_factor), (uint32_t)(int)((float)y / (float)ui_applied_factor) };
+    return void_call_guest_this(MEM32(MEM32(root) + 0xC0), root, 2, point);
 }
 
 static double ui_desired_factor(void)
@@ -609,6 +622,31 @@ void sub_A05BE74D(void)
         ui_owner_fit(&ui_fit_loading_screen, self, 0);
 }
 
+
+/* One [loading] line per loading screen (its windows open at the same time, as names), when it
+ * changes: its frames, and the "idle" ones where the game thread worked under 8 ms, waiting for
+ * the next frame (the time the blocking loading animations take, sims2_loading.c). */
+void s2_load_present(uint64_t work_ns)
+{
+    static unsigned mask0, frames, idle;
+    static uint64_t t0, idle_ns, last;
+    unsigned mask = (ui_fit_loading ? 1 : 0) | (ui_fit_loading_screen ? 2 : 0) | (ui_fit_town_loading ? 4 : 0) |
+                    (ui_fit_lot_loading ? 8 : 0);
+    uint64_t now = void_monotonic_ns();
+    if (mask != mask0) {
+        if (mask0 && frames)
+            void_log("[loading] %s%s%s%s screen %.1f s: %u frames, %u idle (%.1f s)",
+                     mask0 & 1 ? "startup " : "", mask0 & 2 ? "intro " : "", mask0 & 4 ? "town " : "",
+                     mask0 & 8 ? "lot " : "", (double)(now - t0) / 1e9, frames, idle, (double)idle_ns / 1e9);
+        mask0 = mask; t0 = last = now; idle_ns = 0; frames = idle = 0;
+        return;
+    }
+    if (!mask) return;
+    ++frames;
+    if (work_ns < 8000000ull) { ++idle; idle_ns += now - last; }
+    last = now;
+}
+
 /* Loaders can draw during setup, before the next window-message pump. */
 void sub_A0C47EFC_lifted(void);
 void sub_A0C47EFC(void)
@@ -784,9 +822,31 @@ static char *xml_set(char *text, const char *element, const char *name, const ch
     return out;
 }
 
+/* Development: debug.s2.options="render_msaa=4;render_upscaler=1;..." stands in for the launcher's
+ * choices of this run (PORT_OPTION_<KEY>), for A/B runs started with adb on a phone without root. */
+static void option_overrides(void)
+{
+#ifdef __ANDROID__
+    char value[92] = "";
+    __system_property_get("debug.s2.options", value);
+    for (char *item = strtok(value, ";,"); item; item = strtok(NULL, ";,")) {
+        char *eq = strchr(item, '=');
+        if (!eq || eq == item || eq - item > 40) continue;
+        char name[64] = "PORT_OPTION_";
+        size_t n = strlen(name);
+        for (const char *c = item; c < eq && n + 1 < sizeof name; ++c)
+            name[n++] = (char)(*c >= 'a' && *c <= 'z' ? *c - 32 : *c);
+        name[n] = 0;
+        setenv(name, eq + 1, 1);
+        void_log("[settings] debug.s2.options: %s=%s", name, eq + 1);
+    }
+#endif
+}
+
 void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
 {
     read_display_rates();
+    option_overrides();
     if (screen_w > 0 && screen_h > 0) {
         phys_w = screen_w > screen_h ? screen_w : screen_h;    /* the game runs in landscape */
         phys_h = screen_w > screen_h ? screen_h : screen_w;
@@ -806,6 +866,7 @@ void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
     const char *adaptive = getenv("PORT_OPTION_ADAPTIVE_UI");
     adaptive_ui = adaptive && !strcmp(adaptive, "1");
     void_log("[settings] adaptive UI %s", adaptive_ui ? "on" : "off");
+    s2_loading_animations();
     /* The user's values go back to the file; S2_* overrides last one run. */
     int saved_ui = ui_scale, saved_fps = fps_limit, saved_render = render_scale;
     const char *resolution=getenv("PORT_OPTION_SCREEN_RESOLUTION");
@@ -820,7 +881,8 @@ void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
     const char *msaa=getenv("PORT_OPTION_RENDER_MSAA");
     render_msaa=msaa && !strcmp(msaa,"4")?4:msaa && !strcmp(msaa,"2")?2:0;
     const char *upscaler=getenv("PORT_OPTION_RENDER_UPSCALER");
-    render_upscaler=upscaler && !strcmp(upscaler,"3")?3:upscaler && !strcmp(upscaler,"1")?1:0;
+    /* "3" was FSR 3.1 (removed: too slow on phones); a profile that chose it keeps an upscaler, FSR 1 */
+    render_upscaler=upscaler && (!strcmp(upscaler,"1") || !strcmp(upscaler,"3"))?1:0;
     void_log("[settings] launcher resolution %d%%, UI FSR1 %d, FXAA %d, render upscaler %d",percent,ui_fsr,render_aa,render_upscaler);
     const char *ui_override = getenv("S2_UI_SCALE"), *fps_override = getenv("S2_FPS_LIMIT"),
                *render_override = getenv("S2_RENDER_SCALE");

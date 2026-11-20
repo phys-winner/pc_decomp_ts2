@@ -51,6 +51,12 @@ static uint64_t storage_bytes(GLenum internal, uint32_t bits, uint32_t w, uint32
 
 void d3d_gpu_stats(void_gpu_stats *out)
 {
+    if (s2r_on()) {
+        memset(out, 0, sizeof *out);
+        s2r_gpu_stats(&out->textures, &out->texture_bytes, &out->surfaces, &out->surface_bytes, &out->buffers,
+            &out->buffer_bytes, &out->programs);
+        return;
+    }
     out->textures = stat_textures; out->texture_bytes = stat_texture_bytes;
     out->surfaces = stat_surfaces; out->surface_bytes = stat_surface_bytes;
     out->buffers = stat_buffers; out->buffer_bytes = stat_buffer_bytes;
@@ -89,6 +95,7 @@ static void run_surface_destroy(void *args)
 {
     d3d_surface *s = *(d3d_surface **)args;
     if (s->screen_sized) d3d_scaled_remove(s);
+    if (s2r_on()) { s2r_surface_release(s); free(s); return; }
     if (s->gl_msaa_depth) { glDeleteRenderbuffers(1, &s->gl_msaa_depth); s->gl_msaa_depth = 0; s->gl_msaa_samples = 0; }
     if (s->gl) {
         d3d_gl_forget_texture(s->gl); glDeleteTextures(1, &s->gl);
@@ -141,6 +148,7 @@ d3d_surface *d3d_surface_new(d3d_device *dev, uint32_t w, uint32_t h, uint32_t f
  * render scale changes: the content is gone, as after a device reset). */
 void d3d_surface_storage(d3d_surface *s)
 {
+    if (s2r_on()) { s2r_surface_storage(s); return; }
     if (s->gl_msaa_depth) { glDeleteRenderbuffers(1, &s->gl_msaa_depth); s->gl_msaa_depth = 0; s->gl_msaa_samples = 0; }
     if (s->gl) {
         d3d_gl_forget_texture(s->gl); glDeleteTextures(1, &s->gl);
@@ -285,6 +293,7 @@ static void run_surface_upload(void *args)
     surface_upload_args *a = (surface_upload_args *)args;
     d3d_surface *s = a->s;
     const uint8_t *data = (const uint8_t *)(a + 1);
+    if (s2r_on()) { s2r_surface_upload(s, a->x0, a->y0, a->x1, a->y1, data, a->pitch); return; }
     void *owned;
     size_t size;
     const void *gl_data = d3d_format_convert(s->fmt, data, a->x1 - a->x0, a->y1 - a->y0, a->pitch, &owned, &size, 1);
@@ -424,6 +433,7 @@ static void run_texture_destroy(void *args)
 {
     d3d_texture *t = *(d3d_texture **)args;
     if (t->screen_sized) d3d_scaled_remove(t);
+    if (s2r_on()) { s2r_texture_release(t); free(t->surfaces); free(t); return; }
     if (t->gl) {
         d3d_gl_forget_texture(t->gl); glDeleteTextures(1, &t->gl);
         --stat_textures; stat_texture_bytes -= t->gl_bytes;
@@ -502,6 +512,7 @@ d3d_texture *d3d_texture_new(d3d_device *dev, uint32_t rtype, uint32_t w, uint32
  * changes). */
 void d3d_texture_storage(d3d_texture *t)
 {
+    if (s2r_on()) { s2r_texture_storage(t); return; }
     if (t->gl) {
         d3d_gl_forget_texture(t->gl); glDeleteTextures(1, &t->gl);
         --stat_textures; stat_texture_bytes -= t->gl_bytes;
@@ -582,6 +593,7 @@ void d3d_texture_upload_rect(d3d_texture *t, uint32_t face, uint32_t level, uint
 static void texture_upload_gl(d3d_texture *t, uint32_t face, uint32_t level, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     const uint8_t *data, uint32_t pitch)
 {
+    if (s2r_on()) { s2r_texture_upload(t, face, level, x, y, w, h, data, pitch); return; }
     if (!t->gl || !w || !h) return;
     /* DXT levels the launcher converted to ETC2/ASTC go up as they are. */
     if (t->fmt->block_bytes && d3d_texcache_upload(t, face, level, x, y, w, h, data, pitch)) return;
@@ -626,6 +638,7 @@ void d3d_texture_upload_level(d3d_texture *t, uint32_t face, uint32_t level, con
 
 void d3d_generate_mips(d3d_texture *t)
 {
+    if (s2r_on()) { s2r_texture_generate_mips(t); return; }
     if (!t->gl || t->levels < 2) return;
     d3d_gl_upload_unit();
     glBindTexture(t->target, t->gl);
@@ -923,6 +936,7 @@ static int buffer_storage_upload(d3d_buffer *b, int whole, int unsynchronized,
 static void run_buffer_destroy(void *args)
 {
     d3d_buffer *b = *(d3d_buffer **)args;
+    if (s2r_on()) { s2r_buffer_release(b); free(b); return; }
     if (b->storage) buffer_storage_free(b);
     if (b->gl) {
         d3d_gl_forget_buffer(b->gl); glDeleteBuffers(1, &b->gl);
@@ -941,6 +955,7 @@ static void buffer_destroy(void_com_object *o)
 static void run_buffer_create(void *args)
 {
     d3d_buffer *b = *(d3d_buffer **)args;
+    if (s2r_on()) { s2r_buffer_create(b); return; }
     buffer_storage_init();
     if (buffer_storage && (b->usage & D3DUSAGE_DYNAMIC)) {
         b->storage = (d3d_buffer_storage *)calloc(1, sizeof *b->storage);
@@ -975,6 +990,10 @@ static void run_buffer_upload(void *args)
 {
     buffer_upload_args *a = (buffer_upload_args *)args;
     d3d_buffer *b = a->b;
+    if (s2r_on()) {
+        s2r_buffer_upload(b, a->lo, a->length, a->whole != 0, a->unsynchronized != 0, (const uint8_t *)(a + 1));
+        return;
+    }
     int subdata = atomic_load_explicit(&buffer_subdata, memory_order_relaxed);
     if (subdata < 0) {
         const char *renderer = (const char *)glGetString(GL_RENDERER);
@@ -1250,6 +1269,13 @@ static int query_answered(d3d_query *q)
 static int query_answer(d3d_query *q)
 {
     uint32_t result;
+    if (s2r_on()) {
+        int visible = 0, ready = s2r_query_answer(q, 0, &visible);
+        if (!ready) return 0;
+        result = ready < 0 ? QUERY_ERROR : q->type == 8 || visible ? QUERY_VISIBLE : QUERY_HIDDEN;
+        atomic_store_explicit(&QRY_RT(q)->answer, (QRY_RT(q)->rt_serial << 2) | result, memory_order_release);
+        return 1;
+    }
     if (q->type == 8) {
         GLenum status = q->fence ? glClientWaitSync(q->fence, 0, 0) : GL_WAIT_FAILED;
         if (status == GL_TIMEOUT_EXPIRED) return 0;
@@ -1279,7 +1305,7 @@ static int query_watch(int idle)
         watch_head = (watch_head + 1u) % watch_cap;
         --watch_count;
     }
-    if (idle && watch_count && !watch_flushed) { glFlush(); watch_flushed = 1; }
+    if (idle && watch_count && !watch_flushed) { if (s2r_on()) s2r_flush(); else glFlush(); watch_flushed = 1; }
     return watch_count != 0;
 }
 
@@ -1303,12 +1329,18 @@ static void run_query_destroy(void *args)
 {
     d3d_query *q = *(d3d_query **)args;
     watch_remove(q);
+    if (s2r_on()) { s2r_query_release(q); free(q); return; }
     if (q->gl) glDeleteQueries(1, &q->gl);
     if (q->fence) glDeleteSync(q->fence);
     free(q);
 }
 static void query_destroy(void_com_object *o) { d3d_query *q = (d3d_query *)o; d3d_rt_call(run_query_destroy, &q, sizeof q); }
-static void run_query_create(void *args) { d3d_query *q = *(d3d_query **)args; if (q->type == 9) glGenQueries(1, &q->gl); }
+static void run_query_create(void *args)
+{
+    d3d_query *q = *(d3d_query **)args;
+    if (s2r_on()) s2r_query_create_rt(q);
+    else if (q->type == 9) glGenQueries(1, &q->gl);
+}
 
 uint32_t d3d_query_create(d3d_device *dev, uint32_t type)
 {
@@ -1346,6 +1378,11 @@ static void run_query_issue(void *args)
     issue_args *a = (issue_args *)args;
     d3d_query *q = a->q;
     QRY_RT(q)->rt_serial = a->serial;
+    if (s2r_on()) {
+        s2r_query_issue_rt(q, a->flags);
+        if (a->flags & 1u) watch_push(q);
+        return;
+    }
     if (q->type == 9) {
         if (a->flags & 2u) glBeginQuery(GL_ANY_SAMPLES_PASSED_CONSERVATIVE, q->gl);
         if (a->flags & 1u) glEndQuery(GL_ANY_SAMPLES_PASSED_CONSERVATIVE);
@@ -1381,6 +1418,18 @@ static void run_query_result(void *args)
 {
     result_args *a = (result_args *)args;
     d3d_query *q = a->q;
+    if (s2r_on()) {
+        /* the synchronous GetData path (S2_QUERY_WATCH=0): a FLUSH poll waits up to 1 ms as the GL path does */
+        int visible = 0, ready = s2r_query_answer(q, a->wait, &visible);
+        if (!ready && a->wait) {
+            struct timespec pause = { 0, 1000000 };
+            nanosleep(&pause, NULL);
+            ready = s2r_query_answer(q, 1, &visible);
+        }
+        if (q->type == 8) a->ready = ready;
+        else { a->ready = ready != 0 || a->wait; a->any = ready > 0 ? (GLuint)visible : 1u; }
+        return;
+    }
     if (q->type == 8) {
         a->ready = -1;
         if (q->fence) {
@@ -1425,8 +1474,15 @@ typedef struct { d3d_query *q; uint32_t flush; } poll_args;
 static void run_query_poll(void *args)
 {
     const poll_args *a = (const poll_args *)args;
-    if (a->flush) { glFlush(); watch_flushed = 1; }
-    if (!query_answered(a->q)) query_answer(a->q);
+    if (a->flush) { if (s2r_on()) s2r_flush(); else glFlush(); watch_flushed = 1; }
+    if (s2r_on() && !query_answered(a->q)) {
+        /* a FLUSH poll may hand the GPU the open frame (Vulkan) */
+        int visible = 0, ready = s2r_query_answer(a->q, (int)a->flush, &visible);
+        if (ready) {
+            uint32_t result = ready < 0 ? QUERY_ERROR : a->q->type == 8 || visible ? QUERY_VISIBLE : QUERY_HIDDEN;
+            atomic_store_explicit(&QRY_RT(a->q)->answer, (QRY_RT(a->q)->rt_serial << 2) | result, memory_order_release);
+        }
+    } else if (!query_answered(a->q)) query_answer(a->q);
     atomic_store_explicit(&QRY_RT(a->q)->polling, 0, memory_order_release);
 }
 

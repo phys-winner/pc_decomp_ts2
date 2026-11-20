@@ -45,6 +45,61 @@ def run(*args, **kwargs):
     return result
 
 
+def glslang_notice():
+    """The distinct leading license comments of the glslang sources tools/build_android.py links."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import build_android
+    seen, parts = set(), ["glslang (Khronos Group), compiled from the Android NDK's shaderc sources.\n"
+                          "The license notices of the source files in libsims2.so follow.\n"]
+    for name in build_android.GLSLANG_SOURCES:
+        text = (build_android.GLSLANG / name).read_text(encoding="utf-8", errors="replace")
+        lines = []
+        for line in text.splitlines():
+            if line.startswith("//") or line.startswith("/*") or line.startswith(" *") or line.startswith("*") or not line.strip():
+                lines.append(line)
+                if line.strip().endswith("*/") and not line.startswith("//"):
+                    break
+                continue
+            break
+        block = "\n".join(lines).strip()
+        if block and "Copyright" in block and block not in seen:
+            seen.add(block)
+            parts.append(f"--- {name} (and the files with the same notice)\n{block}\n")
+    return "\n".join(parts)
+
+
+# The app-local Vulkan drivers of the native Vulkan renderer (port.json modes "turnip" and "panvk",
+# android/render/s2r_vkdriver.c): adrenotools with its hooks and libc++_shared, Mesa Turnip, Mesa PanVK.
+# Each library must match its pin in dependencies.json; they come from build/vulkan-runtime (or
+# S2_VULKAN_RUNTIME), staged from the ut3 port's Turnip runtime and Frostpunk's PanVK build.
+VULKAN_RUNTIME = Path(os.environ.get("S2_VULKAN_RUNTIME", ROOT / "build/vulkan-runtime"))
+VULKAN_PINS = ("adrenotools", "turnip", "panvk", "libcxx_shared")
+VULKAN_LICENSES = {"adrenotools.txt": ("adrenotools", "adrenotools.BSD-2-Clause.txt"),
+                   "linkernsbypass.txt": ("adrenotools", "linkernsbypass.BSD-2-Clause.txt"),
+                   "turnip-mesa.txt": ("turnip", "Turnip-LICENSE-NOTE.txt"),
+                   "PanVK-JimVulkan-NOTICE.txt": ("panvk", "PanVK-JimVulkan-NOTICE.txt"),
+                   "libcxx-ndk.txt": ("libcxx_shared", "NOTICE")}
+
+
+def vulkan_drivers():
+    """[(file, packaged name)] of the driver libraries and [(file, license name)], checked against the pins."""
+    import json
+    pins = json.loads((ROOT / "dependencies.json").read_text(encoding="utf-8"))
+    libraries, licenses = [], []
+    for component in VULKAN_PINS:
+        for name, digest in pins[component]["runtime"].items():
+            path = VULKAN_RUNTIME / name
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise SystemExit(f"{path}: missing or not the pinned {component} library ({digest[:12]}...)")
+            libraries.append((path, name))
+    for name, (component, pinned) in VULKAN_LICENSES.items():
+        path = VULKAN_RUNTIME / "licenses" / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != pins[component]["licenses"][pinned]:
+            raise SystemExit(f"{path}: missing or not the pinned {component} notice")
+        licenses.append((path, name))
+    return libraries, licenses
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true")
@@ -79,25 +134,33 @@ def main():
     assets = OUT / "assets"
     shutil.copytree(prepared["assets"], assets)
     subprocess.run([sys.executable, str(ROOT / "tools/build_overlay.py")], check=True)
+    # The native renderers' shader library (tools/build_shaderlib.py; none without captured shaders:
+    # the renderers then translate every shader on the device, as they do for mods).
+    subprocess.run([sys.executable, str(ROOT / "tools/build_shaderlib.py"), "build"], check=True)
+    shader_library = ROOT / "generated/shaders/s2r_shaderlib.bin"
     runtime = assets / "runtime.zip"
     with zipfile.ZipFile(runtime, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in sorted((ROOT / "build/overlay").rglob("*")):
             if path.is_file():
                 archive.write(path, "overlay/" + path.relative_to(ROOT / "build/overlay").as_posix())
+        if shader_library.is_file():
+            archive.write(shader_library, "shaders/s2r_shaderlib.bin")
     (assets / "runtime.version").write_text(hashlib.sha256(runtime.read_bytes()).hexdigest(), encoding="ascii")
     (assets / "licenses").mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "reference/pcrecomp/LICENSE", assets / "licenses/pcrecomp.txt")
     shutil.copyfile(ROOT / "reference/mojoshader/LICENSE.txt", assets / "licenses/mojoshader.txt")
+    # glslang (the native Vulkan renderer's device translations), from the pinned NDK's shaderc sources,
+    # which carry no LICENSE file: the license headers of the files the build compiles, each once.
+    (assets / "licenses/glslang.txt").write_text(glslang_notice(), encoding="utf-8", newline="\n")
     shutil.copyfile(ROOT / "android/host/fsr1.h", assets / "licenses/fidelityfx-fsr1.txt")
-    subprocess.run([sys.executable,str(ROOT / "tools/build_fsr3.py")],check=True)
-    shutil.copyfile(ROOT / "reference/fsr3-android/sdk/LICENSE.txt", assets / "licenses/fidelityfx-fsr3.txt")
-    subprocess.run([sys.executable, str(ROOT / "tools/build_dxvk.py")], check=True)
-    shutil.copytree(ROOT / "build/dxvk/licenses", assets / "licenses", dirs_exist_ok=True)
     # The launcher's texture converter (port.json "textures": TextureCache) and its encoders' licenses.
     subprocess.run([sys.executable, str(ROOT / "tools/build_texconv.py")], check=True)
     texconv = ROOT / "build/arm64-texconv/libs2texconv.so"
     shutil.copyfile(ROOT / "reference/astcenc/LICENSE.txt", assets / "licenses/astcenc.txt")
     shutil.copyfile(ROOT / "reference/etcpak/LICENSE.txt", assets / "licenses/etcpak.txt")
+    drivers, driver_licenses = vulkan_drivers()
+    for path, name in driver_licenses:
+        shutil.copyfile(path, assets / "licenses" / name)
     probe = port_launcher.build_probe(OUT / "probe", prepared["package"], ndk=os.environ.get("ANDROID_NDK", str(SDK / "ndk/27.2.12479018")), api=29)
     run(TOOLS / "aapt2.exe", "compile", "--dir", ROOT / "android/app/res", "-o", OUT / "resources.zip")
     run(TOOLS / "aapt2.exe", "link", "-I", ANDROID_JAR, "--manifest", prepared["manifest"],
@@ -116,9 +179,8 @@ def main():
         apk.write(OUT / "dex/classes.dex", "classes.dex")
         apk.write(probe, "lib/arm64-v8a/" + probe.name)
         apk.write(texconv, "lib/arm64-v8a/" + texconv.name)
-        apk.write(ROOT / "build/fsr3-android-sdk/libs2fsr3.so", "lib/arm64-v8a/libs2fsr3.so")
-        for runtime in sorted((ROOT / "build/dxvk/runtime").glob("*.so")):
-            apk.write(runtime, "lib/arm64-v8a/" + runtime.name)
+        for path, name in drivers:
+            apk.write(path, "lib/arm64-v8a/" + name)
         if not args.java_only:
             apk.write(library, "lib/arm64-v8a/libsims2.so")
     aligned = OUT / "aligned.apk"

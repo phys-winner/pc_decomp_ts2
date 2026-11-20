@@ -27,17 +27,10 @@ def check_package(base):
     launcher = apk.launcher_root()
     sys.path.insert(0, str(launcher / 'tools'))
     import launcher as port_launcher
-    (base / 'build/dxvk/runtime').mkdir(parents=True)
-    (base / 'build/dxvk/licenses').mkdir()
-    (base / 'build/dxvk/runtime/libs2dxvk.so').write_bytes(b'bridge')
     (base / 'build/arm64-texconv').mkdir()
     (base / 'build/arm64-texconv/libs2texconv.so').write_bytes(b'texconv')
-    (base / 'build/fsr3-android-sdk').mkdir()
-    (base / 'build/fsr3-android-sdk/libs2fsr3.so').write_bytes(b'fsr3')
     (base / 'android/host').mkdir(parents=True)
     (base / 'android/host/fsr1.h').write_text('FSR1 fixture license')
-    (base / 'reference/fsr3-android/sdk').mkdir(parents=True)
-    (base / 'reference/fsr3-android/sdk/LICENSE.txt').write_text('FSR3 fixture license')
     for encoder in ('astcenc', 'etcpak'):
         folder = base / 'reference' / encoder
         folder.mkdir(parents=True)
@@ -46,6 +39,23 @@ def check_package(base):
         folder = base / 'reference' / name
         folder.mkdir(parents=True)
         (folder / license_name).write_text('fixture license')
+    # The app-local Vulkan drivers (adrenotools, Turnip, PanVK, libc++_shared), pinned by SHA-256.
+    import hashlib, json
+    runtime = base / 'vulkan-runtime'
+    (runtime / 'licenses').mkdir(parents=True)
+    pins = {}
+    real = json.loads((ROOT / 'dependencies.json').read_text(encoding='utf-8'))
+    for component in apk.VULKAN_PINS:
+        pins[component] = {'runtime': {}, 'licenses': {}}
+        for name in real[component]['runtime']:
+            data = f'{component} {name}'.encode()
+            (runtime / name).write_bytes(data)
+            pins[component]['runtime'][name] = hashlib.sha256(data).hexdigest()
+    for name, (component, pinned) in apk.VULKAN_LICENSES.items():
+        data = f'{component} notice {name}'.encode()
+        (runtime / 'licenses' / name).write_bytes(data)
+        pins[component]['licenses'][pinned] = hashlib.sha256(data).hexdigest()
+    (base / 'dependencies.json').write_text(json.dumps(pins), encoding='utf-8')
 
     def prepare(spec, manifest, out):
         assets = out / 'assets'
@@ -76,6 +86,7 @@ def check_package(base):
             shutil.copyfile(args[-1], args[args.index('--out') + 1])
 
     with patch.object(apk, 'ROOT', base), patch.object(apk, 'OUT', base / 'build/android-game'), \
+            patch.object(apk, 'VULKAN_RUNTIME', base / 'vulkan-runtime'), \
             patch.object(apk, 'run', run), patch.object(apk, 'launcher_root', lambda: launcher), \
             patch.object(port_launcher, 'prepare', prepare), patch.object(port_launcher, 'build_probe', probe), \
             patch.object(apk.subprocess, 'run') as native:
@@ -85,11 +96,13 @@ def check_package(base):
             native.reset_mock()
             with patch.object(sys, 'argv', ['build_game_apk.py', *args]):
                 apk.main()
-            assert native.call_count == 4 + int(not args) + int('--install' in args), args
+            # build_overlay, build_shaderlib, build_texconv (+ the native build, + the install)
+            assert native.call_count == 3 + int(not args) + int('--install' in args), args
             with zipfile.ZipFile(apk.OUT / 'sims2.apk') as archive:
                 assert archive.read('lib/arm64-v8a/libsims2.so') == expected
-                assert archive.read('lib/arm64-v8a/libs2fsr3.so') == b'fsr3'
-                assert (apk.OUT / 'assets/licenses/fidelityfx-fsr3.txt').read_bytes() == b'FSR3 fixture license'
+                assert 'lib/arm64-v8a/libs2fsr3.so' not in archive.namelist()
+                for name in ('libadrenotools.so', 'libs2turnip.so', 'libvulkan_panfrost.so', 'libc++_shared.so', 'libmain_hook.so'):
+                    assert archive.read('lib/arm64-v8a/' + name).endswith(name.encode()), name
             if '--install' in args:
                 stop = next(i for i,c in enumerate(calls) if c[-3:] == ('am', 'force-stop', apk.PACKAGE))
                 install = next(i for i,c in enumerate(calls) if 'install' in c)
@@ -170,7 +183,7 @@ static int snprintf(char *out, size_t n, const char *fmt, const char *data) {
 }
 static void record(const char *path) { recorded = path; ++called; }
 static void (*__llvm_profile_set_filename)(const char *);
-static void audio_log_start(void) { ++audio_started; }
+static void void_audio_log_start(void) { ++audio_started; }
 static int void_game_main(const char *game, const char *data, const char *images, int test) {
     if (game != game_dir || data != data_dir || images != images_dir || test) failure |= 4;
     if (audio_started != 1) failure |= 128;

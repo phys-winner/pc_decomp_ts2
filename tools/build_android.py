@@ -21,6 +21,7 @@ MODULES = ("sims2", "ijl15")
 NDK = Path(os.environ.get("ANDROID_NDK", r"C:\Users\Xilonen\AppData\Local\Android\Sdk\ndk\27.2.12479018"))
 TOOLCHAIN = NDK / "toolchains/llvm/prebuilt/windows-x86_64"
 CLANG = TOOLCHAIN / "bin/clang.exe"
+CLANGXX = TOOLCHAIN / "bin/clang++.exe"
 API = 29
 TARGET = f"aarch64-linux-android{API}"
 OUT = ROOT / "build/arm64"
@@ -42,6 +43,109 @@ MOJO_FLAGS = COMMON + ["-O2", "-w", "-DMOJOSHADER_FLIP_RENDERTARGET", "-DMOJOSHA
                        "-DSUPPORT_PROFILE_HLSL=0", "-DSUPPORT_PROFILE_ARB1=0", "-DSUPPORT_PROFILE_ARB1_NV=0",
                        "-DSUPPORT_PROFILE_METAL=0", "-DSUPPORT_PROFILE_SPIRV=0", "-DSUPPORT_PROFILE_GLSPIRV=0",
                        "-DSUPPORT_PROFILE_GLSL120=0", "-I" + MOJO_DIR, "-Iandroid/runtime"]
+
+
+# The native renderers (android/render, s2r_internal.h): the port's Direct3D 9
+# front end draws through OpenGL ES 3.2 or Vulkan 1.1 instead of the old
+# Direct3D 9 -> GLES translation (d3d9_gl.c) and DXVK. A game shader the
+# build-time library lacks is translated on the device by the same translator
+# (s2r_translate.c over MojoShader); Vulkan compiles its GLSL with glslang
+# (s2r_glslang.cpp, glslang 11.11 from the pinned NDK's shaderc sources,
+# without HLSL and the C interface). The builtin shaders (ff, present) are
+# embedded as GLSL (render_builtins below) for a session without the library.
+RENDER_DIR = ROOT / "android/render"
+RENDER_GEN = OUT / "gen"
+GLSLANG = NDK / "sources/third_party/shaderc/third_party/glslang"
+GLSLANG_SOURCES = [
+    "glslang/GenericCodeGen/CodeGen.cpp", "glslang/GenericCodeGen/Link.cpp",
+    "glslang/MachineIndependent/attribute.cpp", "glslang/MachineIndependent/Constant.cpp",
+    "glslang/MachineIndependent/glslang_tab.cpp", "glslang/MachineIndependent/InfoSink.cpp",
+    "glslang/MachineIndependent/Initialize.cpp", "glslang/MachineIndependent/Intermediate.cpp",
+    "glslang/MachineIndependent/intermOut.cpp", "glslang/MachineIndependent/IntermTraverse.cpp",
+    "glslang/MachineIndependent/iomapper.cpp", "glslang/MachineIndependent/limits.cpp",
+    "glslang/MachineIndependent/linkValidate.cpp", "glslang/MachineIndependent/parseConst.cpp",
+    "glslang/MachineIndependent/ParseContextBase.cpp", "glslang/MachineIndependent/ParseHelper.cpp",
+    "glslang/MachineIndependent/PoolAlloc.cpp", "glslang/MachineIndependent/propagateNoContraction.cpp",
+    "glslang/MachineIndependent/reflection.cpp", "glslang/MachineIndependent/RemoveTree.cpp",
+    "glslang/MachineIndependent/Scan.cpp", "glslang/MachineIndependent/ShaderLang.cpp",
+    "glslang/MachineIndependent/SpirvIntrinsics.cpp", "glslang/MachineIndependent/SymbolTable.cpp",
+    "glslang/MachineIndependent/Versions.cpp", "glslang/MachineIndependent/preprocessor/PpAtom.cpp",
+    "glslang/MachineIndependent/preprocessor/PpContext.cpp", "glslang/MachineIndependent/preprocessor/Pp.cpp",
+    "glslang/MachineIndependent/preprocessor/PpScanner.cpp", "glslang/MachineIndependent/preprocessor/PpTokens.cpp",
+    "glslang/OSDependent/Unix/ossource.cpp", "OGLCompilersDLL/InitializeDll.cpp",
+    "SPIRV/GlslangToSpv.cpp", "SPIRV/InReadableOrder.cpp", "SPIRV/Logger.cpp", "SPIRV/SpvBuilder.cpp",
+    "SPIRV/SpvPostProcess.cpp", "SPIRV/SpvTools.cpp", "SPIRV/disassemble.cpp", "SPIRV/doc.cpp",
+]
+# The builtin shaders in s2r_shaderlib.h order: file, fragment stage.
+RENDER_BUILTINS = (("ff.vert", 0), ("ff.frag", 1), ("present.vert", 0), ("present.frag", 1))
+
+
+def spec_lists():
+    """X(id, NAME) entries of s2r_spec.h by list (in, vs, ps, ff_vs, ff_ps), as tools/build_shaderlib.py reads them."""
+    text = (RENDER_DIR / "s2r_spec.h").read_text(encoding="utf-8").replace("\\\n", " ")
+    stage = re.search(r"#define S2R_FF_STAGE_SPEC\(X, s, b\)(.*)", text).group(1)
+    lists = {}
+    for key, macro in (("in", "S2R_SPEC_IN"), ("vs", "S2R_SPEC_VS"), ("ps", "S2R_SPEC_PS"),
+                       ("ff_vs", "S2R_SPEC_FF_VS"), ("ff_ps", "S2R_SPEC_FF_PS")):
+        body = re.search(rf"#define {macro}\(X\)(.*)", text).group(1)
+        entries = [(int(n), name) for n, name in re.findall(r"X\((\d+), (\w+)\)", body)]
+        for st, b in re.findall(r"S2R_FF_STAGE_SPEC\(X, (\d+), (\d+)\)", body):
+            for k, name in re.findall(r"X\(b \+ (\d+), (\w+)##s\)", stage):
+                entries.append((int(b) + int(k), name + st))
+        lists[key] = entries
+    return lists
+
+
+def c_literal(text):
+    out = []
+    for line in text.split("\n"):
+        out.append('"' + line.replace("\\", "\\\\").replace('"', '\\"') + '\\n"')
+    return "\n    ".join(out)
+
+
+def render_builtins():
+    """build/arm64/gen/s2r_builtins.inc: each builtin as the OpenGL ES body (the #pragma s2r_spec
+    lines dropped: the values come as #define lines) and the Vulkan source (#version 450, the
+    lines become specialization constants), the same texts tools/build_shaderlib.py compiles."""
+    lists = spec_lists()
+
+    def vulkan(body):
+        def declare(match):
+            return "".join(f"layout(constant_id = {n}) const int {name} = 0;\n" for n, name in lists[match.group(1)])
+        body = re.sub(r"#pragma s2r_spec (\w+)\n", declare, body)
+        return body if body.startswith("#version") else "#version 450\n" + body
+
+    gles, vk = [], []
+    for name, _ in RENDER_BUILTINS:
+        body = (RENDER_DIR / "shaders" / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+        gles.append(None if body.startswith("#version") else re.sub(r"#pragma s2r_spec \w+\n", "", body))
+        vk.append(vulkan(body))
+    text = ["/* Generated by tools/build_android.py from android/render/shaders: do not edit. */"]
+    text.append("static const int s2r_builtin_pixel[] = { " + ", ".join(str(p) for _, p in RENDER_BUILTINS) + " };")
+    text.append("static const char *const s2r_builtin_gles_text[] = {")
+    text += [("    " + c_literal(g) + ",") if g is not None else "    0," for g in gles]
+    text.append("};")
+    text.append("static const char *const s2r_builtin_vulkan_text[] = {")
+    text += ["    " + c_literal(v) + "," for v in vk]
+    text.append("};")
+    RENDER_GEN.mkdir(parents=True, exist_ok=True)
+    out = RENDER_GEN / "s2r_builtins.inc"
+    data = "\n".join(text) + "\n"
+    if not out.is_file() or out.read_text(encoding="utf-8") != data:
+        out.write_text(data, encoding="utf-8", newline="\n")
+    return out
+
+
+def glslang_build_info():
+    """glslang/build_info.h from the template, as glslang's build_info.py writes it."""
+    template = (GLSLANG / "build_info.h.tmpl").read_text(encoding="utf-8")
+    header = RENDER_GEN / "glslang/build_info.h"
+    text = (template.replace("@major@", "11").replace("@minor@", "11").replace("@patch@", "0")
+            .replace("@flavor@", ""))
+    header.parent.mkdir(parents=True, exist_ok=True)
+    if not header.is_file() or header.read_text(encoding="utf-8") != text:
+        header.write_text(text, encoding="utf-8")
+    return header
 
 
 # Lifted functions the host implements natively (android/host/*.c). Their
@@ -112,6 +216,8 @@ NATIVE_OVERRIDES = (
     "sub_A05BE74D",   # cTSWinProcLotIntro: fit the visible loading window through detach (sims2_settings.c)
     "sub_A0C47EFC", "sub_A0C471DA", "sub_A0C46C58",   # asynchronous town-load fit through original completion/failure
     "sub_A0C44B8C", "sub_A0C42D84", "sub_A0C42483",   # asynchronous lot-load fit through original completion/failure
+    "sub_A05BE5B5",   # cTSWinProcLotIntro steps: note how long a step waits for the animation (sims2_loading.c)
+    "sub_A05C00B3",   # cTSWinProcLotIntro per frame: post a step held for a short slice of it (sims2_loading.c)
     "sub_A07B7B27",   # lot information card show: fit the fixed preview (sims2_settings.c)
     "sub_A07B6484",   # lot information card hide: restore the requested scale (sims2_settings.c)
     "sub_A07B6F59",   # lot information refresh: retain fit during hide/show (sims2_settings.c)
@@ -130,6 +236,14 @@ NATIVE_OVERRIDES = (
     "sub_A09187BE",   # guarded font-parser substring search with native first-byte skipping (sims2_fast.c)
     "sub_A0845799",   # CRT _stricmp without a locale: ASCII folding (sims2_fast.c)
     "sub_A0229E45",   # a job queue's pump: no spinning on an empty queue (sims2_fast.c)
+    # EA SND's PC output driver without DirectSound: the mixer renders into the
+    # AAudio low-latency FIFO at the device rate (sims2_audio.c, audio.c).
+    "sub_A00E9ACB",   # SND driver probe: stereo output
+    "sub_A00E9C68",   # SND driver open: device rate, mixer, native output
+    "sub_A00E98CB",   # SND driver close
+    "sub_A00E9931",   # SND output latency: FIFO and device queue
+    "sub_A00E9E0D",   # SND fill: render to the FIFO's high-water mark
+    "sub_A00EA0DD",   # SND service thread: mixes on the output's demand
 )
 
 
@@ -652,13 +766,13 @@ def included_fragments(source, seen=None):
 
 
 def compile_one(source, obj, flags, fingerprint, cache):
-    rel = source.relative_to(ROOT).as_posix()
+    rel = source.relative_to(ROOT).as_posix() if source.is_relative_to(ROOT) else "ndk/" + source.as_posix().split("/third_party/", 1)[-1]
     entry = cache.get(rel)
     if entry and entry.get("fingerprint") == fingerprint and obj.is_file() and sha_file(obj) == entry.get("object_sha256"):
         return rel, "reused", 0.0, entry
     obj.parent.mkdir(parents=True, exist_ok=True)
     start = time.time()
-    command = [str(CLANG)] + flags + ["-c", str(source), "-o", str(obj)]
+    command = [str(CLANGXX if source.suffix == ".cpp" else CLANG)] + flags + ["-c", str(source), "-o", str(obj)]
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     elapsed = time.time() - start
     if result.returncode:
@@ -765,7 +879,9 @@ def main():
     gen_digest = header_digest(runtime_headers + sorted(p for name in available_modules()
                                                         for p in (GENERATED / f"{name}-x86").glob("*.h")))
     release_headers = [GENERATED / "release_overrides.h"] if args.release and not args.compile_only else []
+    builtins = render_builtins()
     host_digest = header_digest(runtime_headers + sorted((ROOT / "android/host").glob("*.h")) +
+                                sorted(RENDER_DIR.glob("*.h")) + [builtins] +
                                 sorted((ROOT / "android/texconv").glob("*.h")) +
                                 [ROOT / "reference/dlmalloc/doc/dlalloc-2.8.6/malloc.c", ROOT / "android/launcher/native/zipmount.h"] + release_headers)
     jobs = []
@@ -802,6 +918,23 @@ def main():
         if fragments:
             inputs.append(header_digest(fragments))
         fp = hashlib.sha256(json.dumps(inputs).encode()).hexdigest()
+        jobs.append((source, obj, flags, fp))
+    # The native renderers and glslang (s2r_glslang.cpp) for their device translations.
+    render_flags = host_flags + ["-Iandroid/render", "-I" + MOJO_DIR, "-I" + RENDER_GEN.relative_to(ROOT).as_posix()]
+    for source in [] if args.compile_only else sorted(RENDER_DIR.glob("*.c")):
+        obj = OUT / ("obj/render-app" if args.shared else "obj/render") / (source.stem + ".o")
+        inputs = [sha_file(source), host_digest, header_digest(sorted((ROOT / MOJO_DIR).glob("*.h"))), compiler_sha, render_flags]
+        jobs.append((source, obj, render_flags, hashlib.sha256(json.dumps(inputs).encode()).hexdigest()))
+    glslang_build_info()
+    cxx_flags = COMMON + ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DGLSLANG_OSINCLUDE_UNIX",
+                          "-I" + str(GLSLANG), "-I" + str(RENDER_GEN)]
+    cxx_sha = sha_file(CLANGXX)
+    glslang_digest = header_digest([RENDER_GEN / "glslang/build_info.h"])
+    for source in [] if args.compile_only else [RENDER_DIR / "s2r_glslang.cpp"] + [GLSLANG / n for n in GLSLANG_SOURCES]:
+        rel = source.relative_to(GLSLANG).with_suffix(".o") if source.is_relative_to(GLSLANG) else Path(source.stem + ".o")
+        obj = OUT / "obj/glslang" / rel
+        flags = cxx_flags + (["-Wall"] if source.parent == RENDER_DIR else ["-w"])
+        fp = hashlib.sha256(json.dumps([sha_file(source), glslang_digest, cxx_sha, flags, "c++"]).encode()).hexdigest()
         jobs.append((source, obj, flags, fp))
     # Largest first keeps the pool busy at the end.
     jobs.sort(key=lambda j: -j[0].stat().st_size)
@@ -844,10 +977,11 @@ def main():
     response.write_text("\n".join(o.replace("\\", "/") for o in objects))
     library = "libsims2.so"
     output = OUT / (library if args.shared else "sims2-arm64")
-    link = [str(CLANG), "--target=" + TARGET, "-fuse-ld=lld", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc",
+    # clang++ links glslang's C++ runtime statically (libc++ is not a system library).
+    link = [str(CLANGXX), "--target=" + TARGET, "-fuse-ld=lld", "-static-libstdc++", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc",
             "-Wl,-z,max-page-size=16384", "-Wl,-z,common-page-size=16384",
             "-Wl,--build-id=sha1", "@" + str(response), "-o", str(output), "-lm", "-lz", "-llog", "-ldl", "-lEGL", "-lGLESv3"]
-    link += ["-shared", "-landroid", "-lOpenSLES", "-laaudio"] if args.shared else ["-pie"]
+    link += ["-shared", "-landroid", "-lOpenSLES", "-laaudio"] if args.shared else ["-pie", "-landroid"]
     if args.pgo_generate:
         link.append("-fprofile-instr-generate")
     # The code the device runs first and together: ~270 MB of lifted code on

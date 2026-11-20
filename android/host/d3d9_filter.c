@@ -1,7 +1,7 @@
 /* Optional spatial reconstruction. All intermediates stay on the GL render thread. */
 #include "d3d9_internal.h"
 #include "sims2_settings.h"
-#include "fsr1.h"
+#include "d3d9_filter.h"
 
 typedef struct { GLuint texture; int width,height; } filter_target;
 static filter_target targets[3];
@@ -14,18 +14,6 @@ static const char common[]="precision highp float;precision highp int;\n"
     "#define T(x,y) texelFetch(image,clamp(base+ivec2(x,y),ivec2(0),textureSize(image,0)-1),0)\n"
     "#define FSR_RCAS_BASE ivec2 base=ivec2(gl_FragCoord.xy);\n"
     "#define L(x,y) texelFetch(image,clamp(base+ivec2(x,y),ivec2(0),textureSize(image,0)-1),0)\n";
-static const char fxaa[]=
-    "vec3 tap(vec2 uv){return texture(image,uv).rgb;}\n"
-    "void main(){vec2 px=1.0/vec2(textureSize(image,0)),uv=gl_FragCoord.xy/target;vec3 luma=vec3(.299,.587,.114);\n"
-    "vec3 m=tap(uv);float nw=dot(tap(uv+vec2(-1,-1)*px),luma),ne=dot(tap(uv+vec2(1,-1)*px),luma);\n"
-    "float sw=dot(tap(uv+vec2(-1,1)*px),luma),se=dot(tap(uv+vec2(1,1)*px),luma),mid=dot(m,luma);\n"
-    "float lo=min(mid,min(min(nw,ne),min(sw,se))),hi=max(mid,max(max(nw,ne),max(sw,se)));\n"
-    "if(hi-lo<max(.0312,hi*.125)){color=vec4(m,1);return;}\n"
-    "vec2 dir=vec2(-((nw+ne)-(sw+se)),(nw+sw)-(ne+se));float reduce=max((nw+ne+sw+se)/32.0,1.0/128.0);\n"
-    "dir=clamp(dir/(min(abs(dir.x),abs(dir.y))+reduce),vec2(-8),vec2(8))*px;\n"
-    "vec3 a=.5*(tap(uv-dir/6.0)+tap(uv+dir/6.0));vec3 b=a*.5+.25*(tap(uv-dir*.5)+tap(uv+dir*.5));\n"
-    "float lb=dot(b,luma);color=vec4(lb<lo||lb>hi?a:b,1);}";
-
 static GLuint shader(GLenum type,const char *const *source,int count)
 {
     GLuint result=glCreateShader(type);glShaderSource(result,count,source,NULL);glCompileShader(result);
@@ -38,8 +26,7 @@ static GLuint program(unsigned kind)
     if(programs[kind]||(failed&(1u<<kind)))return programs[kind];
     const char *body=kind==0?"void main(){color=texture(image,gl_FragCoord.xy/target);}":
         kind==1?"void main(){color=FsrEasuH(gl_FragCoord.xy*vec2(textureSize(image,0))/target);color.a=1.0;}":
-        kind==2?"void main(){color=FsrRcasH(.757858283);color.a=1.0;}":kind==3?fxaa:
-        kind==4?"void main(){uint p=floatBitsToUint(texture(image,gl_FragCoord.xy/target).r);color=vec4(uvec4(p,p>>8u,p>>16u,p>>24u)&uvec4(255))/255.0;}":
+        kind==2?"void main(){color=FsrRcasH(.757858283);color.a=1.0;}":kind==3?d3d_fxaa_glsl:
         "uniform highp vec2 origin;void main(){vec2 uv=(gl_FragCoord.xy-origin)/target;color=vec4(texture(image,vec2(uv.x,1.0-uv.y)).rgb,1.0);}";
     const char *version=kind==5?"#version 300 es\n":"#version 310 es\n";
     const char *fragment[]={version,common,kind==1?fsr1_easu_glsl:kind==2?fsr1_rcas_glsl:"",body};
@@ -67,8 +54,6 @@ static int draw(GLuint input,filter_target *output,int width,int height,unsigned
     glViewport(0,0,width,height);d3d_gl_use_program(p);glUniform1i(glGetUniformLocation(p,"image"),31);glUniform2f(glGetUniformLocation(p,"target"),width,height);
     glDrawArrays(GL_TRIANGLE_STRIP,0,4);return 1;
 }
-
-#include "d3d9_fsr3.inc"
 
 static void filter_setup(void)
 {
@@ -105,9 +90,8 @@ GLuint d3d_filter_present(GLuint input,int width,int height,int output_width,int
     if(width<1||height<1||output_width<1||output_height<1||output_width>8192||output_height>8192)return 0;
     if(!framebuffer)glGenFramebuffers(1,&framebuffer);
     filter_setup();
-    GLuint result=upscale==3?fsr3_present(input,width,height,output_width,output_height):0;
-    glBindVertexArray(filter_vao);glDisable(GL_DEPTH_TEST);glDisable(GL_STENCIL_TEST);glDisable(GL_SCISSOR_TEST);glDisable(GL_BLEND);glDisable(GL_CULL_FACE);
-    if(!result&&draw(input,targets,output_width,output_height,upscale?1:0)){
+    GLuint result=0;
+    if(draw(input,targets,output_width,output_height,upscale?1:0)){
         result=targets[0].texture;
         if(upscale&&draw(result,targets+1,output_width,output_height,2))result=targets[1].texture;
     }

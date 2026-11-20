@@ -16,6 +16,8 @@
 !/android/**/*.h
 !/android/**/*.inc
 !/android/**/*.comp
+!/android/render/shaders/*.vert
+!/android/render/shaders/*.frag
 !/android/**/*.java
 !/android/**/*.xml
 !/android/**/*.json
@@ -54,8 +56,6 @@
 !/reference/astcenc
 !/reference/etcpak
 !/reference/dlmalloc
-!/reference/dxvk
-!/reference/fsr3-android
 
 # Defense in depth, also covering vendored sources.
 **/.git/

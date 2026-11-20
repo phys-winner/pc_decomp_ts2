@@ -48,6 +48,7 @@ public final class GamePreferences implements PortHooks {
         return "english";
     }
     @Override public void migrate(Context context){
+        org.sims2.port.launcher.PortOptions.migrateUpscaler(context);
         if(context.getSharedPreferences("controls",Context.MODE_PRIVATE).getBoolean("show_fps",false))
             Launch.adopt(context,Collections.singletonMap("option.fps_counter","1"));
         String old=TouchLayer.readText(new File(Environment.getExternalStorageDirectory(),"Sims2/userdata/language.txt")).trim();

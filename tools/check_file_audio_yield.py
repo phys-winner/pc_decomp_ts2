@@ -106,8 +106,15 @@ static int checked_lstat(const char *p,struct stat *s){assert(!owned);return lst
 #define opendir checked_opendir
 #define readdir checked_readdir
 #define lstat checked_lstat
+/* DeleteFile: the unlink and the caches' updates with the machine released. */
+static int unlinks,removed_calls,changed_calls;
+void dircache_removed(const char *p){(void)p;assert(!owned);++removed_calls;}
+void void_readcache_changed(const char *p){(void)p;assert(!owned);++changed_calls;}
+static int checked_unlink(const char *p){assert(!owned);++unlinks;return unlink(p);}
+#define unlink checked_unlink
 '''
 TEST = r'''
+#undef unlink
 int main(void){
 #ifdef __ANDROID__
  char folder[]="/data/local/tmp/sims2/file-yield-XXXXXX";
@@ -140,8 +147,14 @@ int main(void){
  args[2]=1;args[4]=0;close_during_read=1;
  assert(ReadFile_impl()==1&&MEM32(16)==1&&GPTR(768)[0]=='i'&&!file_refs&&!file_handle_open);
  assert(fcntl(fixture_file.fd,F_GETFD)<0&&errno==EBADF);
- assert(owned&&begins==ends);assert(!unlink(file)&&!rmdir(dir)&&!rmdir(folder));
- puts("PASS file audio yield: case-insensitive paths, ANSI/wide enumeration/failures, small/zero/overlapped/invalid reads; host I/O unlocked, guest state locked");
+ assert(owned&&begins==ends);
+ /* DeleteFile: the unlink off the machine, the last error set back on it. */
+ before=begins;assert(delete_file("C:\\Dir\\Alpha.TXT")==1&&owned&&begins==before+2&&begins==ends);
+ assert(unlinks==1&&removed_calls==1&&changed_calls==1&&access(file,F_OK)<0);
+ error=0;before=begins;assert(!delete_file("C:\\Dir\\Alpha.TXT")&&owned&&begins==ends&&error==5&&unlinks==2&&removed_calls==1);
+ assert(!rmdir(dir)&&!rmdir(folder));
+ puts("PASS file audio yield: case-insensitive paths, ANSI/wide enumeration/failures, small/zero/overlapped/invalid reads, "
+      "DeleteFile's unlink; host I/O unlocked, guest state locked");
  return 0;
 }
 '''
@@ -157,7 +170,7 @@ def main():
            'static void find_destroy(', 'static uint64_t unix_to_filetime(', 'static int fill_find_data(',
            'static uint32_t find_first_uncounted(',
            'static uint32_t find_first_uncounted(char *pattern_path, uint32_t out, int wide)\n{',
-           'static void release_file_operation(', 'WINAPI_EXPORT(K32, ReadFile, 5)')
+           'static void release_file_operation(', 'WINAPI_EXPORT(K32, ReadFile, 5)', 'static uint32_t delete_file(')
     out=ROOT/'build/test/file-audio-yield'
     out.mkdir(parents=True,exist_ok=True)
     fixture=out/'probe.c'

@@ -28,6 +28,11 @@ HOST = r'''
 typedef unsigned GLuint,GLenum,GLbitfield;
 typedef void *GLsync;
 typedef struct {unsigned size,usage,gl;struct d3d_buffer_storage *storage;} d3d_buffer;
+/* the native renderers are off in these probes (s2r.h) */
+static int s2r_on(void){return 0;}
+__attribute__((unused)) static void s2r_buffer_upload(d3d_buffer *b,uint32_t lo,uint32_t n,int whole,int unsync,const uint8_t *src){(void)b;(void)lo;(void)n;(void)whole;(void)unsync;(void)src;assert(0);}
+__attribute__((unused)) static void s2r_buffer_create(d3d_buffer *b){(void)b;assert(0);}
+__attribute__((unused)) static void s2r_buffer_release(d3d_buffer *b){(void)b;assert(0);}
 #define GL_RENDERER 1u
 #define GL_EXTENSIONS 2u
 #define GL_COPY_WRITE_BUFFER 3u
@@ -135,6 +140,11 @@ GPU = r'''
 static uint64_t stat_buffers,stat_buffer_bytes;
 void void_log(const char *format,...){va_list a;va_start(a,format);vprintf(format,a);puts("");va_end(a);}
 void d3d_gl_forget_buffer(GLuint name){(void)name;}
+/* the native renderers are off in these probes (s2r.h) */
+static int s2r_on(void){return 0;}
+__attribute__((unused)) static void s2r_buffer_upload(d3d_buffer *b,uint32_t lo,uint32_t n,int whole,int unsync,const uint8_t *src){(void)b;(void)lo;(void)n;(void)whole;(void)unsync;(void)src;assert(0);}
+__attribute__((unused)) static void s2r_buffer_create(d3d_buffer *b){(void)b;assert(0);}
+__attribute__((unused)) static void s2r_buffer_release(d3d_buffer *b){(void)b;assert(0);}
 '''
 
 GPU_CHECKS = r'''

@@ -1,6 +1,6 @@
 /* Android application glue: JNI from GameActivity, the native window, the
- * game thread, touch input in DirectInput scan codes, and AAudio output for
- * the DirectSound mixer. */
+ * game thread, touch input in DirectInput scan codes, and the activity's pause
+ * state for the audio output (audio.c). */
 #ifdef VOID_ANDROID_APP
 #define _GNU_SOURCE
 #include "readcache.h"
@@ -8,7 +8,6 @@
 #include "hud.h"
 #include "input.h"
 #include "sims2_settings.h"
-#include <aaudio/AAudio.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <errno.h>
@@ -24,7 +23,6 @@
 
 int void_game_main(const char *game, const char *data, const char *images, int selftest);
 void void_process_exit(uint32_t code, int run_detach);
-static void audio_log_start(void);
 
 static ANativeWindow *window;
 static pthread_mutex_t window_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -40,7 +38,6 @@ static jobject activity;
  * new one up at its next present (d3d9_gl.c), acknowledging the serial it
  * has switched to; a destroyed surface waits (briefly) for that. */
 static uint32_t window_serial, window_acked;
-static int audio_paused;
 static uint64_t audio_pause_state;
 
 uint64_t void_audio_pause_state(void)
@@ -193,7 +190,7 @@ static void *game_main(void *arg)
         snprintf(profile_path, sizeof profile_path, "%s/sims2.profraw", data_dir);
         __llvm_profile_set_filename(profile_path);
     }
-    audio_log_start();
+    void_audio_log_start();
     int code = void_game_main(game_dir, data_dir, images_dir, 0);
     void_log("[android] game thread finished with %d", code);
     void_process_exit((uint32_t)code, 0);
@@ -283,21 +280,23 @@ JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeSurface(JNIEnv *en
 }
 
 /* onPause/onResume: the game itself waits in its present while it has no
- * surface; the audio stream pauses with the activity. */
+ * surface; the audio stream closes with the activity and the game's mixer
+ * waits (audio.c), to resume in a new stream. */
 JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativePause(JNIEnv *env, jobject self, jboolean paused)
 {
     (void)env; (void)self;
     void_clock_pause(paused);
     uint64_t state = void_audio_pause_state(), next;
-    /* Keep transitions even when Home and resume both fall between worker ticks. */
+    /* Keep transitions even when Home and resume both fall between producer wake-ups. */
     do {
         if ((state & 1u) == (paused ? 1u : 0u)) break;
         next = ((state & ~UINT64_C(1)) + 2u) | (paused ? 1u : 0u);
     } while (!__atomic_compare_exchange_n(&audio_pause_state, &state, next, 0,
                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
-    __atomic_store_n(&audio_paused, (int)(void_audio_pause_state() & 1u), __ATOMIC_RELAXED);
+    void_audio_wake();
     if (paused) s2_touch_reset_cas_pan();
     if (paused) void_readcache_flush_all();        /* Android may end a paused app */
+    if (paused) void_registry_flush();
 }
 
 /* Scan code (DIK) based input from the touch layer. */
@@ -393,12 +392,6 @@ JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeTouchCameraContact
 JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeTouchObjectPreview(JNIEnv *env,jclass cls,jlong token)
 {
     (void)env;(void)cls;return s2_touch_object_preview((uint64_t)token)?JNI_TRUE:JNI_FALSE;
-}
-
-unsigned d3d_fsr3_status(void);
-JNIEXPORT jint JNICALL Java_org_sims2_port_GameActivity_nativeUpscaleStatus(JNIEnv *env,jclass cls)
-{
-    (void)env;(void)cls;return (jint)d3d_fsr3_status();
 }
 
 JNIEXPORT jint JNICALL Java_org_sims2_port_GameActivity_nativeTouchTool(JNIEnv *env, jclass cls)
@@ -756,362 +749,5 @@ JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeMouseWarp(JNIEnv *
     if (nx < 0 || ny < 0) return;
     s2_touch_camera_pointer_intent();
     void_input_mouse_warp(nx, ny);
-}
-
-/* ------------------------------------------------------------- audio */
-static AAudioStream *stream;
-static pthread_mutex_t audio_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint64_t stream_pause_state;
-static uint64_t audio_short_writes, audio_dropped_frames, audio_errors;
-static unsigned audio_zero_chunks;
-static int32_t audio_last_xruns;
-static unsigned audio_bad_chunks;
-/* Server-mixed output avoids the MMAP stalls observed on several devices.
- * Tune its queue too: Android's initial size can add unnecessary latency. */
-static int audio_normal_output = 1;
-
-#define AUDIO_LOG_SEGMENT_BYTES 8000000L
-#define AUDIO_LOG_LINE_BYTES 640
-#define AUDIO_LOG_QUEUE_COUNT 32
-
-/* The mixer produces events; only the log thread touches storage. */
-typedef struct {
-    char line[AUDIO_LOG_LINE_BYTES];
-    bool session_log;
-} audio_log_entry;
-static audio_log_entry audio_log_queue[AUDIO_LOG_QUEUE_COUNT];
-static _Atomic unsigned audio_log_head, audio_log_tail;
-static sem_t audio_log_ready;
-static int audio_log_enabled;
-
-static void audio_log_append(const char *line)
-{
-    if (!data_dir[0]) return;
-    size_t size = strlen(line);
-    char path[sizeof data_dir + 32], previous[sizeof data_dir + 32];
-    snprintf(path, sizeof path, "%s/sims2.audio.log", data_dir);
-    snprintf(previous, sizeof previous, "%s/sims2.audio.1.log", data_dir);
-    FILE *file = fopen(path, "ab");
-    if (!file) return;
-    if (fseek(file, 0, SEEK_END)) { fclose(file); return; }
-    long length = ftell(file);
-    if (length < 0 || size > AUDIO_LOG_SEGMENT_BYTES) { fclose(file); return; }
-    if (length > AUDIO_LOG_SEGMENT_BYTES - (long)size) {
-        fclose(file);
-        if (rename(path, previous)) return;
-        file = fopen(path, "ab");
-        if (!file) return;
-    }
-    fwrite(line, 1, size, file);
-    fclose(file);
-}
-
-static void *audio_log_worker(void *unused)
-{
-    (void)unused;
-    for (;;) {
-        if (sem_wait(&audio_log_ready)) {
-            if (errno == EINTR) continue;
-            return NULL;
-        }
-        unsigned tail = atomic_load_explicit(&audio_log_tail, memory_order_relaxed);
-        if (tail == atomic_load_explicit(&audio_log_head, memory_order_acquire)) continue;
-        const audio_log_entry *entry = &audio_log_queue[tail % AUDIO_LOG_QUEUE_COUNT];
-        if (entry->session_log) void_log("%s", entry->line);
-        else audio_log_append(entry->line);
-        atomic_store_explicit(&audio_log_tail, tail + 1, memory_order_release);
-    }
-}
-
-static void audio_log_start(void)
-{
-    pthread_t worker;
-    if (sem_init(&audio_log_ready, 0, 0)) {
-        void_log("[audio] diagnostic queue initialization failed: %d", errno);
-        return;
-    }
-    int error = pthread_create(&worker, NULL, audio_log_worker, NULL);
-    if (error) {
-        sem_destroy(&audio_log_ready);
-        void_log("[audio] diagnostic worker failed: %d", error);
-        return;
-    }
-    pthread_detach(worker);
-    audio_log_enabled = 1;
-}
-
-static void audio_log_enqueue(const char *line, bool session_log)
-{
-    if (!audio_log_enabled) return;
-    unsigned head = atomic_load_explicit(&audio_log_head, memory_order_relaxed);
-    if (head - atomic_load_explicit(&audio_log_tail, memory_order_acquire) >= AUDIO_LOG_QUEUE_COUNT) return;
-    audio_log_entry *entry = &audio_log_queue[head % AUDIO_LOG_QUEUE_COUNT];
-    strcpy(entry->line, line);
-    entry->session_log = session_log;
-    atomic_store_explicit(&audio_log_head, head + 1, memory_order_release);
-    sem_post(&audio_log_ready);
-}
-
-__attribute__((format(printf, 1, 2)))
-static void audio_log_message(const char *format, ...)
-{
-    char line[AUDIO_LOG_LINE_BYTES];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(line, sizeof line, format, args);
-    va_end(args);
-    audio_log_enqueue(line, true);
-}
-
-enum {
-    AUDIO_OPENED, AUDIO_BUILDER, AUDIO_OPEN, AUDIO_PREFILL, AUDIO_START, AUDIO_ROUTE,
-    AUDIO_WRITE, AUDIO_TIMEOUT, AUDIO_STALL, AUDIO_XRUN, AUDIO_GAP, AUDIO_EVENTS
-};
-
-static void audio_report(unsigned event, int code, const int16_t *frames, uint32_t count, uint32_t written)
-{
-    static const char *const names[AUDIO_EVENTS] = {
-        "started", "create-builder", "open", "prefill", "start", "route-disconnected",
-        "write", "write-timeout", "output-stall", "underrun", "output-gap-ms"
-    };
-    static struct { int64_t last; unsigned seen, suppressed; } reports[AUDIO_EVENTS];
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now)) return;
-    int64_t ms = (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
-    if (reports[event].seen && ms - reports[event].last < 5000) {
-        ++reports[event].suppressed;
-        return;
-    }
-    int peak = 0;
-    for (size_t i = 0; frames && i < (size_t)count * 2; ++i) {
-        int sample = abs(frames[i]);
-        if (sample > peak) peak = sample;
-    }
-    char line[AUDIO_LOG_LINE_BYTES];
-    snprintf(line, sizeof line,
-        "[audio] time=%lld uptime_ms=%lld event=%s code=%d suppressed=%u epoch=%llu normal=%d "
-        "device=%d state=%d sharing=%d mode=%d rate=%d channels=%d burst=%d buffer=%d capacity=%d "
-        "frames_written=%lld frames_read=%lld xruns=%d pcm_frames=%u accepted=%u peak=%d "
-        "short_writes=%llu dropped_frames=%llu errors=%llu\n",
-        (long long)time(NULL), (long long)ms, names[event], code, reports[event].suppressed,
-        (unsigned long long)void_audio_pause_state(), audio_normal_output,
-        stream ? (int)AAudioStream_getDeviceId(stream) : -1, stream ? (int)AAudioStream_getState(stream) : -1,
-        stream ? (int)AAudioStream_getSharingMode(stream) : -1, stream ? (int)AAudioStream_getPerformanceMode(stream) : -1,
-        stream ? (int)AAudioStream_getSampleRate(stream) : -1, stream ? (int)AAudioStream_getChannelCount(stream) : -1,
-        stream ? (int)AAudioStream_getFramesPerBurst(stream) : -1, stream ? (int)AAudioStream_getBufferSizeInFrames(stream) : -1,
-        stream ? (int)AAudioStream_getBufferCapacityInFrames(stream) : -1,
-        stream ? (long long)AAudioStream_getFramesWritten(stream) : -1, stream ? (long long)AAudioStream_getFramesRead(stream) : -1,
-        stream ? (int)AAudioStream_getXRunCount(stream) : -1, count, written, peak,
-        (unsigned long long)audio_short_writes, (unsigned long long)audio_dropped_frames, (unsigned long long)audio_errors);
-    reports[event].seen = 1;
-    reports[event].last = ms;
-    reports[event].suppressed = 0;
-    audio_log_enqueue(line, false);
-}
-
-static void audio_close_stream(void)
-{
-    if (stream) {
-        AAudioStream_requestStop(stream);
-        AAudioStream_close(stream);
-    }
-    stream = NULL;
-    audio_zero_chunks = 0;
-    audio_last_xruns = 0;
-    audio_bad_chunks = 0;
-}
-
-static void audio_close_failed(aaudio_result_t error)
-{
-    if (++audio_errors <= 4) audio_log_message("[audio] stream error %d; resetting output", (int)error);
-    audio_close_stream();
-}
-
-/* A timed-out write can accept a prefix. Never resend it or silently discard
- * the suffix; retry within a bounded budget, with no guest VM lock held. */
-static uint32_t audio_write_frames(const int16_t *frames, uint32_t count)
-{
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    int64_t deadline = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec + 100000000LL;
-    uint32_t written = 0;
-    aaudio_result_t error = AAUDIO_OK;
-    uint64_t pause = stream_pause_state;
-    while (written < count && void_audio_pause_state() == pause) {
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        int64_t remaining = deadline - ((int64_t)now.tv_sec * 1000000000LL + now.tv_nsec);
-        if (remaining <= 0) break;
-        aaudio_result_t result = AAudioStream_write(stream, frames + written * 2,
-            (int32_t)(count - written), remaining < 20000000LL ? remaining : 20000000LL);
-        if (result < 0) { error = result; break; }
-        if ((uint32_t)result < count - written) ++audio_short_writes;
-        written += (uint32_t)result;
-        if (!result) usleep(1000);
-    }
-    if (written < count && void_audio_pause_state() == pause) {
-        if (audio_dropped_frames < 1920)
-            audio_log_message("[audio] discarded %u unwritten frames after timeout/error", count - written);
-        audio_dropped_frames += count - written;
-    }
-    if (error < 0) {
-        audio_report(AUDIO_WRITE, error, frames, count, written);
-        audio_close_failed(error);
-    } else if (written < count && void_audio_pause_state() == pause) {
-        audio_report(AUDIO_TIMEOUT, 0, frames, count, written);
-    }
-    return written;
-}
-
-uint32_t void_audio_output(const int16_t *frames, uint32_t count)
-{
-    pthread_mutex_lock(&audio_lock);
-    uint64_t pause = void_audio_pause_state();
-    static int64_t last_call_ms;
-    struct timespec now;
-    if (!clock_gettime(CLOCK_MONOTONIC, &now)) {
-        int64_t ms = (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
-        if (stream && pause == stream_pause_state && !(pause & 1u) && last_call_ms && ms - last_call_ms >= 30)
-            audio_report(AUDIO_GAP, (int)(ms - last_call_ms), frames, count, 0);
-        last_call_ms = ms;
-    }
-    /* Pause retains queued PCM; a fresh foreground epoch needs a fresh stream. */
-    if (stream && pause != stream_pause_state) audio_close_stream();
-    if (pause & 1u) {
-        /* mixer_main already paces every chunk, including in the background. */
-        pthread_mutex_unlock(&audio_lock);
-        return 0;
-    }
-    /* Reopen before handing PCM to a disconnected route. */
-    if (stream && AAudioStream_getState(stream) == AAUDIO_STREAM_STATE_DISCONNECTED) {
-        audio_report(AUDIO_ROUTE, AAUDIO_ERROR_DISCONNECTED, frames, count, 0);
-        audio_close_failed(AAUDIO_ERROR_DISCONNECTED);
-    }
-    if (!stream) {
-        AAudioStreamBuilder *b = NULL;
-        aaudio_result_t created = AAudio_createStreamBuilder(&b);
-        if (created == AAUDIO_OK) {
-            AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
-            AAudioStreamBuilder_setChannelCount(b, 2);
-            AAudioStreamBuilder_setSampleRate(b, 48000);
-            AAudioStreamBuilder_setBufferCapacityInFrames(b, 1920);
-            AAudioStreamBuilder_setPerformanceMode(b, audio_normal_output ?
-                AAUDIO_PERFORMANCE_MODE_NONE : AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-            aaudio_result_t result = AAudioStreamBuilder_openStream(b, &stream);
-            if (result == AAUDIO_OK) {
-                stream_pause_state = pause;
-                /* One large server burst leaves no reserve for the next hardware read. */
-                int32_t burst = AAudioStream_getFramesPerBurst(stream);
-                int32_t capacity = AAudioStream_getBufferCapacityInFrames(stream);
-                int64_t target = burst > 0 ? ((960LL + burst - 1) / burst) * burst : 960;
-                if (target < 2LL * burst) target = 2LL * burst;
-                if (capacity > 0 && target > capacity) target = capacity;
-                int32_t before = AAudioStream_getBufferSizeInFrames(stream);
-                if (target <= INT32_MAX && before != target) AAudioStream_setBufferSizeInFrames(stream, (int32_t)target);
-                audio_log_message("[audio] output: burst %d, capacity %d, buffer %d -> %d frames, normal %d", (int)burst,
-                    (int)capacity, (int)before,
-                    (int)AAudioStream_getBufferSizeInFrames(stream), audio_normal_output);
-                /* A partially primed queue can underrun before the first real chunk. */
-                static const int16_t silence[2 * 1920] = {0};
-                int32_t prefill = AAudioStream_getBufferSizeInFrames(stream);
-                if (prefill <= 0) prefill = 960;
-                for (int32_t filled = 0; filled < prefill && void_audio_pause_state() == pause;) {
-                    int32_t remaining = prefill - filled;
-                    result = AAudioStream_write(stream, silence, remaining < 1920 ? remaining : 1920, 0);
-                    if (result <= 0) break;
-                    filled += result;
-                }
-                if (result < 0) {
-                    audio_report(AUDIO_PREFILL, result, frames, count, 0);
-                    audio_close_failed(result);
-                } else if (void_audio_pause_state() == pause) {
-                    result = AAudioStream_requestStart(stream);
-                    audio_report(result < 0 ? AUDIO_START : AUDIO_OPENED, result, NULL, 0, 0);
-                    if (result < 0) audio_close_failed(result);
-                } else {
-                    audio_close_stream();
-                }
-            } else {
-                stream = NULL;
-                audio_report(AUDIO_OPEN, result, frames, count, 0);
-                audio_close_failed(result);
-            }
-            AAudioStreamBuilder_delete(b);
-        } else {
-            audio_report(AUDIO_BUILDER, created, frames, count, 0);
-            audio_close_failed(created);
-        }
-        if (!stream) {
-            if (void_audio_pause_state() == pause) audio_dropped_frames += count;
-            pthread_mutex_unlock(&audio_lock);
-            return 0;
-        }
-    }
-    uint32_t written = audio_write_frames(frames, count);
-    if (written || void_audio_pause_state() != pause) audio_zero_chunks = 0;
-    else if (stream && count && ++audio_zero_chunks == 3) {
-        ++audio_errors;
-        audio_report(AUDIO_STALL, (int)audio_zero_chunks, frames, count, written);
-        if (!audio_normal_output) {
-            audio_normal_output = 1;
-            audio_log_message("[audio] low latency stream stalled for 3 chunks; using normal output until process exit");
-        } else audio_log_message("[audio] normal stream stalled for 3 chunks; reopening on next chunk");
-        audio_close_stream();
-    }
-    if (stream) {
-        int32_t xruns = AAudioStream_getXRunCount(stream);
-        if (xruns > audio_last_xruns) {
-            int32_t size = AAudioStream_getBufferSizeInFrames(stream);
-            int32_t capacity = AAudioStream_getBufferCapacityInFrames(stream);
-            int32_t burst = AAudioStream_getFramesPerBurst(stream);
-            int32_t grown = size;
-            if (size > 0 && capacity > size) {
-                int64_t target = (int64_t)size + (burst > 480 ? burst : 480);
-                if (burst > 0) target = (target + burst - 1) / burst * burst;
-                grown = AAudioStream_setBufferSizeInFrames(stream, (int32_t)(target < capacity ? target : capacity));
-            }
-            audio_report(AUDIO_XRUN, (int)grown, frames, count, written);
-            if (grown > size) {
-                audio_bad_chunks = 0;
-                audio_log_message("[audio] underruns %d: buffer %d -> %d frames", (int)xruns, (int)size, (int)grown);
-            } else if (!audio_normal_output && ++audio_bad_chunks == 3) {
-                audio_normal_output = 1;
-                ++audio_errors;
-                audio_log_message("[audio] low latency underruns persist at buffer limit; using normal output until process exit");
-                audio_close_stream();
-            }
-        } else audio_bad_chunks = 0;
-        if (stream && xruns >= 0) audio_last_xruns = xruns;
-    }
-    /* Level of what reached the device, every 10 s of audio: silence or
-     * underruns show up in the log rather than only by ear. */
-    static uint32_t level_frames;
-    static double level_sum;
-    static int level_peak;
-    for (uint32_t i = 0; i < written * 2; ++i) {
-        int v = frames[i] < 0 ? -frames[i] : frames[i];
-        if (v > level_peak) level_peak = v;
-        level_sum += (double)frames[i] * frames[i];
-    }
-    level_frames += written;
-    if (level_frames >= 48000u * 10u) {
-        audio_log_message("[audio] last 10 s: peak %d, rms %.0f, underruns %d, short writes %llu, dropped frames %llu, errors %llu", level_peak,
-                 sqrt(level_sum / (2.0 * level_frames)), stream ? (int)AAudioStream_getXRunCount(stream) : -1,
-                 (unsigned long long)audio_short_writes, (unsigned long long)audio_dropped_frames,
-                 (unsigned long long)audio_errors);
-        level_frames = 0;
-        level_sum = 0;
-        level_peak = 0;
-    }
-    /* The mixer only paces chunks, so a queue drained by a late wake or an
-     * underrun (MMAP restarts writing at the read position) never refills
-     * by itself and every later hiccup underruns: ask for the shortfall. */
-    uint32_t wanted = 0;
-    if (stream && written == count && void_audio_pause_state() == pause) {
-        int64_t queued = AAudioStream_getFramesWritten(stream) - AAudioStream_getFramesRead(stream);
-        int32_t size = AAudioStream_getBufferSizeInFrames(stream);
-        if (queued >= 0 && size > 0 && queued < size) wanted = (uint32_t)(size - queued);
-    }
-    pthread_mutex_unlock(&audio_lock);
-    return wanted;
 }
 #endif

@@ -17,6 +17,9 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <fcntl.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 #include "d3d9_thread.inc"
 
 uint32_t d3d_shader_bytecode_size(uint32_t va)
@@ -41,6 +44,16 @@ static void programs_forget_shader(d3d_shader *s);
 static void run_shader_destroy(void *args)
 {
     d3d_shader *s = *(d3d_shader **)args;
+    if (s2r_on()) {
+        s2r_shader_release(s);
+        if (s->process && s2r_process_begin()) { process_destroy(s); s2r_process_end(); }
+        if (s->parse) MOJOSHADER_freeParseData(s->parse);
+        free(s->bytecode);
+        free(s->parse_code);
+        free(s->source);
+        free(s);
+        return;
+    }
     programs_forget_shader(s);
     process_destroy(s);
     if (s->gl_plain) glDeleteShader(s->gl_plain);
@@ -633,7 +646,7 @@ static GLuint compile(GLenum type, const char *source)
  * change to the translation or the driver misses instead of loading a stale
  * binary; one the driver refuses is deleted and the program built from
  * source. S2_PROGRAM_CACHE=0 (or a file <cache>/glprog/off) turns it off. */
-__attribute__((weak)) const char *void_app_cache_dir(void) { return ""; }   /* d3d9_dxvk.c in the APK */
+__attribute__((weak)) const char *void_app_cache_dir(void) { return ""; }   /* android/render/s2r_core.c in the APK */
 
 #define PROGRAM_CACHE_MAGIC 0x42503253u   /* "S2PB" */
 #define PROGRAM_CACHE_VERSION 1u
@@ -1001,6 +1014,33 @@ GLuint d3d_ff_vertex_stage(d3d_device *d, d3d_shader *ps, uint32_t *id);
 GLuint d3d_ff_pixel_stage(d3d_device *d, d3d_shader *vs, uint32_t *id, uint32_t *stage_mask);
 void d3d_ff_uniforms(d3d_device *d, GLuint program, int vertex, int pixel);
 
+uint64_t s2r_fnv64(const void *data, uint32_t size);
+
+/* Development (debug.s2.shaderdump=1): the GLSL this layer compiles, named as
+ * the native renderer names the bytecode (<data>/shaderdump/<fnv64>.vs|ps.legacy.glsl). */
+static void legacy_dump(const d3d_shader *vs, const d3d_shader *ps, const char *vs_text, const char *ps_text)
+{
+#ifdef __ANDROID__
+    static int on = -1;
+    if (on < 0) { char v[92] = ""; __system_property_get("debug.s2.shaderdump", v); on = v[0] == '1'; }
+    if (!on) return;
+    char path[1200];
+    snprintf(path, sizeof path, "%s/shaderdump", void_data_dir());
+    mkdir(path, 0775);
+    for (int stage = 0; stage < 2; ++stage) {
+        const d3d_shader *s = stage ? ps : vs;
+        const char *text = !s ? NULL : stage ? (ps_text ? ps_text : s->source) : (vs_text ? vs_text : s->source);
+        if (!text) continue;
+        snprintf(path, sizeof path, "%s/shaderdump/%016llx.%s.legacy.glsl", void_data_dir(),
+            (unsigned long long)s2r_fnv64(s->bytecode, s->size), stage ? "ps" : "vs");
+        FILE *f = fopen(path, "wb");
+        if (f) { fputs(text, f); fclose(f); }
+    }
+#else
+    (void)vs; (void)ps; (void)vs_text; (void)ps_text;
+#endif
+}
+
 /* Link vs and ps; a missing one is replaced by the generated shader object
  * ff_gl (named by ff_id), whose samplers are the stages in ff_samplers. */
 static program_t *link_program(d3d_shader *vs, d3d_shader *ps, uint32_t bgra_mask, GLuint ff_gl, uint32_t ff_id,
@@ -1024,6 +1064,7 @@ static program_t *link_program(d3d_shader *vs, d3d_shader *ps, uint32_t bgra_mas
         vs_text = vertex_source(vs, bgra_mask);
         if (!vs_text) { free(ps_fixed); program_destroy(p); return NULL; }
     }
+    legacy_dump(vs, ps, vs_text, ps_fixed);
     /* A binary filed under these texts (a generated half's read back from its
      * shader object; a pixel half as compile() filters it) skips both compiles
      * and the link. */
@@ -1540,9 +1581,21 @@ static int process_output(const d3d_decl *decl, uint32_t *stride)
     return end != 0;
 }
 
+static void run_process_gl(process_args *a);
+
+/* The native renderers run the same path in an OpenGL ES context for the call (s2r_process.c). */
 static void run_process(void *args)
 {
     process_args *a = args;
+    if (!s2r_on()) { run_process_gl(a); return; }
+    if (!s2r_process_begin()) return;
+    run_process_gl(a);
+    d3d_process_inputs_done();
+    s2r_process_end();
+}
+
+static void run_process_gl(process_args *a)
+{
     d3d_device *d = d3d_rt_device();
     d3d_shader *s = d->st.vs;
     process_program *p = process_link(d, s);
@@ -1623,7 +1676,12 @@ static void run_process(void *args)
             }
             GLboolean valid = glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
             GLenum error = glGetError();
-            if (valid && error == GL_NO_ERROR) {
+            if (valid && error == GL_NO_ERROR && s2r_on()) {
+                /* the native renderers: the guest copy, then the backend's buffer */
+                memcpy(GPTR(a->buffer->shadow + a->dest * a->stride), dst, output_bytes);
+                s2r_buffer_upload(a->buffer, a->dest * a->stride, (uint32_t)output_bytes, 0, 0, dst);
+                a->result = D3D_OK;
+            } else if (valid && error == GL_NO_ERROR) {
                 glBindBuffer(GL_COPY_WRITE_BUFFER, a->buffer->gl);
                 glBufferSubData(GL_COPY_WRITE_BUFFER, (GLintptr)((size_t)a->dest * a->stride), (GLsizeiptr)((size_t)a->count * a->stride), dst);
                 error = glGetError();

@@ -539,10 +539,6 @@ static void vertex_uniforms(d3d_device *d, ff_locs *l)
     }
     if (l->tex_matrix >= 0 && changed(h->tex, d->st.transforms[16], sizeof h->tex, valid))
         glUniformMatrix4fv(l->tex_matrix, 8, GL_FALSE, d->st.transforms[16]);
-    if(s2_render_upscaler()==3&&l->half>=0){
-        float x=d->st.viewport[2]?1.f/d->st.viewport[2]:0,y=d->st.viewport[3]?1.f/d->st.viewport[3]:0;
-        d3d_filter_jitter(d,&x,&y);glUniform2f(l->half,x,y);
-    }
     int view_moved = changed(h->view, d->st.transforms[2], 64, valid);
     if (l->material >= 0) {
         int lit = changed(h->material, d->st.material, 68, valid);

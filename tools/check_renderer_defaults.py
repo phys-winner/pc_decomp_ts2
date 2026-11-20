@@ -1,4 +1,9 @@
-"""Port renderer priority plus the shared launcher's actual selection code on the JVM."""
+"""Port renderer priority plus the shared launcher's actual selection code on the JVM.
+
+The port offers its two native renderers (android/render): OpenGL ES 3.2 by default and Vulkan 1.1, the
+latter on the system driver or on the app-local Mesa Turnip and PanVK (android/render/s2r_vkdriver.c).
+The launcher's selection rules are shared with other ports; the JVM part checks them with
+generic mode names, including Vulkan modes this port no longer ships."""
 import json
 from pathlib import Path
 import subprocess
@@ -24,6 +29,7 @@ public class RendererDefaultsCheck {
   assert !Probe.mali(null,Probe.parse("stock.vendor=1010\nstock.device=PowerVR"));
   System.out.println("PASS actual launcher selection: OpenGL ES default and fallback, explicit Vulkan choices preserved");
   System.out.println("PASS PanVK probing uses the ARM Vulkan vendor without a model allowlist");
+  System.out.println("PASS Turnip: a Vulkan 1.0 system driver does not decide the app-local driver's check");
  }
 }'''
 
@@ -31,11 +37,20 @@ public class RendererDefaultsCheck {
 def main():
     spec=json.loads((ROOT/'android/port.json').read_text(encoding='utf-8'))
     assert spec['renderers']['default']=='gles'
-    assert spec['distributions'][0]['renderers']==['gles','dxvk','turnip','panvk']
+    assert spec['distributions'][0]['renderers']==['gles','vulkan','turnip','panvk']
     modes={m['id']:m for m in spec['renderers']['modes']}
-    assert modes['dxvk']['vulkan']=='1.3' and modes['dxvk']['minSdk']==30
-    assert modes['turnip']['kind']=='turnip' and modes['turnip']['minSdk']==30
-    assert modes['panvk']['kind']=='panvk' and modes['panvk']['minSdk']==30
+    assert set(modes)=={'gles','vulkan','turnip','panvk'}, sorted(modes)
+    assert modes['gles']['kind']=='gles'
+    assert modes['vulkan']['kind']=='vulkan' and modes['vulkan']['vulkan']=='1.1' and modes['vulkan']['probe']=='version'
+    # The app-local drivers: the native renderer's own version check (not DXVK's 1.3), their libraries
+    # packed by build_game_apk.py from the pins, the driver library adrenotools loads.
+    import build_game_apk
+    pins=json.loads((ROOT/'dependencies.json').read_text(encoding='utf-8'))
+    packed={n for c in build_game_apk.VULKAN_PINS for n in pins[c]['runtime']}
+    for mid,kind,driver in (('turnip','turnip','libs2turnip.so'),('panvk','panvk','libvulkan_panfrost.so')):
+        m=modes[mid]
+        assert m['kind']==kind and m['vulkan']=='1.1' and m['probe']=='version' and m['driver']==driver, m
+        assert driver in m['libraries'] and set(m['libraries'])<=packed, (mid, sorted(set(m['libraries'])-packed))
     with tempfile.TemporaryDirectory(prefix='sims2-renderer-default-') as folder:
         out=Path(folder);test=out/'RendererDefaultsCheck.java';test.write_text(CHECK,encoding='utf-8')
         sources=sorted((launcher_root()/'android/src/port/launcher').glob('*.java'))

@@ -12,8 +12,12 @@
 #include <errno.h>
 #include <sched.h>
 #include <stdatomic.h>
+#include <dlfcn.h>
 #include <setjmp.h>
+#include <signal.h>
+#include <sys/syscall.h>
 #include <time.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #define TLS_SLOTS 1088
@@ -66,11 +70,254 @@ static __thread uint64_t t_held_since;
 static __thread int t_main_thread;
 uint64_t void_lock_wait_ns(void) { return t_lock_wait_ns; }
 
+/* The audio producer (audio.c) renders while a low-latency callback waits for
+ * PCM; its waits for the machine are urgent. The holder offers the machine at
+ * its next loop back-edge instead of after the main thread's slice and up to
+ * RECOMP_YIELD_EVERY back-edges later: the waiter sets the shared back-edge
+ * counter to the threshold, and repeats it every URGENT_POKE_NS until served
+ * (the store can race with the holder's own increment). The urgent thread
+ * itself keeps the machine for a slice while others wait. */
+#define URGENT_POKE_NS 250000L
+static _Atomic int machine_urgent __attribute__((aligned(128)));
+static __thread int t_urgent;
+/* While the urgent thread waits for a mutex another guest thread owns, that
+ * owner is urgent too (wait_core): it keeps the machine for a slice and gets
+ * it back first, so it leaves its critical section without sitting out the
+ * main thread's slices (EA SND's lock, held by the game's sound threads). */
+static _Atomic uint32_t boosted_tid;
+
+void void_machine_urgent(int urgent) { t_urgent = urgent; }
+
+static int thread_urgent(void)
+{
+    uint32_t boosted = atomic_load_explicit(&boosted_tid, memory_order_relaxed);
+    return t_urgent || (boosted && t_self && boosted == t_self->id);
+}
+
 static uint64_t now_ns(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void machine_poke(void)
+{
+    __atomic_store_n(&g_backedges, RECOMP_YIELD_EVERY, __ATOMIC_RELAXED);
+}
+
+/* Who holds the machine, for the report of an urgent wait that the holder did
+ * not answer for URGENT_REPORT_NS: the guest function it runs and the last
+ * import or method it called (a host call that keeps the machine). */
+#define URGENT_REPORT_NS 20000000ull
+#define URGENT_REPORTS 40
+static _Atomic uint32_t holder_tid;
+static unsigned urgent_reports;
+/* The ticket (+ 1) the audio producer itself waits with, 0 when it does not:
+ * void_machine_lend_urgent hands the machine to it alone. */
+static _Atomic uint64_t producer_ticket;
+static _Atomic uint32_t machine_loans;
+/* A loan: LOAN_OFFERED by the lender, LOAN_TAKEN by one borrower, LOAN_RETURNED
+ * by its release. A borrower is the producer, or the owner of the mutex the
+ * producer waits for (boosted_tid) while it waits for the machine itself
+ * (boosted_waiting): that owner returns the machine as soon as it releases a
+ * mutex (void_machine_owner_done), so only the rest of its critical section
+ * (EA SND's) runs inside the lender's half-done call. The borrower parks its own
+ * ticket meanwhile: a release that reaches a parked ticket serves the next one,
+ * and the borrower takes it back when it wants the machine again before then. */
+enum { LOAN_NONE, LOAN_OFFERED, LOAN_RETURNED, LOAN_TAKEN };
+enum { BORROW_NONE, BORROW_PRODUCER, BORROW_OWNER };
+#define LOAN_OFFER_NS 2000000L                 /* a borrower polls every 250 us; the lender retries 1 ms later */
+#define PARKED_SLOTS 8
+static _Atomic int loan_state;
+static _Atomic uint64_t parked_tickets[PARKED_SLOTS];
+static _Atomic uint32_t boosted_waiting;
+static __thread int t_parked_slot = -1, t_borrowing;
+static __thread uint64_t t_parked;
+/* A sleeping waiter waits on its own condition, registered by ticket (mlock):
+ * a release wakes the owner of the next ticket only. With a dozen guest
+ * threads woken by every release, on the two cores they share with the render
+ * thread, the next owner started 10-14 ms after some releases (Helio G90T). */
+#define WAIT_SLOTS 64u
+static struct { uint64_t ticket; pthread_cond_t *cond; } wait_slots[WAIT_SLOTS];
+static __thread pthread_cond_t t_machine_cond;
+static __thread int t_machine_cond_ready;
+/* Handoffs: from a release to its next owner's start, reported every 10 s. */
+#define HANDOFF_REPORT_NS 10000000000ull
+static _Atomic uint64_t released_ns, released_ticket;
+static uint32_t handoff_count, handoff_slow[3];   /* over 1, 4 and 10 ms */
+static uint64_t handoff_max_ns, handoff_report_at;
+
+/* Where the holder is when an urgent wait reaches URGENT_REPORT_NS: a signal to
+ * its host thread records the program counter and the link register (the
+ * handler reads no memory). With the unstripped library they name the host
+ * code that keeps the machine: a native helper, a long `rep` copy inside a
+ * lifted body, a file call. g_cur_func alone names the last lifted function
+ * entered, which may have returned long before. */
+#define HOLD_SAMPLE_SIGNAL (SIGRTMIN + 8)
+#define HOLD_FRAMES 6
+enum { HOLD_IDLE, HOLD_ASKED, HOLD_RECORDING, HOLD_RECORDED };
+static _Atomic int holder_host_tid, hold_sample_state, hold_sampler;   /* hold_sampler: 1 ready, -1 unavailable */
+static _Atomic uintptr_t hold_sample_pc, hold_sample_lr, hold_sample_x8, hold_sample_frames[HOLD_FRAMES];
+/* The holder's host stack, so that the handler follows frame records only there. */
+static _Atomic uintptr_t holder_stack_lo, holder_stack_hi;
+static __thread uintptr_t t_stack_lo, t_stack_hi;
+
+static void hold_sample_handler(int signo, siginfo_t *info, void *context)
+{
+    (void)signo; (void)info;
+    int asked = HOLD_ASKED;
+    if (!atomic_compare_exchange_strong(&hold_sample_state, &asked, HOLD_RECORDING)) return;
+    const ucontext_t *uc = (const ucontext_t *)context;
+    atomic_store(&hold_sample_pc, (uintptr_t)uc->uc_mcontext.pc);
+    atomic_store(&hold_sample_lr, (uintptr_t)uc->uc_mcontext.regs[30]);
+    atomic_store(&hold_sample_x8, (uintptr_t)uc->uc_mcontext.regs[8]);
+    uintptr_t lo = atomic_load(&holder_stack_lo), hi = atomic_load(&holder_stack_hi);
+    uintptr_t fp = (uintptr_t)uc->uc_mcontext.regs[29];
+    for (int i = 0; i < HOLD_FRAMES; ++i) {
+        uintptr_t ret = 0;
+        if (lo && fp >= lo && hi >= 16 && fp <= hi - 16 && !(fp & 7)) {
+            const uintptr_t *record = (const uintptr_t *)fp;      /* {previous fp, return address} */
+            ret = record[1];
+            fp = record[0] > fp ? record[0] : 0;
+        } else {
+            fp = 0;
+        }
+        atomic_store(&hold_sample_frames[i], ret);
+    }
+    atomic_store(&hold_sample_state, HOLD_RECORDED);
+}
+
+static void holder_stack_publish(void)
+{
+    if (!t_stack_hi) {
+        pthread_attr_t attr;
+        void *addr;
+        size_t size;
+        if (!pthread_getattr_np(pthread_self(), &attr)) {
+            if (!pthread_attr_getstack(&attr, &addr, &size)) {
+                t_stack_lo = (uintptr_t)addr;
+                t_stack_hi = (uintptr_t)addr + size;
+            }
+            pthread_attr_destroy(&attr);
+        }
+    }
+    atomic_store_explicit(&holder_stack_lo, t_stack_lo, memory_order_relaxed);
+    atomic_store_explicit(&holder_stack_hi, t_stack_hi, memory_order_relaxed);
+}
+
+static void hold_address_text(char *out, size_t size, uintptr_t address)
+{
+    Dl_info info;
+    if (address && dladdr((void *)address, &info) && info.dli_fbase) {
+        const char *name = strrchr(info.dli_fname, '/');
+        snprintf(out, size, " %s+0x%lx", name ? name + 1 : info.dli_fname, (unsigned long)(address - (uintptr_t)info.dli_fbase));
+    } else {
+        snprintf(out, size, " %#lx", (unsigned long)address);
+    }
+}
+
+static void hold_sample_request(void)
+{
+    int ready = atomic_load(&hold_sampler);
+    if (!ready) {
+        struct sigaction old, action;
+        memset(&action, 0, sizeof action);
+        int free_signal = !sigaction(HOLD_SAMPLE_SIGNAL, NULL, &old) && !(old.sa_flags & SA_SIGINFO) &&
+                          old.sa_handler == SIG_DFL;
+        action.sa_sigaction = hold_sample_handler;
+        action.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&action.sa_mask);
+        ready = free_signal && !sigaction(HOLD_SAMPLE_SIGNAL, &action, NULL) ? 1 : -1;
+        atomic_store(&hold_sampler, ready);
+    }
+    int idle = HOLD_IDLE, tid = atomic_load(&holder_host_tid);
+    if (ready < 0 || !tid || !atomic_compare_exchange_strong(&hold_sample_state, &idle, HOLD_ASKED)) return;
+    if (syscall(SYS_tgkill, getpid(), tid, HOLD_SAMPLE_SIGNAL)) atomic_store(&hold_sample_state, HOLD_IDLE);
+}
+
+/* The recorded place as text (empty without one), and the sampler idle again. */
+static void hold_sample_text(char *out, size_t size)
+{
+    out[0] = 0;
+    int state = atomic_load(&hold_sample_state);
+    if (state == HOLD_RECORDED) {
+        size_t used = (size_t)snprintf(out, size, "; host pc");
+        hold_address_text(out + used, size - used, atomic_load(&hold_sample_pc));
+        used = strlen(out);
+        used += (size_t)snprintf(out + used, size - used, " x8 %lu lr", (unsigned long)atomic_load(&hold_sample_x8));
+        hold_address_text(out + used, size - used, atomic_load(&hold_sample_lr));
+        used = strlen(out);
+        used += (size_t)snprintf(out + used, size - used, " frames");
+        for (int i = 0; i < HOLD_FRAMES && used + 40 < size; ++i) {
+            uintptr_t frame = atomic_load(&hold_sample_frames[i]);
+            if (!frame) break;
+            hold_address_text(out + used, size - used, frame);
+            used = strlen(out);
+        }
+    }
+    if (state != HOLD_RECORDING) atomic_store(&hold_sample_state, HOLD_IDLE);
+}
+
+static int park_ticket(uint64_t ticket)
+{
+    for (int i = 0; i < PARKED_SLOTS; ++i) {
+        uint64_t empty = 0;
+        if (atomic_compare_exchange_strong(&parked_tickets[i], &empty, ticket)) {
+            t_parked_slot = i;
+            t_parked = ticket;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void unpark_ticket(void)
+{
+    if (t_parked_slot >= 0) atomic_store(&parked_tickets[t_parked_slot], 0);
+    t_parked_slot = -1;
+}
+
+/* A release reached `next`: whether it was parked (and is now consumed). */
+static int skip_parked(uint64_t next)
+{
+    for (int i = 0; i < PARKED_SLOTS; ++i) {
+        uint64_t parked = next;
+        if (atomic_load(&parked_tickets[i]) == next && atomic_compare_exchange_strong(&parked_tickets[i], &parked, 0))
+            return 1;
+    }
+    return 0;
+}
+
+/* The owner of the mutex the producer waits for (0: none). A changed owner is
+ * woken if it sleeps for the machine, so that it waits as an urgent thread. */
+static void machine_boost(uint32_t owner)
+{
+    if (atomic_exchange(&boosted_tid, owner) == owner || !owner) return;
+    pthread_mutex_lock(&mlock);
+    for (unsigned i = 0; i < WAIT_SLOTS; ++i) if (wait_slots[i].cond) pthread_cond_signal(wait_slots[i].cond);
+    pthread_cond_broadcast(&mcond);
+    pthread_mutex_unlock(&mlock);
+}
+
+static void handoff_note(uint64_t ticket, uint64_t now)
+{
+    if (atomic_load_explicit(&released_ticket, memory_order_relaxed) != ticket) return;
+    uint64_t at = atomic_load_explicit(&released_ns, memory_order_relaxed), ns = now > at ? now - at : 0;
+    if (!at) return;                             /* no release yet: the first owner */
+    ++handoff_count;
+    handoff_slow[0] += ns > 1000000u;
+    handoff_slow[1] += ns > 4000000u;
+    handoff_slow[2] += ns > 10000000u;
+    if (ns > handoff_max_ns) handoff_max_ns = ns;
+    if (!handoff_report_at) handoff_report_at = now;
+    if (now - handoff_report_at >= HANDOFF_REPORT_NS) {
+        void_log("[machine] last 10 s: %u handoffs, over 1 ms %u, over 4 ms %u, over 10 ms %u, slowest %.1f ms",
+                 handoff_count, handoff_slow[0], handoff_slow[1], handoff_slow[2], handoff_max_ns / 1e6);
+        handoff_count = handoff_slow[0] = handoff_slow[1] = handoff_slow[2] = 0;
+        handoff_max_ns = 0;
+        handoff_report_at = now;
+    }
 }
 
 /* A FIFO ticket lock; a waiter sleeps on the condition (all guest threads
@@ -79,31 +326,130 @@ static void machine_wait(uint64_t ticket)
 {
     if (atomic_load_explicit(&ticket_serving, memory_order_acquire) != ticket) {
         uint64_t start = now_ns();
+        uint32_t held_by = 0, held_in = 0, held_call = 0, held_from = 0;
+        uint32_t ahead = (uint32_t)(ticket - atomic_load(&ticket_serving));   /* the holder and earlier waiters */
+        int sampled = 0;
+        if (t_urgent) atomic_store(&producer_ticket, ticket + 1u);
+        uint32_t me = t_self ? t_self->id : 0;
+        if (!t_machine_cond_ready) {
+            pthread_cond_init(&t_machine_cond, NULL);
+            t_machine_cond_ready = 1;
+        }
         {
             pthread_mutex_lock(&mlock);
             atomic_fetch_add(&machine_sleepers, 1);
-            while (atomic_load(&ticket_serving) != ticket) pthread_cond_wait(&mcond, &mlock);
+            unsigned slot = (unsigned)(ticket % WAIT_SLOTS);
+            int registered = 0;
+            while (atomic_load(&ticket_serving) != ticket) {
+                uint32_t boosted = atomic_load(&boosted_tid);
+                int owner = boosted && boosted == me;
+                if (owner) atomic_store(&boosted_waiting, me);
+                int offered = LOAN_OFFERED;
+                if ((t_urgent || owner) && atomic_load(&loan_state) == LOAN_OFFERED && park_ticket(ticket)) {
+                    if (atomic_compare_exchange_strong(&loan_state, &offered, LOAN_TAKEN)) {
+                        t_borrowing = t_urgent ? BORROW_PRODUCER : BORROW_OWNER;   /* runs on the loan */
+                        break;
+                    }
+                    unpark_ticket();
+                }
+                if (!thread_urgent()) {
+                    if (!registered && !wait_slots[slot].cond) {
+                        wait_slots[slot].ticket = ticket;
+                        wait_slots[slot].cond = &t_machine_cond;
+                        registered = 1;
+                    }
+                    pthread_cond_wait(registered ? &t_machine_cond : &mcond, &mlock);
+                    continue;
+                }
+                if (registered) { wait_slots[slot].cond = NULL; registered = 0; }
+                machine_poke();
+                if (!sampled && now_ns() - start >= URGENT_REPORT_NS) {
+                    sampled = 1;
+                    uint32_t last = (__atomic_load_n(&g_icall_trace_idx, __ATOMIC_RELAXED) - 1u) & (ICALL_TRACE_SIZE - 1u);
+                    held_by = atomic_load_explicit(&holder_tid, memory_order_relaxed);
+                    held_in = __atomic_load_n(&g_cur_func, __ATOMIC_RELAXED);
+                    held_call = __atomic_load_n(&g_icall_trace[last], __ATOMIC_RELAXED);
+                    held_from = __atomic_load_n(&g_icall_from[last], __ATOMIC_RELAXED);
+                    if (urgent_reports < URGENT_REPORTS) hold_sample_request();
+                }
+                struct timespec until;
+                clock_gettime(CLOCK_REALTIME, &until);
+                until.tv_nsec += URGENT_POKE_NS;
+                if (until.tv_nsec >= 1000000000L) { until.tv_nsec -= 1000000000L; ++until.tv_sec; }
+                pthread_cond_timedwait(&mcond, &mlock, &until);
+            }
+            if (registered) wait_slots[slot].cond = NULL;
             atomic_fetch_sub(&machine_sleepers, 1);
+            uint32_t waiting = me;
+            if (me) atomic_compare_exchange_strong(&boosted_waiting, &waiting, 0);
             pthread_mutex_unlock(&mlock);
         }
+        if (t_urgent) atomic_store(&producer_ticket, 0);
         uint64_t waited = now_ns() - start;
         t_lock_wait_ns += waited;
         void_stat_add(VS_MACHINE, waited, 0);
+        if (sampled && urgent_reports < URGENT_REPORTS) {
+            ++urgent_reports;
+            const char *name = void_thunk_name(held_call);
+            char where[400];
+            hold_sample_text(where, sizeof where);
+            void_log("[machine] urgent wait %.1f ms behind %u thread(s): thread %u held the machine in %08X; "
+                     "last indirect call %08X (%s) from %08X; %u loans so far%s",
+                     waited / 1e6, ahead, held_by, held_in, held_call, name ? name : "guest", held_from,
+                     atomic_load(&machine_loans), where);
+        }
     }
-    if (t_main_thread) t_held_since = now_ns();
+    t_held_since = now_ns();
+    if (!t_borrowing) handoff_note(ticket, t_held_since);
+    atomic_store_explicit(&holder_tid, t_self ? t_self->id : 0, memory_order_relaxed);
+    atomic_store_explicit(&holder_host_tid, gettid(), memory_order_relaxed);
+    holder_stack_publish();
+}
+
+/* A new ticket; this thread's parked one while no release has passed it. */
+static uint64_t take_ticket(void)
+{
+    if (t_parked_slot >= 0) {
+        uint64_t mine = t_parked;
+        int slot = t_parked_slot;
+        t_parked_slot = -1;
+        if (atomic_compare_exchange_strong(&parked_tickets[slot], &mine, 0)) return t_parked;
+    }
+    return atomic_fetch_add(&ticket_next, 1);
 }
 
 static void machine_acquire(void)
 {
-    machine_wait(atomic_fetch_add(&ticket_next, 1));
+    if (!thread_urgent()) {
+        machine_wait(take_ticket());
+        return;
+    }
+    atomic_fetch_add(&machine_urgent, 1);
+    machine_wait(take_ticket());
+    atomic_fetch_sub(&machine_urgent, 1);
 }
 
 static void machine_release(void)
 {
-    atomic_fetch_add(&ticket_serving, 1);
+    if (atomic_load(&loan_state) == LOAN_TAKEN) {
+        /* The borrower ends a loan (only it holds the machine then): the lender goes on. */
+        t_borrowing = BORROW_NONE;
+        pthread_mutex_lock(&mlock);
+        atomic_store(&loan_state, LOAN_RETURNED);
+        pthread_cond_broadcast(&mcond);
+        pthread_mutex_unlock(&mlock);
+        return;
+    }
+    uint64_t next = atomic_fetch_add(&ticket_serving, 1) + 1u;
+    /* Nobody waits for a parked ticket: serve the next one (unless its owner took it back). */
+    while (skip_parked(next)) next = atomic_fetch_add(&ticket_serving, 1) + 1u;
+    atomic_store_explicit(&released_ns, now_ns(), memory_order_relaxed);
+    atomic_store_explicit(&released_ticket, next, memory_order_relaxed);
     if (atomic_load(&machine_sleepers)) {
         pthread_mutex_lock(&mlock);
-        pthread_cond_broadcast(&mcond);
+        unsigned slot = (unsigned)(next % WAIT_SLOTS);
+        if (wait_slots[slot].cond && wait_slots[slot].ticket == next) pthread_cond_signal(wait_slots[slot].cond);
+        pthread_cond_broadcast(&mcond);          /* urgent waiters, a lender, waiters without a slot */
         pthread_mutex_unlock(&mlock);
     }
 }
@@ -112,6 +458,55 @@ static int machine_contended(void)
 {
     /* Racy read is fine: a missed waiter is picked up at the next edge. */
     return atomic_load_explicit(&ticket_next, memory_order_relaxed) - atomic_load_explicit(&ticket_serving, memory_order_relaxed) > 1;
+}
+
+/* A host call that must keep the game's other threads out (a D3D call waiting
+ * for the render thread) can still let the audio producer render, wherever it
+ * waits in the queue (the game's sound thread wakes on the same tick, often
+ * just before it): the producer parks its ticket and runs, its release hands
+ * the machine back, and the threads in the queue go on waiting for the lender.
+ * Returns 1 after such a loan. */
+int void_machine_lend_urgent(void)
+{
+    uint32_t boosted = atomic_load(&boosted_tid);
+    if (!atomic_load(&producer_ticket) && !(boosted && atomic_load(&boosted_waiting) == boosted))
+        return 0;                                /* neither the producer nor the owner it waits for waits */
+    void_thread *t = t_self;
+    if (!t || t->depth <= 0) return 0;
+    atomic_fetch_add(&machine_loans, 1);
+    void_regs_save(&t->regs);
+    uint64_t held_since = t_held_since, start = now_ns();
+    struct timespec offer_end;
+    clock_gettime(CLOCK_REALTIME, &offer_end);
+    offer_end.tv_nsec += LOAN_OFFER_NS;
+    if (offer_end.tv_nsec >= 1000000000L) { offer_end.tv_nsec -= 1000000000L; ++offer_end.tv_sec; }
+    pthread_mutex_lock(&mlock);
+    atomic_store(&loan_state, LOAN_OFFERED);
+    pthread_cond_broadcast(&mcond);
+    while (atomic_load(&loan_state) != LOAN_RETURNED) {
+        if (atomic_load(&loan_state) == LOAN_OFFERED &&
+            pthread_cond_timedwait(&mcond, &mlock, &offer_end) == ETIMEDOUT) {
+            int offered = LOAN_OFFERED;     /* not taken: the machine never left us */
+            if (atomic_compare_exchange_strong(&loan_state, &offered, LOAN_NONE)) {
+                pthread_mutex_unlock(&mlock);
+                atomic_fetch_sub(&machine_loans, 1);
+                return 0;
+            }
+            continue;
+        }
+        if (atomic_load(&loan_state) == LOAN_TAKEN) pthread_cond_wait(&mcond, &mlock);
+    }
+    atomic_store(&loan_state, LOAN_NONE);
+    pthread_mutex_unlock(&mlock);
+    uint64_t waited = now_ns() - start;
+    t_lock_wait_ns += waited;
+    void_stat_add(VS_MACHINE, waited, 0);
+    t_held_since = held_since;
+    atomic_store_explicit(&holder_tid, t->id, memory_order_relaxed);
+    atomic_store_explicit(&holder_host_tid, gettid(), memory_order_relaxed);
+    holder_stack_publish();
+    void_regs_load(&t->regs);
+    return 1;
 }
 
 /* UNICODE_STRING {Length, MaximumLength, Buffer} for a UTF-8 text. */
@@ -325,19 +720,24 @@ void void_blocking_end(void)
  * mostly poll (Sleep(1) loops, a thousand wake-ups a second each), and the
  * main thread handed them the machine at every offer: 2-5 ms of a frame went
  * on hand-overs at speed 3. It now offers only after holding the machine for
- * MAIN_SLICE_NS; the others still give way at once. */
+ * MAIN_SLICE_NS, or at once to an urgent waiter (the audio producer), which
+ * keeps it for such a slice itself; the others still give way at once. */
 #define MAIN_SLICE_NS 2000000ull
 static void yield_hook(void)
 {
     if (!machine_contended()) return;
-    if (t_main_thread && now_ns() - t_held_since < MAIN_SLICE_NS) return;
+    int urgent = thread_urgent();
+    if ((t_main_thread || urgent) && now_ns() - t_held_since < MAIN_SLICE_NS &&
+        (urgent || !atomic_load_explicit(&machine_urgent, memory_order_relaxed))) return;
     void_thread *t = t_self;
     if (!t || t->depth <= 0) void_fatal("yield outside the guest machine");
     void_regs_save(&t->regs);
     /* Reserve our return before releasing, so the next owner sees a contender even if we are preempted. */
-    uint64_t ticket = atomic_fetch_add(&ticket_next, 1);
+    uint64_t ticket = take_ticket();
+    if (urgent) atomic_fetch_add(&machine_urgent, 1);
     machine_release();
     machine_wait(ticket);
+    if (urgent) atomic_fetch_sub(&machine_urgent, 1);
     void_regs_load(&t->regs);
 }
 
@@ -559,6 +959,10 @@ static uint32_t wait_core(int count, void_object **objects, int wait_all, uint32
     int blocking = timeout != 0;
     uint64_t wait_start = blocking ? void_stat_now() : 0;
     if (blocking) void_blocking_begin();
+    /* The urgent thread waits: the owner of the mutex it wants becomes urgent,
+     * and the holder of the machine is asked to hand it on (see boosted_tid). */
+    int pushing = blocking && t_urgent;
+    if (pushing) atomic_fetch_add(&machine_urgent, 1);
     pthread_mutex_lock(&wait_lock);
     uint32_t result = WAIT_TIMEOUT_;
     for (;;) {
@@ -590,6 +994,24 @@ static uint32_t wait_core(int count, void_object **objects, int wait_all, uint32
             if (extra) { extra_node.thread = self; extra_node.next = extra_waiters; extra_waiters = &extra_node; }
             registered = 1;
         }
+        if (pushing) {
+            uint32_t owner = 0;
+            for (int i = 0; i < count && !owner; ++i)
+                if (objects[i]->kind == VOID_OBJ_MUTEX && objects[i]->owner != tid) owner = objects[i]->owner;
+            machine_boost(owner);
+            machine_poke();
+            struct timespec step;
+            clock_gettime(CLOCK_REALTIME, &step);
+            step.tv_nsec += URGENT_POKE_NS;
+            if (step.tv_nsec >= 1000000000L) { step.tv_nsec -= 1000000000L; ++step.tv_sec; }
+            int last = timeout != INFINITE_ && (deadline.tv_sec < step.tv_sec ||
+                                                (deadline.tv_sec == step.tv_sec && deadline.tv_nsec <= step.tv_nsec));
+            if (pthread_cond_timedwait(&self->wake, &wait_lock, last ? &deadline : &step) == ETIMEDOUT && last) {
+                result = WAIT_TIMEOUT_;
+                timeout = 0;
+            }
+            continue;
+        }
         int rc = timeout == INFINITE_ ? pthread_cond_wait(&self->wake, &wait_lock)
                                       : pthread_cond_timedwait(&self->wake, &wait_lock, &deadline);
         if (rc == ETIMEDOUT) {
@@ -603,6 +1025,10 @@ static uint32_t wait_core(int count, void_object **objects, int wait_all, uint32
         if (extra) unlink_waiter(&extra_waiters, &extra_node);
     }
     pthread_mutex_unlock(&wait_lock);
+    if (pushing) {
+        atomic_store_explicit(&boosted_tid, 0, memory_order_relaxed);
+        atomic_fetch_sub(&machine_urgent, 1);
+    }
     if (blocking) { void_blocking_end(); void_stat_add(VS_WAIT, void_stat_now() - wait_start, 0); }
     return result;
 }
@@ -958,14 +1384,28 @@ static uint32_t create_mutex(int initial_owner)
 
 WINAPI_EXPORT(K32, CreateMutexA, 3) { return create_mutex(ARG(1) != 0); }
 WINAPI_EXPORT(K32, CreateMutexW, 3) { return create_mutex(ARG(1) != 0); }
+/* The owner of the producer's mutex borrowed the machine to leave its critical
+ * section: a mutex is released, so the loan ends here and the thread waits for
+ * its own turn again. */
+static void void_machine_owner_done(void)
+{
+    if (t_borrowing != BORROW_OWNER) return;
+    uint32_t me = t_self ? t_self->id : 0;
+    atomic_compare_exchange_strong(&boosted_tid, &me, 0);
+    void_blocking_begin();
+    void_blocking_end();
+}
+
 WINAPI_EXPORT(K32, ReleaseMutex, 1)
 {
     void_object *o = void_handle_get(ARG(0), VOID_OBJ_MUTEX);
     if (!o) { void_set_last_error(ERROR_INVALID_HANDLE_); return 0; }
     pthread_mutex_lock(&wait_lock);
     if (o->owner != void_thread_id()) { pthread_mutex_unlock(&wait_lock); void_set_last_error(ERROR_NOT_OWNER_); return 0; }
-    if (--o->recursion == 0) { o->owner = 0; wake_waiters(o); }
+    int released = --o->recursion == 0;
+    if (released) { o->owner = 0; wake_waiters(o); }
     pthread_mutex_unlock(&wait_lock);
+    if (released) void_machine_owner_done();
     return 1;
 }
 

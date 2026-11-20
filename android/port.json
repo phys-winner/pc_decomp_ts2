@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "app": {
+    "performanceHud": true,
     "label": "The Sims 2",
     "title": "The Sims 2 Legacy",
     "subtitle": {
@@ -42,7 +43,7 @@
       "activity": "org.sims2.port.GameActivity",
       "renderers": [
         "gles",
-        "dxvk",
+        "vulkan",
         "turnip",
         "panvk"
       ],
@@ -75,35 +76,37 @@
         "kind": "gles",
         "title": "OpenGL ES",
         "description": {
-          "en": "The port's OpenGL ES renderer",
-          "ru": "Рендерер OpenGL ES порта"
+          "en": "The port's native OpenGL ES 3.2 renderer",
+          "ru": "Нативный рендерер OpenGL ES 3.2",
+          "de": "Nativer OpenGL-ES-3.2-Renderer des Ports",
+          "pl": "Natywny renderer OpenGL ES 3.2"
         }
       },
       {
-        "id": "dxvk",
+        "id": "vulkan",
         "kind": "vulkan",
-        "title": "DXVK (Vulkan)",
+        "title": "Vulkan",
         "description": {
-          "en": "DXVK on the system Vulkan driver",
-          "ru": "DXVK с системным драйвером Vulkan"
+          "en": "The port's native Vulkan 1.1 renderer",
+          "ru": "Нативный рендерер Vulkan 1.1",
+          "de": "Nativer Vulkan-1.1-Renderer des Ports",
+          "pl": "Natywny renderer Vulkan 1.1"
         },
-        "vulkan": "1.3",
-        "minSdk": 30,
-        "libraries": [
-          "libs2dxvk.so",
-          "libdxvk_d3d9.so",
-          "libc++_shared.so"
-        ]
+        "vulkan": "1.1",
+        "probe": "version"
       },
       {
         "id": "turnip",
         "kind": "turnip",
-        "title": "DXVK (Turnip)",
+        "title": "Vulkan (Turnip)",
         "description": {
-          "en": "DXVK with Mesa Turnip on Adreno 6xx/7xx",
-          "ru": "DXVK с Mesa Turnip для Adreno 6xx/7xx"
+          "en": "The native Vulkan renderer on Mesa Turnip for Adreno 6xx/7xx (or your own driver)",
+          "ru": "Нативный рендерер Vulkan на Mesa Turnip для Adreno 6xx/7xx (или на вашем драйвере)",
+          "de": "Nativer Vulkan-Renderer mit Mesa Turnip für Adreno 6xx/7xx (oder Ihrem eigenen Treiber)",
+          "pl": "Natywny renderer Vulkan na Mesa Turnip dla Adreno 6xx/7xx (lub na własnym sterowniku)"
         },
-        "vulkan": "1.3",
+        "vulkan": "1.1",
+        "probe": "version",
         "minSdk": 30,
         "adreno": [
           600,
@@ -111,33 +114,37 @@
         ],
         "driver": "libs2turnip.so",
         "libraries": [
-          "libs2dxvk.so",
-          "libdxvk_d3d9.so",
           "libadrenotools.so",
-          "libs2turnip.so",
-          "libc++_shared.so"
+          "libmain_hook.so",
+          "libhook_impl.so",
+          "libfile_redirect_hook.so",
+          "libgsl_alloc_hook.so",
+          "libc++_shared.so",
+          "libs2turnip.so"
         ]
       },
       {
         "id": "panvk",
         "kind": "panvk",
-        "title": "DXVK (PanVK)",
+        "title": "Vulkan (PanVK)",
         "description": {
-          "en": "DXVK with Mesa PanVK for compatible Mali GPUs",
-          "ru": "DXVK с Mesa PanVK для совместимых Mali",
-          "de": "DXVK mit Mesa PanVK für kompatible Mali-GPUs",
-          "pl": "DXVK z Mesa PanVK dla zgodnych układów Mali"
+          "en": "The native Vulkan renderer on Mesa PanVK for compatible Mali GPUs (or your own driver)",
+          "ru": "Нативный рендерер Vulkan на Mesa PanVK для совместимых Mali (или на вашем драйвере)",
+          "de": "Nativer Vulkan-Renderer mit Mesa PanVK für kompatible Mali-GPUs (oder Ihrem eigenen Treiber)",
+          "pl": "Natywny renderer Vulkan na Mesa PanVK dla zgodnych układów Mali (lub na własnym sterowniku)"
         },
-        "driver": "libvulkan_panfrost.so",
-        "vulkan": "1.3",
-        "probe": "dxvk",
+        "vulkan": "1.1",
+        "probe": "version",
         "minSdk": 30,
+        "driver": "libvulkan_panfrost.so",
         "libraries": [
-          "libs2dxvk.so",
-          "libdxvk_d3d9.so",
           "libadrenotools.so",
-          "libvulkan_panfrost.so",
-          "libc++_shared.so"
+          "libmain_hook.so",
+          "libhook_impl.so",
+          "libfile_redirect_hook.so",
+          "libgsl_alloc_hook.so",
+          "libc++_shared.so",
+          "libvulkan_panfrost.so"
         ]
       }
     ]
@@ -146,6 +153,23 @@
     "backend": "org.sims2.port.TextureCache",
     "separateCache": true
   },
+  "folders": [
+    {
+      "title": {
+        "en": "Mods folder",
+        "ru": "Папка модов",
+        "de": "Mod-Ordner",
+        "pl": "Folder modów"
+      },
+      "path": "{storage}/userdata/Documents/EA Games/The Sims 2 Legacy/Downloads",
+      "hint": {
+        "en": "Put The Sims 2 mods in .package format here (subfolders work too); the game reads them when it starts.",
+        "ru": "Сюда кладите моды The Sims 2 в формате .package (можно в подпапках); игра читает их при запуске.",
+        "de": "Mods für Die Sims 2 im Format .package hierher legen (auch in Unterordnern); das Spiel liest sie beim Start.",
+        "pl": "Tutaj umieść mody do The Sims 2 w formacie .package (mogą być w podfolderach); gra wczytuje je przy uruchomieniu."
+      }
+    }
+  ],
   "hints": {
     "gameFiles": {
       "en": "Choose the installed Legacy Collection folder with Base, EP1...EP9 and SP folders, or its ZIP archive. Stored ZIPs can be played without unpacking.",
@@ -157,17 +181,6 @@
     }
   },
   "options": [
-    {
-      "key": "fps_counter",
-      "type": "choice",
-      "default": "0",
-      "title": {"en": "FPS counter", "ru": "Счётчик FPS", "de": "FPS-Anzeige", "pl": "Licznik FPS"},
-      "choices": [
-        {"value": "0", "title": {"en": "Off", "ru": "Выключен", "de": "Aus", "pl": "Wyłączony"}},
-        {"value": "1", "title": {"en": "FPS and frame times", "ru": "FPS и время кадров", "de": "FPS und Bildzeiten", "pl": "FPS i czasy klatek"}},
-        {"value": "2", "title": {"en": "FPS, frame times and system info", "ru": "FPS, время кадров и данные системы", "de": "FPS, Bildzeiten und Systemdaten", "pl": "FPS, czasy klatek i dane systemu"}}
-      ]
-    },
     {
       "key": "game_language",
       "type": "choice",
@@ -368,8 +381,8 @@
       "key": "ui_fsr",
       "type": "choice",
       "title": {
-        "en": "FSR 1 for interface textures (OpenGL ES)",
-        "ru": "FSR 1 для текстур интерфейса (OpenGL ES)"
+        "en": "FSR 1 for interface textures",
+        "ru": "FSR 1 для текстур интерфейса"
       },
       "default": "0",
       "choices": [
@@ -393,8 +406,8 @@
       "key": "render_aa",
       "type": "choice",
       "title": {
-        "en": "Render antialiasing (OpenGL ES)",
-        "ru": "Сглаживание рендера (OpenGL ES)"
+        "en": "Render antialiasing",
+        "ru": "Сглаживание рендера"
       },
       "default": "0",
       "choices": [
@@ -415,8 +428,8 @@
       "key": "render_msaa",
       "type": "choice",
       "title": {
-        "en": "MSAA (OpenGL ES)",
-        "ru": "MSAA (OpenGL ES)"
+        "en": "MSAA",
+        "ru": "MSAA"
       },
       "default": "0",
       "choices": [
@@ -441,8 +454,8 @@
       "key": "render_upscaler",
       "type": "choice",
       "title": {
-        "en": "Render upscaling (OpenGL ES)",
-        "ru": "Апскейлинг рендера (OpenGL ES)"
+        "en": "Render upscaling",
+        "ru": "Апскейлинг рендера"
       },
       "default": "0",
       "choices": [
@@ -456,10 +469,6 @@
         {
           "value": "1",
           "title": "FSR 1"
-        },
-        {
-          "value": "3",
-          "title": "FSR 3.1"
         }
       ]
     }

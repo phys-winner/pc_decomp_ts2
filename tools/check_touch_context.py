@@ -199,6 +199,7 @@ static uint32_t *checked_word(uint32_t address) {
               function(settings, 'static int ui_modal_gen(') + function(settings, 'static int ui_story_window(') + function(settings, 'static int ui_modal_fits(') +
               function(settings, 'void sub_A0972F48(void)') +
               function(settings, 'uint32_t s2_ui_pick(') +
+              'uint32_t s2_ui_mouse_pick(uint32_t root,int x,int y){return s2_ui_pick(root,x,y);}\n' +
               '\n'.join(line for line in touch.splitlines() if not line.startswith('#include')) +
               function(android, 'JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeTouchToolToken(') +
               function(android, 'JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeTouchCursor(') +

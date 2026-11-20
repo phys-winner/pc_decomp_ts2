@@ -16,6 +16,7 @@ STUBS = {
     'org/sims2/port/launcher/Launch.java': '''package org.sims2.port.launcher;
 public class Launch {public static java.util.Map<String,String> choices=new java.util.HashMap<>();
 public static void adopt(android.content.Context c,java.util.Map<String,String> values){for(String key:values.keySet())choices.putIfAbsent(key,values.get(key));}}''',
+    'org/sims2/port/launcher/PortOptions.java': 'package org.sims2.port.launcher; public class PortOptions {public static int upscaler;public static void migrateUpscaler(android.content.Context c){upscaler++;}}',
     'org/sims2/port/TouchLayer.java': 'package org.sims2.port; class TouchLayer {static String old="";static String readText(java.io.File f){return old;}}',
     'org/sims2/port/PreferencesCheck.java': '''package org.sims2.port;
 import java.util.Locale;import org.sims2.port.launcher.Launch;
@@ -53,7 +54,7 @@ public class PreferencesCheck {public static void main(String[] args){
  GamePreferences.targetRadius(100);assert GamePreferences.targetRadius()==48;
  assert prefs.optionWarning(c,"adaptive_ui","0")==null&&prefs.optionWarning(c,"ui_fsr","1")==null;
  assert prefs.optionWarning(c,"adaptive_ui","1")==null;
- prefs.migrate(c);assert Launch.choices.isEmpty();
+ prefs.migrate(c);assert Launch.choices.isEmpty()&&org.sims2.port.launcher.PortOptions.upscaler==1;
  TouchLayer.old="russian\\n";prefs.migrate(c);assert Launch.choices.get("option.game_language").equals("russian");
  Launch.choices.put("option.game_language","system");prefs.migrate(c);assert Launch.choices.get("option.game_language").equals("system");
  Launch.choices.clear();TouchLayer.old="unrecognized";prefs.migrate(c);assert Launch.choices.isEmpty();

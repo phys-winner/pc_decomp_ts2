@@ -36,7 +36,6 @@
   <string name="scale_pending">Muutosta arvoon %1$d%% ei vielä vahvistettu. Käytössä: %2$d%%.</string>
   <string name="image_mismatch">Pelitiedostot puuttuvat tai niitä ei tueta. Palauta Legacy Collection 2025:n Sims2EP9.exe ja ijl15.dll.</string>
   <string name="gamepad_help">Vasen sauva: osoitin; A: valitse, sitten sijoita; B: peruuta/Takaisin; X: oikea napsautus; Y: tauko. Oikea sauva: kamera; painettuna: kallistus. Liipaisimet: zoomaus; olkapainikkeet: kameran tai esineen kierto. Ristiohjain: selaa osoittimen luetteloa. Start: käyttöliittymä; Select: ohje. Vasen sauva painettuna: tarkka osoitin.</string>
-  <string name="upscale_fallback">FSR 3 ei ole käytettävissä (koodi %1$d). Käytetään FSR 1:tä.</string>
   <string name="ui_swipe_controls">Käyttöliittymän pyyhkäisysäätimet</string>
   <string name="time_controls">Ajan hallinta</string>
   <string name="time_swipe_hint">Pyyhkäise kellon tai nopeuspainikkeiden yli: oikealle nopeuttaaksesi, vasemmalle hidastaaksesi ja keskeyttääksesi. Keskellä oleva asteikko näyttää valitun nopeuden.</string>

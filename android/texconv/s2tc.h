@@ -1,6 +1,7 @@
 /* The pre-converted texture cache shared by the launcher's converter
- * (android/texconv/s2texconv.cpp, libs2texconv.so) and the game's renderer
- * (android/host/d3d9_texcache.c).
+ * (android/texconv/s2texconv.cpp, libs2texconv.so) and the game's renderers
+ * (android/host/d3d9_texcache.c: the file, lookups and the encoder for both;
+ * android/render/s2r_texcache.c: the native renderers' storage).
  *
  * The Sims 2 keeps its textures as TXTR resources (RCOL cImageData) in DBPF
  * packages, the larger mip levels in LIFO resources (cLevelInfo). The game
@@ -17,10 +18,11 @@
  *   data: each entry's blocks, 16-byte aligned
  *   index: entry_count s2tc_entry records sorted by key, at index_offset
  * Keys are XXH64 of the original level bytes with the source format as the
- * seed; a lookup also checks the byte count and dimensions. An entry's ETC2
+ * seed; a lookup also checks the byte count and dimensions. The old GLES
+ * layer stores every converted texture of one format alike: an entry's ETC2
  * RGB blocks (opaque DXT levels) become ETC2 RGBA8 at upload with an opaque
- * EAC alpha block before each, so every converted texture of one format
- * shares one GL storage format whatever its levels hold. */
+ * EAC alpha block before each. The native renderers keep an opaque DXT1
+ * texture (first level ETC2 RGB) as ETC2 RGB, 8 bytes a block. */
 #ifndef S2TC_H
 #define S2TC_H
 

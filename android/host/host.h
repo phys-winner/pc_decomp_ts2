@@ -148,6 +148,12 @@ void void_machine_leave(void);
 /* Release the machine around a blocking host operation. */
 void void_blocking_begin(void);
 void void_blocking_end(void);
+/* The calling thread's waits for the machine are urgent (the audio producer):
+ * the holder offers it at its next loop back-edge. */
+void void_machine_urgent(int urgent);
+/* Lend the machine to the urgent producer alone, wherever it waits in the
+ * queue, from a host call no other guest thread may enter; 1 after a loan. */
+int void_machine_lend_urgent(void);
 uint32_t void_thread_id(void);
 uint32_t void_get_last_error(void);
 void void_set_last_error(uint32_t e);
@@ -270,6 +276,8 @@ void void_object_signal(void_object *object);
 
 /* ------------------------------------------------------------- registry */
 void void_registry_init(const char *data_dir);
+/* Wait until the registry text the writer thread holds is on disk. */
+void void_registry_flush(void);
 void void_reg_seed_string(const char *path, const char *name, const char *text);
 void void_reg_seed_dword(const char *path, const char *name, uint32_t value);
 void void_reg_set_string(const char *path, const char *name, const char *text);
@@ -301,6 +309,26 @@ void void_perf_hint_start(int32_t game_tid, int32_t render_tid, int64_t target_n
 void void_perf_hint_report(int64_t actual_ns, int64_t target_ns);
 uint32_t void_tick_ms(void);
 void void_set_time_scale(double scale);
+
+/* ---------------------------------------------------------------- audio */
+/* audio.c: the native output the game's own mixer renders into, drained by an
+ * AAudio low-latency callback. Called by a guest thread holding the machine;
+ * open, close and wait release it while they block. */
+void void_audio_log_start(void);
+uint32_t void_audio_open(uint32_t min_rate, uint32_t max_rate);   /* the FIFO's frame rate */
+void void_audio_close(void);
+int void_audio_wait(uint32_t timeout_ms);        /* 1: render void_audio_want() frames now */
+uint32_t void_audio_want(void);                  /* frames to the high-water mark, in 16-frame blocks */
+uint32_t void_audio_region(uint32_t *guest, uint32_t frames);   /* contiguous room at the write position */
+void void_audio_commit(uint32_t frames);         /* publish PCM written to the region */
+uint32_t void_audio_pending_ms(void);            /* rendered audio not yet heard */
+void void_audio_wake(void);
+/* The producer waited `ns` for a lock that guest thread `owner` held (0: free). */
+void void_audio_blocked_by(uint32_t owner, uint64_t ns);
+/* The producer stops rendering: FIFO underruns until it commits again are not its lateness. */
+void void_audio_producer_stopped(void);
+/* android_main.c: bit 0 is set while the activity is paused; each change adds 2. */
+uint64_t void_audio_pause_state(void);
 
 /* ------------------------------------------------------------ exceptions */
 void void_eh_init(void);

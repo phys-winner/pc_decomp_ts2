@@ -56,6 +56,7 @@ static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int n,const uint3
 }
 static const char *touch_type(uint32_t w){return MEM32(w)==0xA0E53EECu?".?AVcGZWinBtn@@":"";}
 static unsigned touch_widget(uint32_t w){return w==0x2800?fixture_flags:0;}
+static unsigned touch_mouse_text(uint32_t r,uint32_t h,int x,int y){(void)r;(void)h;(void)x;(void)y;return 0;}
 static int fixture_world_x;
 static uint32_t s2_ui_pick(uint32_t root,int x,int y){
  assert(root==0x1000);if(fixture_world_x&&x>=fixture_world_x)return scene_window;if(reenter==1)++fixture_epoch;if(reenter==2)++fixture_context;

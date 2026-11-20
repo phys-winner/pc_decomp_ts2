@@ -1,6 +1,7 @@
 /* The GL side of Direct3D 9: EGL, render targets, state, draws, blits, present. */
 #define _GNU_SOURCE
 #include "d3d9_internal.h"
+#include "d3d9_texcache.h"
 #include "hud.h"
 #include "sims2_settings.h"
 #include <errno.h>
@@ -241,10 +242,9 @@ static void fb_forget_all(void);
 /* At a present, after the frame went out: a changed render scale gives every
  * screen-sized target its new storage (contents lost, as after a reset; the
  * game draws the next frame whole). */
-void d3d_scaled_follow(d3d_device *dev)
+int d3d_scaled_retarget(float k)
 {
-    float k = d3d_screen_scale(dev->pp[0]);
-    if (!scaled_count || k == applied_scale) { applied_scale = k; return; }
+    if (!scaled_count || k == applied_scale) { applied_scale = k; return 0; }
     for (int i = 0; i < scaled_count; ++i) {
         if (scaled_is_texture[i]) {
             d3d_texture *t = (d3d_texture *)scaled[i];
@@ -256,10 +256,20 @@ void d3d_scaled_follow(d3d_device *dev)
             d3d_surface_storage(s);
         }
     }
-    void_log("[gl] render scale %.3f -> %.3f: %d targets now %ux%u", applied_scale, k, scaled_count,
+    applied_scale = k;
+    return scaled_count;
+}
+
+float d3d_scaled_applied(void) { return applied_scale; }
+
+void d3d_scaled_follow(d3d_device *dev)
+{
+    float was = applied_scale, k = d3d_screen_scale(dev->pp[0]);
+    int n = d3d_scaled_retarget(k);
+    if (!n) return;
+    void_log("[gl] render scale %.3f -> %.3f: %d targets now %ux%u", was, k, n,
         dev->backbuffer ? d3d_scaled_size(dev->backbuffer->width, k) : 0,
         dev->backbuffer ? d3d_scaled_size(dev->backbuffer->height, k) : 0);
-    applied_scale = k;
     fb_forget_all();
     dev->fbo_dirty = 1;
 }
@@ -878,6 +888,17 @@ static int bgra_of(d3d_device *d, int usage, int index)
 
 /* ProcessVertices uses a private VAO, leaving the draw attribute cache intact.
  * Validate with 64-bit offsets before asking GL to read a guest stream. */
+/* The native renderers have no GL buffers of the game's: ProcessVertices reads the vertex range
+   from the guest copies through buffers of its own, deleted by d3d_process_inputs_done. */
+static GLuint process_temp[16];
+static int process_temp_count;
+
+void d3d_process_inputs_done(void)
+{
+    if (process_temp_count) glDeleteBuffers(process_temp_count, process_temp);
+    process_temp_count = 0;
+}
+
 int d3d_process_inputs(d3d_device *d, const MOJOSHADER_parseData *pd, uint32_t first, uint32_t count, int bind)
 {
     static const uint8_t bytes[] = {4,8,12,16,4,4,4,8,4,4,8,4,8,4,4,4,8};
@@ -897,7 +918,15 @@ int d3d_process_inputs(d3d_device *d, const MOJOSHADER_parseData *pd, uint32_t f
         if (end > b->size || stride > INT32_MAX) return 0;
         if (bind) {
             const attr_format *f = &attr_formats[e->type];
-            glBindBuffer(GL_ARRAY_BUFFER, b->gl);
+            if (s2r_on()) {
+                if (!b->shadow || process_temp_count >= 16) return 0;
+                GLuint temp;
+                glGenBuffers(1, &temp);
+                process_temp[process_temp_count++] = temp;
+                glBindBuffer(GL_ARRAY_BUFFER, temp);
+                glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(end - offset), GPTR(b->shadow + (uint32_t)offset), GL_STREAM_DRAW);
+                offset = 0;
+            } else glBindBuffer(GL_ARRAY_BUFFER, b->gl);
             glVertexAttribPointer((GLuint)i, f->size, f->type, f->norm, (GLsizei)stride, (const void *)(uintptr_t)offset);
             glEnableVertexAttribArray((GLuint)i);
         }
@@ -1096,7 +1125,6 @@ int d3d_gl_draw(d3d_device *d, uint32_t primitive, uint32_t start_vertex, uint32
 {
     (void)prim_count; (void)min_index;
     ++draw_calls;
-    if(d3d_filter_scene(d))filter_done(d);
     d3d_shader *vs = (d3d_shader *)d->st.vs, *ps = (d3d_shader *)d->st.ps;
     /* POSITIONT vertices are already transformed: D3D9 runs no vertex shader
      * for them (Wine: use_vs() is false for a position_transformed
@@ -1128,7 +1156,6 @@ int d3d_gl_draw(d3d_device *d, uint32_t primitive, uint32_t start_vertex, uint32
             return 0;
         float hx = d->st.viewport[2] ? 1.0f / (float)d->st.viewport[2] : 0.0f;
         float hy = d->st.viewport[3] ? 1.0f / (float)d->st.viewport[3] : 0.0f;
-        d3d_filter_jitter(d,&hx,&hy);
         int alpha_func = d->st.rs[15] ? (int)d->st.rs[25] : 8;
         d3d_shader_upload(d, hx, hy, alpha_func, (float)(d->st.rs[24] & 0xFF));
     }
@@ -2188,6 +2215,7 @@ void d3d_gl_present(d3d_device *dev, uint64_t game_cpu_ns, uint64_t game_wait_ns
         gpu_timer_begin();
     }
     d3d_scaled_follow(dev);
+    d3d_texcache_report();
     void_hud_present();
     if (frame_presented || !window_mode) void_android_frame_presented();
 }

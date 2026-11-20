@@ -18,6 +18,20 @@ static const char d3d_cubic_glsl[] =
 " c.rgb*=c.a;sum+=c*vpCubic(p.x-f.x-o.x)*vpCubic(p.y-f.y-o.y);}\n"
 " sum=clamp(sum,0.0,1.0);sum.rgb=sum.a>0.00001?clamp(sum.rgb/sum.a,0.0,1.0):vec3(0.0);return sum;}\n";
 
+/* FXAA at the output size, after any upscaling (the scene presenter and the native renderers'
+ * present, s2r_filter.c): `image` and `target` (the output size) come from the includer. */
+static const char d3d_fxaa_glsl[]=
+    "vec3 tap(vec2 uv){return texture(image,uv).rgb;}\n"
+    "void main(){vec2 px=1.0/vec2(textureSize(image,0)),uv=gl_FragCoord.xy/target;vec3 luma=vec3(.299,.587,.114);\n"
+    "vec3 m=tap(uv);float nw=dot(tap(uv+vec2(-1,-1)*px),luma),ne=dot(tap(uv+vec2(1,-1)*px),luma);\n"
+    "float sw=dot(tap(uv+vec2(-1,1)*px),luma),se=dot(tap(uv+vec2(1,1)*px),luma),mid=dot(m,luma);\n"
+    "float lo=min(mid,min(min(nw,ne),min(sw,se))),hi=max(mid,max(max(nw,ne),max(sw,se)));\n"
+    "if(hi-lo<max(.0312,hi*.125)){color=vec4(m,1);return;}\n"
+    "vec2 dir=vec2(-((nw+ne)-(sw+se)),(nw+sw)-(ne+se));float reduce=max((nw+ne+sw+se)/32.0,1.0/128.0);\n"
+    "dir=clamp(dir/(min(abs(dir.x),abs(dir.y))+reduce),vec2(-8),vec2(8))*px;\n"
+    "vec3 a=.5*(tap(uv-dir/6.0)+tap(uv+dir/6.0));vec3 b=a*.5+.25*(tap(uv-dir*.5)+tap(uv+dir*.5));\n"
+    "float lb=dot(b,luma);color=vec4(lb<lo||lb>hi?a:b,1);}";
+
 /* Rewrites only ordinary texture lookups; explicit LOD/gradient/depth reads keep their D3D meaning. */
 static inline char *d3d_ui_filter_source(const char *source)
 {

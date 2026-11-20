@@ -1,5 +1,9 @@
 /* advapi32 registry: a small writable hive kept in memory and saved to
- * <data>/registry.txt after every change.
+ * <data>/registry.txt after every change, by a writer thread: rewriting the
+ * file on FUSE storage took 36 ms, which the caller spent holding the guest
+ * machine (the audio producer waited for it at startup). The text is built
+ * under reg_lock; void_registry_flush writes what is pending before a pause
+ * or an exit.
  *
  * Keys are full paths under HKLM/HKCU/HKCR ("HKCU\Software\..."), compared
  * case-insensitively; the 32-bit view folds Software\WOW6432Node into
@@ -10,6 +14,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <strings.h>
+#include <unistd.h>
 
 #define HKEY_CLASSES_ROOT_ 0x80000000u
 #define HKEY_CURRENT_USER_ 0x80000001u
@@ -42,6 +47,12 @@ static int key_count, key_cap;
 static pthread_mutex_t reg_lock = PTHREAD_MUTEX_INITIALIZER;
 static char store_path[1100];
 static int loading;
+/* The newest text not yet written, and the writer's state (store_lock). */
+static pthread_mutex_t store_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t store_wake = PTHREAD_COND_INITIALIZER, store_done = PTHREAD_COND_INITIALIZER;
+static char *store_pending;
+static size_t store_pending_len;
+static int store_writing, store_writer;
 
 static const char *root_name(uint32_t root)
 {
@@ -131,12 +142,46 @@ static void hex_out(FILE *f, const uint8_t *data, uint32_t size)
     for (uint32_t i = 0; i < size; ++i) fprintf(f, "%02x", data[i]);
 }
 
-static void save_store(void)
+static void write_store_text(const char *text, size_t len)
 {
-    if (!store_path[0]) return;
     char tmp[1200];
     snprintf(tmp, sizeof tmp, "%s.tmp", store_path);
     FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    size_t written = fwrite(text, 1, len, f);
+    if (fclose(f) || written != len) { unlink(tmp); return; }
+    rename(tmp, store_path);
+}
+
+static void *store_writer_main(void *unused)
+{
+    (void)unused;
+    pthread_setname_np(pthread_self(), "registry writer");
+    pthread_mutex_lock(&store_lock);
+    for (;;) {
+        while (!store_pending) pthread_cond_wait(&store_wake, &store_lock);
+        char *text = store_pending;
+        size_t len = store_pending_len;
+        store_pending = NULL;
+        store_writing = 1;
+        pthread_mutex_unlock(&store_lock);
+        write_store_text(text, len);
+        free(text);
+        pthread_mutex_lock(&store_lock);
+        store_writing = 0;
+        pthread_cond_broadcast(&store_done);
+    }
+    return NULL;
+}
+
+/* Called with reg_lock held: the hive as text, handed to the writer (a newer
+ * text replaces one not yet written). */
+static void save_store(void)
+{
+    if (!store_path[0]) return;
+    char *text = NULL;
+    size_t len = 0;
+    FILE *f = open_memstream(&text, &len);
     if (!f) return;
     for (int i = 0; i < key_count; ++i) {
         fprintf(f, "[%s]\n", keys[i].path);
@@ -149,8 +194,34 @@ static void save_store(void)
             fputc('\n', f);
         }
     }
-    fclose(f);
-    rename(tmp, store_path);
+    if (fclose(f)) { free(text); return; }
+    pthread_mutex_lock(&store_lock);
+    free(store_pending);
+    store_pending = text;
+    store_pending_len = len;
+    if (!store_writer) {
+        pthread_t thread;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        store_writer = !pthread_create(&thread, &attr, store_writer_main, NULL);
+        pthread_attr_destroy(&attr);
+    }
+    if (store_writer) pthread_cond_signal(&store_wake);
+    else {                                  /* no thread: write here, as before */
+        text = store_pending;
+        store_pending = NULL;
+        write_store_text(text, len);
+        free(text);
+    }
+    pthread_mutex_unlock(&store_lock);
+}
+
+void void_registry_flush(void)
+{
+    pthread_mutex_lock(&store_lock);
+    while (store_pending || store_writing) pthread_cond_wait(&store_done, &store_lock);
+    pthread_mutex_unlock(&store_lock);
 }
 
 static uint32_t hex_in(const char *s, uint8_t *out, uint32_t cap)

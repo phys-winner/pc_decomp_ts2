@@ -36,7 +36,6 @@
   <string name="scale_pending">Změna na %1$d%% zatím není potvrzena. Použito: %2$d%%.</string>
   <string name="image_mismatch">Soubory hry chybí nebo nejsou podporovány. Obnovte Sims2EP9.exe a ijl15.dll z Legacy Collection 2025.</string>
   <string name="gamepad_help">Levá páčka: ukazatel; A: vybrat, pak umístit; B: zrušit/Zpět; X: pravé tlačítko; Y: pauza. Pravá páčka: kamera; stisknutá: náklon. Spouště: zoom; horní tlačítka: otáčení kamery či předmětu. Směrový kříž: posun seznamu pod ukazatelem. Start: rozhraní; Select: nápověda. Levá páčka stisknutá: přesný ukazatel.</string>
-  <string name="upscale_fallback">FSR 3 není k dispozici (kód %1$d). Používá se FSR 1.</string>
   <string name="ui_swipe_controls">Ovládat prvky rozhraní tahem</string>
   <string name="time_controls">Ovládání času</string>
   <string name="time_swipe_hint">Přejeďte přes hodiny nebo tlačítka rychlosti: doprava pro zrychlení, doleva pro zpomalení až do pozastavení. Stupnice uprostřed ukazuje zvolenou rychlost.</string>

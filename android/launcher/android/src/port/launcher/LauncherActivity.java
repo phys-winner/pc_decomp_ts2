@@ -90,6 +90,8 @@ public final class LauncherActivity extends Activity {
     private List<Install.ArchivePart> pendingPlan;
 
     private LinearLayout main, side, permissions, distributions, files, renderer, options, texturesBox, space, update, about, work;
+    /** port.json "folders": the player's own folders (The Sims 2: mods), a card each. */
+    private LinearLayout foldersBox;
     private final Map<Integer, TextView> notes = new HashMap<>();
     private final Map<Integer, LinearLayout> notices = new HashMap<>();
     private TextView workTitle, workText, workStop;
@@ -379,6 +381,7 @@ public final class LauncherActivity extends Activity {
         work.setVisibility(View.GONE);
         distributions = holder(main);
         files = holder(main);
+        foldersBox = holder(main);
         archiveProgress = ui.progress();
         archiveProgress.setLayoutParams(new LinearLayout.LayoutParams(-1, ui.dp(8)));
         archiveProgress.setMax(100);
@@ -538,7 +541,7 @@ public final class LauncherActivity extends Activity {
             View focused = group(section).findFocus();
             Object tag = focused != null ? focused.getTag() : null;
             switch (section) {
-            case Texts.PERM_FILES: refreshPermissions(); break;
+            case Texts.PERM_FILES: refreshPermissions(); refreshFolders(); break;
             case Texts.PLAY: refreshDistributions(idle); break;
             case Texts.GAME_FILES: {
                 refreshFiles(idle);
@@ -547,7 +550,7 @@ public final class LauncherActivity extends Activity {
                 break;
             }
             case Texts.RENDERER: refreshRenderer(); break;
-            case Texts.OPTIONS: refreshOptions(); break;
+            case Texts.OPTIONS: refreshOptions(); refreshFolders(); break;
             case Texts.TEXTURES: refreshTextures(idle); break;
             case Texts.SPACE: refreshSpace(idle); break;
             case Texts.UPDATE_AVAILABLE: refreshUpdate(); break;
@@ -1684,6 +1687,25 @@ public final class LauncherActivity extends Activity {
         }
         String hint = Texts.of(this, spec.optionsHint);
         if (!hint.isEmpty()) card.addView(ui.label(hint, 13, ui.muted));
+    }
+
+    /** A card per port.json folder: its path (selectable, with a copy button) and what goes there.
+     *  The folder is made once shared storage is writable, so a file manager finds it. */
+    private void refreshFolders() {
+        foldersBox.removeAllViews();
+        for (Spec.Folder f : spec.folders) {
+            File folder = spec.resolve(this, f.path);
+            if (!folder.isDirectory() && !folder.mkdirs()) android.util.Log.i("Launcher", "folder not made yet: " + folder);
+            LinearLayout card = ui.card(foldersBox);
+            card.addView(ui.heading(Texts.of(this, f.title)));
+            TextView path = ui.label(folder.getPath(), 13, ui.text);
+            path.setTextIsSelectable(true);
+            card.addView(path);
+            String hint = Texts.of(this, f.hint);
+            if (!hint.isEmpty()) card.addView(ui.label(hint, 13, ui.muted));
+            card.addView(ui.buttons(ui.button(Texts.t(this, Texts.COPY), Ui.SECONDARY,
+                () -> Diagnostics.copy(this, folder.getPath()))));
+        }
     }
 
     private void selectOption(Spec.Option option, String value) {

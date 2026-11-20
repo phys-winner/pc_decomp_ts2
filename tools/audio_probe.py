@@ -1,4 +1,4 @@
-"""Host compiler for the transplanted DirectSound/AAudio fixtures."""
+"""Host compiler for the native audio output and SND driver fixtures."""
 import os
 from pathlib import Path
 import subprocess

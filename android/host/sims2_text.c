@@ -83,8 +83,9 @@ static uint32_t text_field(uint32_t manager, int x, int y, uint32_t *root)
         (s2_touch_context() & S2_TOUCH_LOADING) || (void_input_key_state(1) & 0x8000) ||
         (void_input_key_state(2) & 0x8000) || (void_input_key_state(4) & 0x8000)) return 0;
     *root = MEM32(manager + 0x44);
-    if (!*root || !void_vm_readable(*root, 0xEC) || !void_vm_readable(MEM32(*root), 0xC0)) return 0;
-    uint32_t hit = s2_ui_pick(*root, x, y);
+    if (!*root || !void_vm_readable(*root, 0xEC) || !void_vm_readable(MEM32(*root), 0xC4)) return 0;
+    /* The field the click focused: an ignoremouse bitmap may cover it (s2_ui_mouse_pick). */
+    uint32_t hit = s2_ui_mouse_pick(*root, x, y);
     uint32_t field = s2_touch_text_editable(hit) && MEM32(manager + 0x38) == hit ? hit : 0;
     if (!field) return 0;
     for (unsigned depth = 0; hit && hit != *root && depth < 16; ++depth) {

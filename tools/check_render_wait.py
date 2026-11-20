@@ -33,6 +33,8 @@ static int void_helper_cores(void *p) { (void)p;return 0; }
 static const char *void_data_dir(void) { return NULL; }
 static void void_log(const char *fmt,...) { (void)fmt; }
 static void void_fatal(const char *fmt,...) { (void)fmt;abort(); }
+static _Atomic unsigned loans;
+static int void_machine_lend_urgent(void) { atomic_fetch_add(&loans,1);return 0; }
 void d3d_rt_commit(void);
 void d3d_rt_frame_done(void);
 static int counted_broadcast(pthread_cond_t *p);

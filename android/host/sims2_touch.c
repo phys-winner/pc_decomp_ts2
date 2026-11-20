@@ -1275,6 +1275,16 @@ static unsigned touch_widget(uint32_t window)
     return flags;
 }
 
+/* 16 when the full pick (s2_ui_pick) hit a decoration flagged winflag_ignoremouse (0x200000)
+ * and the window a mouse click at (x, y) reaches instead is an editable text field. */
+static unsigned touch_mouse_text(uint32_t root, uint32_t hit, int x, int y)
+{
+    if (!root || !hit || !void_vm_readable(hit, 0xEC) || !(MEM32(hit + 0xE8) & 0x200000u) ||
+        !void_vm_readable(MEM32(root), 0xC4)) return 0;
+    uint32_t field = s2_ui_mouse_pick(root, x, y);
+    return field && field != hit && s2_touch_text_editable(field) ? 16 : 0;
+}
+
 static uint32_t touch_pie_owner(uint32_t window)
 {
     for (unsigned depth = 0; window && depth < 16 && void_vm_readable(window, 0xEC); ++depth) {
@@ -1569,7 +1579,7 @@ static uint32_t touch_ui_target(uint32_t root, uint32_t hit, int *x, int *y, int
                 : touch_ui_button(parent)) return 0;
         parent = MEM32(parent + 0x58);
     }
-    if (!pie && hit && (touch_widget(hit) & (4 | 8 | 16))) return 0;
+    if (!pie && hit && ((touch_widget(hit) & (4 | 8 | 16)) || touch_mouse_text(root, hit, *x, *y))) return 0;
     int px = (int)(*x / factor), py = (int)(*y / factor);
     double minimum = side / factor, best_distance = 1e30;
     uint32_t stack[512] = {pie ? pie : root}, best = 0;
@@ -2884,6 +2894,7 @@ void s2_touch_barrier(unsigned serial)
                     ? 2 : 1 | (int)touch_widget(hit);
             else if (hit != root && touch_type(hit)[0] && (!touch_scene_ancestry(hit) || touch_ui_button(hit)))
                 result = 1 | (int)touch_widget(hit);
+            if ((result & 3) == 1 && !(result & 16)) result |= (int)touch_mouse_text(root, hit, x, y);
         }
         if (context == S2_TOUCH_CHOOSER && touch_chooser_window(root)) result = 1 | 256;
         else if ((result & 3) == 1 || (!step && radius < 0 && result == 2)) {

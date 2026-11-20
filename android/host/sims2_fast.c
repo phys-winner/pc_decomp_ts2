@@ -117,6 +117,23 @@ static void qfs_copy(uint32_t to, uint32_t from, uint32_t count)
     for (uint32_t i = 0; i < count; ++i) dst[i] = src[i];
 }
 
+/* Native loops offer the machine as the lifted loops they replace do, so an
+ * urgent request (the audio producer's, threads.c) is answered in the middle of
+ * the work. A large resource kept the QFS decoder busy for 75 ms while a
+ * neighborhood was created on the Helio G90T; the window tree's search by ID
+ * held the machine 10-15 ms in Live mode. The yield keeps this thread's
+ * registers; a native loop's state is in host locals and its own frame. */
+static void native_backedges(uint32_t n)
+{
+    uint32_t total = __atomic_load_n(&g_backedges, __ATOMIC_RELAXED) + n;
+    if (total >= RECOMP_YIELD_EVERY && recomp_yield_hook) {
+        g_backedges = 0;
+        recomp_yield_hook();
+    } else {
+        g_backedges = total;
+    }
+}
+
 /* QFS/RefPack decoder, cdecl(input, consumed?, output, capacity), A09CC369.
  * Keep the guest's header variants, command-before-copy capacity checks,
  * overlapping recurrence, scratch writes, volatile GPRs and final flags.
@@ -191,6 +208,7 @@ void sub_A09CC369(void)
         }
         qfs_copy(out, out - distance, count);
         out += count;
+        native_backedges(1u + plain + count);
     }
     g_eax = result;
     g_ecx = ecx;
@@ -300,6 +318,7 @@ static uint32_t find_child(uint32_t self, uint32_t id)
     MEM32(list + 8) += 1;
     uint32_t head = MEM32(list), found = 0;
     for (uint32_t node = MEM32(head); node != head; node = MEM32(node)) {
+        native_backedges(8u);                    /* the lifted walk's loop and calls per child */
         uint32_t child = MEM32(node + 8);
         uint32_t search = MEM32(MEM32(child) + 0x9C);
         if (search == FIND_CHILD_VA && MEM32(child + 0x58) != self) {

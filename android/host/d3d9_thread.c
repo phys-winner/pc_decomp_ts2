@@ -121,7 +121,21 @@ static void game_wait(uint64_t until, int frames)
     for (;;) {
         atomic_store(&game_sleeping, 1);
         if (game_waiting_done(until, frames)) break;
-        pthread_cond_wait(&to_game, &lock);
+        if (frames >= 0) {
+            pthread_cond_wait(&to_game, &lock);
+            continue;
+        }
+        /* Mid-call, only the audio producer may have the machine (ProcessVertices
+         * and readbacks waited 50-100 ms here on Mali): check every millisecond. */
+        pthread_mutex_unlock(&lock);
+        int lent = void_machine_lend_urgent();
+        pthread_mutex_lock(&lock);
+        if (lent) continue;
+        struct timespec until_ts;
+        clock_gettime(CLOCK_REALTIME, &until_ts);
+        until_ts.tv_nsec += 1000000L;
+        if (until_ts.tv_nsec >= 1000000000L) { until_ts.tv_nsec -= 1000000000L; ++until_ts.tv_sec; }
+        if (!game_waiting_done(until, frames)) pthread_cond_timedwait(&to_game, &lock, &until_ts);
     }
     atomic_store(&game_sleeping, 0);
     pthread_mutex_unlock(&lock);

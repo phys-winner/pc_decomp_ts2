@@ -45,11 +45,6 @@ int memcmp(const void *aa, const void *bb, size_t n) {
 
 '''+snippet+dx[dx_type_start:dx_type_end]+r'''
 d3d_device *g_d3d_device;
-/* This fixture exercises GLES writers; entering the DXVK boundary is an error. */
-void *void_dxvk_native(uint32_t guest) { (void)guest; return NULL; }
-void void_dxvk_constants(uint32_t device,int pixel,int type,uint32_t start,const void *data,uint32_t count) {
-    (void)device;(void)pixel;(void)type;(void)start;(void)data;(void)count;__builtin_trap();
-}
 '''+dx[dx_writers_start:dx_writers_end]+r'''
 static d3d_device test_device;
 static uint8_t payload[sizeof(d3d_state) * 2];

@@ -36,7 +36,6 @@
   <string name="scale_pending">A %1$d%% értékre váltás még nincs megerősítve. Alkalmazva: %2$d%%.</string>
   <string name="image_mismatch">A játékfájlok hiányoznak vagy nem támogatottak. Állítsd vissza a Legacy Collection 2025 Sims2EP9.exe és ijl15.dll fájljait.</string>
   <string name="gamepad_help">Bal kar: mutató; A: kijelölés, majd elhelyezés; B: mégse/Vissza; X: jobb kattintás; Y: szünet. Jobb kar: kamera; lenyomva: döntés. Ravaszok: nagyítás; vállgombok: kamera vagy tárgy forgatása. Iránygombok: lista görgetése a mutatónál. Start: felület; Select: súgó. Bal kar lenyomva: pontos mutató.</string>
-  <string name="upscale_fallback">Az FSR 3 nem érhető el (kód: %1$d). FSR 1 használata.</string>
   <string name="ui_swipe_controls">Felület vezérlése csúsztatással</string>
   <string name="time_controls">Idővezérlés</string>
   <string name="time_swipe_hint">Húzd az ujjad az órán vagy a sebességgombokon: jobbra a gyorsításhoz, balra a lassításhoz és szüneteltetéshez. A középső skála mutatja a kiválasztott sebességet.</string>

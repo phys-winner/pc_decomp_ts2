@@ -86,7 +86,12 @@ public class OptionsCheck {
   dialog=open(button);dialog.callback.onClick(dialog,0);assert dialog.showing&&Toast.last.equals("message:2");dialog.dismiss();
   context.files=new java.io.File(args[0]);Spec.instance.options.get(0).arm64Only=true;android.os.Process.bit64=false;
   content=new LinearLayout();PortOptions.append(context,content,launch);assert content.children.size()==Spec.instance.options.size()-1;
-  System.out.println("PASS in-game port options: "+selections+" manifest choices, resolution default100%, MSAA0/2/4, explicit validation, shared atomic state, fresh reads, failed-save feedback");
+  // FSR 3.1 left the port: a saved \"3\" becomes FSR 1; other choices stay.
+  assert State.put(context,State.CHOICES,"option.render_upscaler","3");PortOptions.migrateUpscaler(context);
+  assert State.get(context,State.CHOICES,"option.render_upscaler",null).equals("1");
+  assert State.put(context,State.CHOICES,"option.render_upscaler","0");PortOptions.migrateUpscaler(context);
+  assert State.get(context,State.CHOICES,"option.render_upscaler",null).equals("0");
+  System.out.println("PASS in-game port options: "+selections+" manifest choices, resolution default100%, MSAA0/2/4, explicit validation, shared atomic state, fresh reads, failed-save feedback, FSR 3.1 choice -> FSR 1");
  }
 }'''
 
@@ -98,6 +103,7 @@ def main():
     assert by_key['screen_resolution']['default'] == '100'
     assert {choice['value'] for choice in by_key['render_msaa']['choices']} == {'0', '2', '4'}
     assert by_key['frame_rate_limit']['default'] == 'game'
+    assert 'loading_animations' not in by_key   # no player option: loading screens keep the game's own pacing (sims2_loading.c)
     assert {choice['value'] for choice in by_key['frame_rate_limit']['choices']} == {'game', '0', '30', '60', '90', '120'}
     required = {'game_language', 'screen_resolution', 'frame_rate_limit', 'ui_fsr', 'render_aa', 'render_msaa', 'render_upscaler'}
     assert required <= by_key.keys()

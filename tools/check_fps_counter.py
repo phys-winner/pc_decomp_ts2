@@ -1,5 +1,6 @@
 """Check the UT3 counter's formatting and frame-time scale on the JVM."""
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -8,7 +9,7 @@ from check_touch import JDK, ROOT
 
 
 CHECK = r"""
-package org.sims2.port;
+package port.launcher;
 
 public class FpsCounterCheck {
     public static void main(String[] args) {
@@ -24,8 +25,6 @@ public class FpsCounterCheck {
         assert FpsCounter.color(16_666) == 0xff00ff00;
         assert FpsCounter.color(66_667) == 0xffff0000;
         assert FpsCounter.hudScale(2.625f) == 2.0f;
-        assert FpsCounter.properties("panvk.api=1.4.363\npanvk.driverId=20\nignored")
-                         .get("panvk.api").equals("1.4.363");
         assert FpsCounter.statName("77 (a (b) c) R").equals("a (b) c");
         assert FpsCounter.meminfo("MemTotal: 11821596 kB").get("MemTotal") == 11821596L * 1024;
     }
@@ -38,10 +37,10 @@ def main():
         folder = Path(directory)
         check = folder / "FpsCounterCheck.java"
         check.write_text(CHECK, encoding="utf-8")
-        source = ROOT / "android/app/src/org/sims2/port/FpsCounter.java"
+        source = Path(os.environ.get("PORT_LAUNCHER", ROOT / "android/launcher")) / "android/src/port/launcher/FpsCounter.java"
         subprocess.run([JDK / "bin/javac.exe", "--release", "8", "-encoding", "UTF-8", "-d", folder,
                         source, check], check=True)
-        subprocess.run([JDK / "bin/java.exe", "-ea", "-cp", folder, "org.sims2.port.FpsCounterCheck"], check=True)
+        subprocess.run([JDK / "bin/java.exe", "-ea", "-cp", folder, "port.launcher.FpsCounterCheck"], check=True)
     print("PASS UT3 FPS formatting, frame-time graph, and diagnostic parsing")
 
 
