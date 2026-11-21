@@ -341,8 +341,9 @@ static uint32_t ring_put(gl_ring *r, const void *data, uint32_t size)
     if (r->ptr) memcpy(r->ptr + at, data, size);
     else {
         glBindBuffer(GL_COPY_WRITE_BUFFER, r->name);
+        /* No GL_MAP_INVALIDATE_RANGE_BIT (see gl_buffer_write). */
         void *dst = glMapBufferRange(GL_COPY_WRITE_BUFFER, (GLintptr)at, (GLsizeiptr)size,
-            GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+            GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
         if (!dst) return UINT32_MAX;
         memcpy(dst, data, size);
         glUnmapBuffer(GL_COPY_WRITE_BUFFER);
@@ -921,8 +922,11 @@ static void gl_buffer_write(s2r_device *d, s2r_buffer *b, uint32_t offset, uint3
     if (!data || offset >= g->size) return;
     if (offset + size > g->size) size = g->size - offset;
     if (mode == S2R_WRITE_NOOVERWRITE) {
-        void *dst = glMapBufferRange(GL_COPY_WRITE_BUFFER, offset, size,
-            GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+        /* No GL_MAP_INVALIDATE_RANGE_BIT: with it the Adreno driver garbles the bytes outside the range
+           that queued draws still read (Adreno 650/735: the neighbourhood chooser's panels and text
+           thrown across the screen; the old layer's d3d9_resource.c learned it first). The whole range
+           is written anyway. */
+        void *dst = glMapBufferRange(GL_COPY_WRITE_BUFFER, offset, size, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
         if (dst) { memcpy(dst, data, size); glUnmapBuffer(GL_COPY_WRITE_BUFFER); return; }
     }
     glBufferSubData(GL_COPY_WRITE_BUFFER, offset, size, data);

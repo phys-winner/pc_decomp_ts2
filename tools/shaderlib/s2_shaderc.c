@@ -10,12 +10,19 @@
  * material the capture never saw). This file only writes its results as JSON.
  * (Heroes V's tools/shaderlib/h5_shaderc.c with The Sims 2's translator.)
  *
+ * It also applies the UI FSR 1 rewrite to a pixel shader's Vulkan text
+ * (android/render/s2r_uifilter.c, the device's code), so the library carries
+ * that SPIR-V as well.
+ *
  * Usage: s2_shaderc <list> <out.json>; each list line is
- * "vs|ps <sampler types, hex> <path>". */
+ * "vs|ps <sampler types, hex> <path>" (translate bytecode) or
+ * "ui 0 <path>" (the UI FSR 1 form of a GLSL text: "glsl"). */
 #include "s2r_translate.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+char *s2r_ui_filter_source(const char *src);
 
 static void json_string(FILE *f, const char *s)
 {
@@ -31,16 +38,42 @@ static void json_string(FILE *f, const char *s)
     fputc('"', f);
 }
 
-static int translate(FILE *out, int pixel, unsigned types, const char *path, int first)
+static uint8_t *read_file(const char *path, long *size_out)
 {
     FILE *f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "cannot open %s\n", path); return 0; }
+    if (!f) { fprintf(stderr, "cannot open %s\n", path); return NULL; }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    uint8_t *code = (uint8_t *)malloc((size_t)size + 4);
-    if (!code || fread(code, 1, (size_t)size, f) != (size_t)size) { fclose(f); free(code); fprintf(stderr, "cannot read %s\n", path); return 0; }
+    uint8_t *data = (uint8_t *)malloc((size_t)size + 4);
+    if (!data || fread(data, 1, (size_t)size, f) != (size_t)size) { fclose(f); free(data); fprintf(stderr, "cannot read %s\n", path); return NULL; }
     fclose(f);
+    data[size] = 0;
+    *size_out = size;
+    return data;
+}
+
+static int ui_filter(FILE *out, const char *path, int first)
+{
+    long size = 0;
+    uint8_t *data = read_file(path, &size);
+    if (!data) return 0;
+    if (!first) fputs(",\n", out);
+    fputs("{\"path\": ", out); json_string(out, path);
+    char *filtered = s2r_ui_filter_source((const char *)data);
+    if (filtered) { fputs(", \"glsl\": ", out); json_string(out, filtered); }
+    else fputs(", \"error\": \"no port block\"", out);
+    fputs("}", out);
+    free(filtered);
+    free(data);
+    return 1;
+}
+
+static int translate(FILE *out, int pixel, unsigned types, const char *path, int first)
+{
+    long size = 0;
+    uint8_t *code = read_file(path, &size);
+    if (!code) return 0;
     s2r_translation t;
     char error[512];
     if (!first) fputs(",\n", out);
@@ -94,7 +127,9 @@ int main(int argc, char **argv)
         unsigned types = 0;
         int consumed = 0;
         if (sscanf(line, "%3s %x %n", stage, &types, &consumed) != 2 || !consumed) continue;
-        if (!translate(out, !strcmp(stage, "ps"), types, line + consumed, first)) ok = 0;
+        int done = !strcmp(stage, "ui") ? ui_filter(out, line + consumed, first)
+                 : translate(out, !strcmp(stage, "ps"), types, line + consumed, first);
+        if (!done) ok = 0;
         first = 0;
     }
     fputs("\n]\n", out);

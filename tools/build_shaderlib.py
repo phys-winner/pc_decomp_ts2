@@ -1,28 +1,34 @@
 """The native renderers' shader library (generated/shaders/s2r_shaderlib.bin).
 
-The Sims 2 builds its shaders at run time from its own material text (D3DX
-assembles them on the device, d3dx9.c), so no build step can find them in the
-exe the way Heroes V's tools/build_shaderlib.py does. The library is made from
-the bytecode a device saw instead:
+The Sims 2 builds its shaders at run time from its own material text
+(TSData/Res/Materials/Materials.package, type 0xCD7FE87A: a script that links
+assembly fragments by light count, quality and pass) with the D3DX linked into
+the exe (fragment gathering, linking, assembly; only d3d9.dll is imported). No
+build step can enumerate them from the exe the way Heroes V's
+tools/build_shaderlib.py does, so the library is made from the bytecode
+devices saw, and everything after the bytecode happens here on the PC:
 
     python -X utf8 -B tools/build_shaderlib.py capture SERIAL PROFILE
-        pulls <profile>/shaderdump/<hash>.vs|ps, which a run with
-        `adb shell setprop debug.s2.shaderdump 1` writes for every game shader
-        the library lacks, into generated/shaders/capture (the hash is checked);
+        pulls <profile>/shaderdump, which a run with
+        `adb shell setprop debug.s2.shaderdump 1` fills with what the library
+        lacks: <hash>.vs|ps (bytecode) and <hash>.ps.<types>.types (a ps_1_x
+        sampler-type map the device needed), into generated/shaders/capture
+        (hashes are checked);
     python -X utf8 -B tools/build_shaderlib.py build [--force]
-        translates every captured shader once on the PC with
-        tools/shaderlib/s2_shaderc.c (MojoShader plus
-        android/render/s2r_translate.c, the code the renderers run on the device
-        for a shader the library lacks), compiles the Vulkan form with glslc of
-        the pinned NDK and writes one file: GLSL ES text for OpenGL ES, SPIR-V
-        words for Vulkan, the facts the renderers need per shader (inputs,
-        samplers, constant packing), and the fixed-function and present
-        shaders (android/render/shaders). tools/build_game_apk.py runs this
-        step and packs the file into runtime.zip (shaders/s2r_shaderlib.bin).
+        translates every shader once with tools/shaderlib/s2_shaderc.c
+        (MojoShader plus android/render/s2r_translate.c, the code the
+        renderers run on the device for a shader the library lacks), compiles
+        the Vulkan forms with glslc of the pinned NDK (pixel shaders twice:
+        plain and with the UI FSR 1 reads of android/render/s2r_uifilter.c)
+        and writes one file: GLSL ES text for OpenGL ES, SPIR-V words for
+        Vulkan, the facts the renderers need per shader (inputs, samplers,
+        constant packing), and the fixed-function and present shaders
+        (android/render/shaders). tools/build_game_apk.py runs this step and
+        packs the file into runtime.zip (shaders/s2r_shaderlib.bin).
 
 A shader the library lacks is still translated on the device (a mod's, a
-material no capture saw, a ps_1_x sampler-type map it was not built for), so
-the library only takes the first-use translations off the device.
+material no capture saw); `debug.s2.shaderlib=strict` refuses that, which is
+how a capture's coverage is checked.
 
 ps_1_x shaders declare no sampler types: the bound texture decides. They get
 one entry per map: all 2D, each used register alone as a cube map, and all of
@@ -36,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -66,12 +73,13 @@ MOJO_SOURCES = [
 # The switches of tools/build_android.py MOJO_FLAGS: the device's translation and this library
 # must produce the same text.
 MOJO_DEFINES = [f[2:] for f in B.MOJO_FLAGS if f.startswith("-D")] + ["_CRT_SECURE_NO_WARNINGS"]
-FORMAT = 1   # s2r_shaderlib.c LIB_FORMAT
+FORMAT = 2   # s2r_shaderlib.c LIB_FORMAT
 MAGIC = b"S2SHLIB\0"
 # Records of the library file, little-endian and packed; s2r_shaderlib.c parse() reads the same fields.
-SHADER_RECORD = "<QIIBBBBBIIIB16s16sHHIBBBHHHHHHHB8s8HI"
-BUILTIN_RECORD = "<IIII"
-assert struct.calcsize(SHADER_RECORD) == 120 and struct.calcsize(BUILTIN_RECORD) == 16
+SHADER_RECORD = "<QIIBBBBBIIIB16s16sHHIBBBHHHHHHHB8s8HIII"
+BUILTIN_RECORD = "<IIIIII"
+assert struct.calcsize(SHADER_RECORD) == 128 and struct.calcsize(BUILTIN_RECORD) == 24
+DUMP_NAME = re.compile(r"[0-9a-f]{16}\.(vs|ps)|[0-9a-f]{16}\.ps\.[0-9a-f]{1,8}\.types")
 
 
 def fnv64(data):
@@ -81,35 +89,53 @@ def fnv64(data):
     return h
 
 
+def dump_check(name, data):
+    """None when a dumped file is what its name says, else the reason."""
+    if name.endswith(".types"):
+        return None if not data else "a marker with contents"
+    return None if f"{fnv64(data):016x}" == name[:16] else f"the hash of its bytes is {fnv64(data):016x}"
+
+
 # ------------------------------------------------------------------ capture
 def capture(serial, profile):
-    """<profile>/shaderdump/<hash>.vs|ps of a device into generated/shaders/capture."""
+    """<profile>/shaderdump of a device into generated/shaders/capture."""
     if not re.fullmatch(r"userdata(-qa-[A-Za-z0-9_-]{1,64})?", profile):
         raise SystemExit("PROFILE: userdata or userdata-qa-NAME")
     remote = f"/sdcard/Sims2/{profile}/shaderdump"
     listing = subprocess.run([str(ADB), "-s", serial, "shell", f"ls {remote}"], capture_output=True, text=True)
-    names = [n.strip() for n in listing.stdout.split() if re.fullmatch(r"[0-9a-f]{16}\.(vs|ps)", n.strip())]
+    names = [n.strip() for n in listing.stdout.split() if DUMP_NAME.fullmatch(n.strip())]
     if not names:
         raise SystemExit(f"no shaders in {remote} (run with `adb shell setprop debug.s2.shaderdump 1` first)")
     CAPTURE.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
     pulled = WORK / "pulled"
-    pulled.mkdir(exist_ok=True)
-    added = 0
+    if pulled.is_dir():
+        shutil.rmtree(pulled)
+    pulled.mkdir()
+    # one pull of the folder (thousands of files), then the checks here
+    subprocess.run([str(ADB), "-s", serial, "pull", remote, str(pulled)], capture_output=True, check=True,
+                   env=dict(os.environ, MSYS_NO_PATHCONV="1"))
+    folder = pulled / "shaderdump"
+    added = skipped = 0
     for name in names:
-        target = pulled / name
-        subprocess.run([str(ADB), "-s", serial, "pull", f"{remote}/{name}", str(target)], capture_output=True, check=True,
-                       env=dict(os.environ, MSYS_NO_PATHCONV="1"))
+        target = folder / name
+        if not target.is_file():
+            print(f"skipped {name}: not pulled")
+            skipped += 1
+            continue
         data = target.read_bytes()
-        if f"{fnv64(data):016x}" != name[:16]:
-            print(f"skipped {name}: the hash of its bytes is {fnv64(data):016x}")
+        reason = dump_check(name, data)
+        if reason:
+            print(f"skipped {name}: {reason}")
+            skipped += 1
             continue
         final = CAPTURE / name
         if not final.is_file():
             final.write_bytes(data)
             added += 1
-    total = len(list(CAPTURE.glob("*.vs"))) + len(list(CAPTURE.glob("*.ps")))
-    print(f"{added} new shaders captured from {len(names)}; {total} in {CAPTURE.relative_to(ROOT).as_posix()}")
+    counts = {kind: len(list(CAPTURE.glob(f"*.{kind}"))) for kind in ("vs", "ps", "types")}
+    print(f"{added} new files captured from {len(names)} ({skipped} skipped); {CAPTURE.relative_to(ROOT).as_posix()} now holds "
+          f"{counts['vs']} vertex and {counts['ps']} pixel shaders, {counts['types']} sampler-type maps")
 
 
 # ------------------------------------------------------------ host tool
@@ -129,14 +155,15 @@ def host_environment():
 
 
 def tool_sources():
-    return [ROOT / "tools/shaderlib/s2_shaderc.c", RENDER / "s2r_translate.c"] + [MOJO / name for name in MOJO_SOURCES]
+    return [ROOT / "tools/shaderlib/s2_shaderc.c", RENDER / "s2r_translate.c", RENDER / "s2r_uifilter.c"] + \
+        [MOJO / name for name in MOJO_SOURCES]
 
 
 def build_tool():
     sources = tool_sources()
     digest = hashlib.sha256()
-    for path in sources + [RENDER / "s2r_translate.h"] + sorted(MOJO.glob("*.h")) + sorted((MOJO / "profiles").glob("*.h")) + \
-            [ROOT / "android/runtime/mojoshader_version.h"]:
+    for path in sources + [RENDER / "s2r_translate.h", ROOT / "android/host/fsr1.h"] + sorted(MOJO.glob("*.h")) + \
+            sorted((MOJO / "profiles").glob("*.h")) + [ROOT / "android/runtime/mojoshader_version.h"]:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     digest.update(json.dumps(MOJO_DEFINES).encode())
     out = WORK / "host"
@@ -164,9 +191,10 @@ def build_tool():
 
 
 def translate(tool, jobs, name):
-    """jobs: (pixel, types, path); the tool's JSON records in order."""
+    """jobs: (pixel, types, path), pixel "ui" for the UI FSR 1 rewrite; the tool's JSON records in order."""
     listing = WORK / f"{name}.txt"
-    listing.write_text("".join(f"{'ps' if p else 'vs'} {t:x} {path}\n" for p, t, path in jobs), encoding="utf-8")
+    stage = {0: "vs", 1: "ps", False: "vs", True: "ps", "ui": "ui"}
+    listing.write_text("".join(f"{stage[p]} {t:x} {path}\n" for p, t, path in jobs), encoding="utf-8")
     out = WORK / f"{name}.json"
     result = subprocess.run([str(tool), str(listing), str(out)], capture_output=True, text=True)
     if result.returncode:
@@ -217,12 +245,12 @@ def builtin_texts():
 
 # ---------------------------------------------------------------- build
 def inputs_digest():
-    captured = sorted(CAPTURE.glob("*.vs")) + sorted(CAPTURE.glob("*.ps")) if CAPTURE.is_dir() else []
+    captured = sorted(p for kind in ("vs", "ps", "types") for p in CAPTURE.glob(f"*.{kind}")) if CAPTURE.is_dir() else []
     digest = hashlib.sha256(f"format {FORMAT}\0".encode())
     for path in captured:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     for path in sorted(SHADERS.glob("*")) + [RENDER / "s2r_spec.h", Path(__file__), ROOT / "tools/build_android.py"] + \
-            tool_sources() + [RENDER / "s2r_translate.h"]:
+            tool_sources() + [RENDER / "s2r_translate.h", ROOT / "android/host/fsr1.h"]:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return captured, digest.hexdigest()
 
@@ -238,12 +266,21 @@ def build(force=False):
         return LIBRARY
     tool = build_tool()
     WORK.mkdir(parents=True, exist_ok=True)
-    shaders = []
     for path in captured:
+        reason = dump_check(path.name, path.read_bytes())
+        if reason:
+            raise SystemExit(f"{path.name}: {reason}")
+
+    shaders = []
+    for path in sorted(p for p in captured if p.suffix in (".vs", ".ps")):
         data = path.read_bytes()
-        if f"{fnv64(data):016x}" != path.stem:
-            raise SystemExit(f"{path.name}: the hash of its bytes is {fnv64(data):016x}")
         shaders.append({"hash": fnv64(data), "size": len(data), "pixel": path.suffix == ".ps", "path": path})
+    # sampler-type maps a device used (markers <hash>.ps.<types>.types)
+    wanted_maps = {}
+    for path in captured:
+        if path.suffix == ".types":
+            h, _, types = path.name.split(".")[:3]
+            wanted_maps.setdefault(int(h, 16), set()).add(int(types, 16))
     first = translate(tool, [(s["pixel"], 0, s["path"]) for s in shaders], "pass1")
     entries, rejected, retry = [], [], []
     for s, r in zip(shaders, first, strict=True):
@@ -261,7 +298,7 @@ def build(force=False):
             owners.append(s)
     for s, r in list(entries):
         if r["pixel"] and r["major"] == 1:
-            for m in sampler_maps(r):
+            for m in sorted(set(sampler_maps(r)) | wanted_maps.get(s["hash"], set())):
                 jobs.append((1, m, s["path"]))
                 owners.append(s)
     variants = translate(tool, jobs, "pass2") if jobs else []
@@ -274,6 +311,11 @@ def build(force=False):
     for s in retry:
         if s["hash"] not in answered:
             rejected.append((s, "no sampler-type map translates"))
+    # the same entry twice (a device's marker of a map the defaults already have)
+    unique = {}
+    for s, r in entries:
+        unique.setdefault((s["hash"], r["pixel"], r.get("types", 0)), (s, r))
+    entries = list(unique.values())
 
     # ---- SPIR-V of every game shader and of the builtin shaders
     spv_dir = WORK / "spv"
@@ -281,17 +323,35 @@ def build(force=False):
     for old in spv_dir.glob("*"):
         old.unlink()
     work = []
+    ui_jobs, ui_owners = [], []   # the UI FSR 1 form of every pixel shader's Vulkan text (s2r_uifilter.c)
     for i, (s, r) in enumerate(entries):
-        work.append(("frag" if r["pixel"] else "vert", "#version 450\n" + r["glsl"], spv_dir / f"{i:04d}.glsl", r))
+        text = "#version 450\n" + r["glsl"]
+        work.append(("frag" if r["pixel"] else "vert", text, spv_dir / f"{i:04d}.glsl", r, "spv"))
+        if r["pixel"]:
+            source = spv_dir / f"{i:04d}.plain.glsl"
+            source.write_text(text, encoding="utf-8", newline="\n")
+            ui_jobs.append(("ui", 0, source))
+            ui_owners.append((spv_dir / f"{i:04d}.ui.glsl", r))
     builtins = []
     for name, pixel, gles, vk in builtin_texts():
         entry = {"name": name, "gles": gles}
         builtins.append(entry)
-        work.append(("frag" if pixel else "vert", vk, spv_dir / name, entry))
+        work.append(("frag" if pixel else "vert", vk, spv_dir / name, entry, "spv"))
+        if name == "ff.frag":
+            source = spv_dir / "ff.plain.frag"
+            source.write_text(vk, encoding="utf-8", newline="\n")
+            ui_jobs.append(("ui", 0, source))
+            ui_owners.append((spv_dir / "ff.ui.frag", entry))
+    ui_failed = 0
+    for (path, owner), r in zip(ui_owners, translate(tool, ui_jobs, "uifilter") if ui_jobs else [], strict=True):
+        if "error" in r:
+            ui_failed += 1
+            continue
+        work.append(("frag", r["glsl"], path, owner, "spv_ui"))
     with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 8) - 2)) as pool:
         futures = [(job, pool.submit(glslc, job[0], job[1], job[2])) for job in work]
         for job, future in futures:
-            job[3]["spv"] = future.result()
+            job[3][job[4]] = future.result()
 
     # ---- the file: sections of packed little-endian records (s2r_shaderlib.c reads them)
     text = bytearray()
@@ -326,6 +386,7 @@ def build(force=False):
                 types |= kind << (2 * reg)
         attrs = r["attributes"][:16]
         texbem = r["texbem"][:8]
+        ui_at, ui_n = add_words(r["spv_ui"]) if r.get("spv_ui") else (0, 0)
         shader_recs.append(struct.pack(
             SHADER_RECORD, s["hash"], s["size"], r.get("types", 0), r["pixel"], r["major"], r["minor"],
             int(r["writes_fog"]), int(r["shadow_pcf"]), glsl_at, spv_at, spv_n, len(attrs),
@@ -333,11 +394,13 @@ def build(force=False):
             r["input_mask"], samplers, types, r["ps_colors"], r["ps_tex"], r["ps_fog"], r["f_total"], r["i_total"],
             r["b_total"], map_first, len(r["fmap"]), len(r["imap"]), len(r["bmap"]), len(texbem),
             bytes(t[0] for t in texbem).ljust(8, b"\0"), *([t[1] for t in texbem] + [0] * (8 - len(texbem))),
-            add_text(f"library {s['hash']:016x}.{'ps' if s['pixel'] else 'vs'}")))
+            add_text(f"library {s['hash']:016x}.{'ps' if s['pixel'] else 'vs'}"), ui_at, ui_n))
     builtin_recs = []
     for b in builtins:
         at, n = add_words(b["spv"])
-        builtin_recs.append(struct.pack(BUILTIN_RECORD, add_text(b["name"]), add_text(b["gles"]), at, n))
+        ui_at, ui_n = add_words(b["spv_ui"]) if b.get("spv_ui") else (0, 0)
+        builtin_recs.append(struct.pack(BUILTIN_RECORD, add_text(b["name"]), add_text(b["gles"]), at, n, ui_at, ui_n))
+
     sections = [  # (records, record size) in the order of s2r_shaderlib.c
         (shader_recs, struct.calcsize(SHADER_RECORD)),
         ([struct.pack("<HHH", *m) for m in maps], 6),
@@ -361,11 +424,15 @@ def build(force=False):
     tmp.write_bytes(header + bytes(body))
     tmp.replace(LIBRARY)
     stamp.write_text(digest)
-    report = {"library": LIBRARY.relative_to(ROOT).as_posix(), "bytes": LIBRARY.stat().st_size, "captured": len(shaders),
-              "entries": len(entries), "rejected": [{"shader": f"{s['hash']:016x}", "error": e} for s, e in rejected]}
+    with_ui = sum(1 for _, r in entries if r.get("spv_ui"))
+    pixel_entries = sum(1 for _, r in entries if r["pixel"])
+    report = {"library": LIBRARY.relative_to(ROOT).as_posix(), "bytes": LIBRARY.stat().st_size, "shaders": len(shaders),
+              "entries": len(entries), "pixel_entries": pixel_entries, "ui_spirv": with_ui,
+              "rejected": [{"shader": f"{s['hash']:016x}", "error": e} for s, e in rejected]}
     (WORK / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
-    print(f"shader library: {len(entries)} entries from {len(shaders)} captured shaders "
-          f"({len(rejected)} not translated), {LIBRARY.stat().st_size / 1e6:.2f} MB")
+    print(f"shader library: {len(entries)} entries from {len(shaders)} shaders ({len(rejected)} not translated), "
+          f"UI FSR 1 SPIR-V for {with_ui} of {pixel_entries} pixel entries"
+          f"{f' ({ui_failed} without a port block)' if ui_failed else ''}, {LIBRARY.stat().st_size / 1e6:.2f} MB")
     return LIBRARY
 
 

@@ -10,10 +10,15 @@
  * offset and range is checked here, so a damaged or foreign file is refused
  * with a log line, not read past.
  *
+ * Format 2 adds the UI FSR 1 SPIR-V of every pixel shader (and of the
+ * fixed-function pixel shader), so with UI FSR 1 on Vulkan compiles nothing
+ * on the device for a shader the library knows.
+ *
  * What the library lacks (a material the capture never saw, a ps_1_x
  * sampler-type map it was not built for, a mod) is translated on the device by
  * the same translator (s2r_translate.c): OpenGL ES compiles the text, Vulkan
- * compiles it to SPIR-V once with glslang (s2r_vulkan.c, cached on disk). */
+ * compiles it to SPIR-V once with glslang (s2r_vulkan.c, cached on disk).
+ * debug.s2.shaderlib=strict refuses that (coverage checks of a capture). */
 #include "s2r_internal.h"
 #include "s2r_shaderlib.h"
 #include "s2r_translate.h"
@@ -28,10 +33,10 @@
 #include <unistd.h>
 
 #define LIB_FILE "s2r_shaderlib.bin"
-#define LIB_FORMAT 1u
+#define LIB_FORMAT 2u
 
 enum { S_SHADERS, S_MAPS, S_TEXT, S_SPV, S_BUILTINS, S_COUNT };
-static const uint32_t record_size[S_COUNT] = { 120, 6, 1, 4, 16 };
+static const uint32_t record_size[S_COUNT] = { 128, 6, 1, 4, 24 };
 
 s2r_lib s2r_shader_library;
 
@@ -109,7 +114,9 @@ static int parse(lib_file *f, s2r_lib *lib)
         memcpy(s->texbem_stage, r.p, 8); r.p += 8;
         for (int k = 0; k < 8; ++k) s->texbem_dst[k] = r16(&r);
         s->name = text_at(f, r32(&r), 0);
+        s->spv_ui = r32(&r); s->spv_ui_words = r32(&r);
         if (s->glsl >= f->text_size || (uint64_t)s->spv + s->spv_words > words || s->attr_count > 16 || s->texbem_count > 8 ||
+            (uint64_t)s->spv_ui + s->spv_ui_words > words ||
             (uint32_t)s->map_first + s->fmap_count + s->imap_count + s->bmap_count > maps) f->bad = 1;
     }
     s2r_lib_map *mp = (s2r_lib_map *)calloc(maps + 1, sizeof *mp);
@@ -121,7 +128,9 @@ static int parse(lib_file *f, s2r_lib *lib)
     for (uint32_t i = 0; i < f->count[S_BUILTINS] && i < S2R_BUILTIN_COUNT; ++i) {
         bi[i].name = text_at(f, r32(&r), 0);
         bi[i].gles = r32(&r); bi[i].spv = r32(&r); bi[i].spv_words = r32(&r);
-        if ((bi[i].gles != 0xFFFFFFFFu && bi[i].gles >= f->text_size) || (uint64_t)bi[i].spv + bi[i].spv_words > words) f->bad = 1;
+        bi[i].spv_ui = r32(&r); bi[i].spv_ui_words = r32(&r);
+        if ((bi[i].gles != 0xFFFFFFFFu && bi[i].gles >= f->text_size) || (uint64_t)bi[i].spv + bi[i].spv_words > words ||
+            (uint64_t)bi[i].spv_ui + bi[i].spv_ui_words > words) f->bad = 1;
     }
     if (f->bad) { S2R_LOG("shader library: a record points outside the file"); free(sh); free(mp); free(bi); return 0; }
     lib->shaders = sh; lib->shader_count = shaders;
@@ -129,13 +138,16 @@ static int parse(lib_file *f, s2r_lib *lib)
     lib->text = f->text;
     lib->spv = (const uint32_t *)(f->data + f->offset[S_SPV]);
     lib->builtins = bi;
+    uint32_t with_ui = 0;
     for (uint32_t i = 0; i < shaders; ++i) {
         sh[i].text = f->text + sh[i].glsl;
         sh[i].maps = mp + sh[i].map_first;
         sh[i].spirv = lib->spv + sh[i].spv;
+        sh[i].spirv_ui = sh[i].spv_ui_words ? lib->spv + sh[i].spv_ui : NULL;
+        with_ui += sh[i].spirv_ui != NULL;
     }
-    S2R_LOG("shader library %s/%s: %u bytes, %u game shaders, %u bytes of SPIR-V, inputs %s... (mapped)",
-        folder, LIB_FILE, (unsigned)f->size, shaders, 4u * words, exe);
+    S2R_LOG("shader library %s/%s: %u bytes, %u game shaders (%u with UI FSR 1 SPIR-V), %u bytes of SPIR-V, "
+        "inputs %s... (mapped)", folder, LIB_FILE, (unsigned)f->size, shaders, with_ui, 4u * words, exe);
     return 1;
 }
 
@@ -202,7 +214,7 @@ static int dump_on(void)
     return value;
 }
 
-void s2r_lib_dump_missing(int pixel, const uint8_t *code, uint32_t size, uint64_t hash)
+void s2r_lib_dump_missing(int pixel, const uint8_t *code, uint32_t size, uint64_t hash, uint32_t types)
 {
     if (!dump_on()) return;
     char path[1200];
@@ -213,21 +225,31 @@ void s2r_lib_dump_missing(int pixel, const uint8_t *code, uint32_t size, uint64_
     if (!f) return;
     fwrite(code, 1, size, f);
     fclose(f);
+    if (!types) return;
+    /* a ps_1_x sampler-type map: an empty marker the build turns into one more entry */
+    snprintf(path, sizeof path, "%s/shaderdump/%016llx.ps.%x.types", void_data_dir(), (unsigned long long)hash, types);
+    f = fopen(path, "wb");
+    if (f) fclose(f);
 }
 
-/* debug.s2.shaderlib=runtime: translate every game shader on the device, as
- * for a shader the library lacks (checks that path). */
-static int runtime_only(void)
+/* debug.s2.shaderlib: "runtime" translates every game shader on the device, as
+ * for a shader the library lacks (checks that path); "strict" translates
+ * nothing on the device (checks a capture's coverage: a miss fails, is logged
+ * and, with shaderdump=1, dumped). */
+static int library_mode(void)
 {
     static int value = -1;
     if (value < 0) {
         char v[92] = "";
         __system_property_get("debug.s2.shaderlib", v);
-        value = !strcmp(v, "runtime");
-        if (value) S2R_LOG("debug.s2.shaderlib=runtime: game shaders are translated on the device");
+        value = !strcmp(v, "runtime") ? 1 : !strcmp(v, "strict") ? 2 : 0;
+        if (value == 1) S2R_LOG("debug.s2.shaderlib=runtime: game shaders are translated on the device");
+        if (value == 2) S2R_LOG("debug.s2.shaderlib=strict: no game shader is translated on the device");
     }
     return value;
 }
+static int runtime_only(void) { return library_mode() == 1; }
+int s2r_lib_strict(void) { return library_mode() == 2; }
 
 /* The library entry of a hash: the exact sampler-type map of a ps_1_x shader. */
 static const s2r_lib_shader *library_entry(int pixel, uint64_t h, uint32_t size, uint32_t types, int sm1_ps)
@@ -321,7 +343,7 @@ static rt_shader *runtime_entry(int pixel, const uint8_t *code, uint32_t size, u
     if (stat_runtime <= 16 || took > 20000000u)
         S2R_LOG("%s shader %016llx (%u.%u, sampler types %X) translated on the device in %.1f ms (%u so far)",
             pixel ? "pixel" : "vertex", (unsigned long long)h, s->major, s->minor, types, (double)took / 1e6, stat_runtime);
-    s2r_lib_dump_missing(pixel, code, size, h);
+    s2r_lib_dump_missing(pixel, code, size, h, types);
     return r;
 }
 
@@ -334,6 +356,10 @@ const s2r_lib_shader *s2r_lib_shader_for(int pixel, const uint8_t *code, uint32_
     uint64_t h = s2r_fnv64(code, size);
     const s2r_lib_shader *s = loaded_lib && !(allow_runtime && runtime_only()) ? library_entry(pixel, h, size, types, sm1_ps) : NULL;
     if (s) { ++stat_hits; return s; }
+    if (allow_runtime && s2r_lib_strict()) {
+        s2r_lib_dump_missing(pixel, code, size, h, types);
+        allow_runtime = 0;
+    }
     if (allow_runtime) {
         rt_shader *r = runtime_entry(pixel, code, size, h, types);
         return r ? &r->lib : NULL;
@@ -384,9 +410,10 @@ const uint32_t *s2r_builtin_spirv(int which, uint32_t *words)
     if (which < 0 || which >= S2R_BUILTIN_COUNT) return NULL;
     /* UI FSR 1: the fixed-function pixel shader with its 2D reads through EASU (no library SPIR-V) */
     int ui = which == S2R_BUILTIN_FF_PS && s2r_ui_fsr();
-    if (!ui && s2r_lib_load()) {
+    if (s2r_lib_load()) {
         const s2r_lib_builtin *b = &s2r_shader_library.builtins[which];
-        if (b->spv_words) { *words = b->spv_words; return s2r_shader_library.spv + b->spv; }
+        if (!ui && b->spv_words) { *words = b->spv_words; return s2r_shader_library.spv + b->spv; }
+        if (ui && b->spv_ui_words) { *words = b->spv_ui_words; return s2r_shader_library.spv + b->spv_ui; }
     }
     pthread_mutex_lock(&lock);
     if (!compiled[which]) {

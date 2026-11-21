@@ -765,6 +765,11 @@ static VkFormat vk_format(uint8_t gpu)
     case S2R_GPU_ASTC_4x4: return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
     case S2R_GPU_ASTC_5x5: return VK_FORMAT_ASTC_5x5_UNORM_BLOCK;
     case S2R_GPU_ASTC_6x6: return VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+    /* DXT as it is where the device samples BC (V.has_bc). Without these the image became RGBA8 and
+       the blocks were sampled as pixels: coloured noise on Adreno 7xx (system driver and Turnip). */
+    case S2R_GPU_BC1: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case S2R_GPU_BC2: return VK_FORMAT_BC2_UNORM_BLOCK;
+    case S2R_GPU_BC3: return VK_FORMAT_BC3_UNORM_BLOCK;
     default: return VK_FORMAT_R8G8B8A8_UNORM;
     }
 }
@@ -985,6 +990,13 @@ static int vk_image_create(s2r_device *d, s2r_image *img)
     vk_tex *t = (vk_tex *)calloc(1, sizeof *t);
     uint32_t bw, bh, bb;
     int compressed = s2r_gpu_block(img->gpu, &bw, &bh, &bb);
+    if (compressed && vk_format(img->gpu) == VK_FORMAT_R8G8B8A8_UNORM) {
+        /* blocks in an RGBA8 image would be sampled as pixels */
+        static int logged;
+        if (!logged++) LOGVK("no Vulkan format for %s: image not created", s2r_gpu_name(img->gpu));
+        free(t);
+        return 0;
+    }
     if (!tex_init(t, img->kind, vk_format(img->gpu), img->width, img->height, img->depth, img->levels, img->swizzle,
             img->render_target, img->depth_stencil, compressed)) {
         free(t);
@@ -1844,9 +1856,12 @@ static VkShaderModule library_module(const s2r_lib_shader *lib)
 {
     s2r_lib_shader *entry = (s2r_lib_shader *)lib;
     if (!entry->backend_module) {
-        /* the library's SPIR-V has no UI filter: with UI FSR 1 pixel shaders compile here */
-        VkShaderModule m = lib->spirv && !(lib->pixel && s2r_ui_fsr()) ? words_module(lib->spirv, lib->spv_words)
-                                                                          : runtime_module(lib);
+        /* UI FSR 1: the library's second SPIR-V of a pixel shader (its UI reads through EASU);
+           only a shader translated on the device compiles here */
+        int ui = lib->pixel && s2r_ui_fsr();
+        VkShaderModule m = ui && lib->spirv_ui ? words_module(lib->spirv_ui, lib->spv_ui_words)
+                         : !ui && lib->spirv ? words_module(lib->spirv, lib->spv_words)
+                         : runtime_module(lib);
         entry->backend_module = (uint64_t)(uintptr_t)m;
     }
     return (VkShaderModule)(uintptr_t)entry->backend_module;

@@ -1,6 +1,6 @@
 # The Sims 2 Legacy for ARM64 Android
 
-Development build: **0.2-dev**.
+Development build: **0.2.1-dev**.
 
 An unofficial Android port of the PC version of **The Sims 2 Legacy Collection**.
 The original x86 executable is statically recompiled to C and built for ARM64,
@@ -317,12 +317,12 @@ python -X utf8 -B tools/build_game_apk.py --skip-native --install --serial DEVIC
 
 ## Local release artifacts
 
-Version `0.2-dev` and version code `5` are stored in
+Version `0.2.1-dev` and version code `6` are stored in
 `android/app/AndroidManifest.xml`. Increase the code for subsequent published updates.
 
 Package a published release from its reviewed commit so that the launcher's
 `assets/launcher/build.json` records that source commit. Name the artifact
-**`pub/sims2-0.2-dev-COMMIT.apk`**, where `COMMIT`
+**`pub/sims2-0.2.1-dev-COMMIT.apk`**, where `COMMIT`
 is the first eight characters of the Git commit, with a matching `.apk.sha256`.
 For a local build with uncommitted changes, append `-dirty` to the commit suffix.
 
@@ -330,7 +330,7 @@ For a local build with uncommitted changes, append `-dirty` to the commit suffix
 python -X utf8 -B tools/build_game_apk.py --skip-native
 $sims2Commit = git rev-parse --short=8 HEAD
 if (git status --porcelain) { $sims2Commit += "-dirty" }
-$sims2ApkName = "sims2-0.2-dev-$sims2Commit.apk"
+$sims2ApkName = "sims2-0.2.1-dev-$sims2Commit.apk"
 New-Item -ItemType Directory -Force pub | Out-Null
 Copy-Item build/android-game/sims2.apk (Join-Path pub $sims2ApkName)
 $sims2Hash = (Get-FileHash (Join-Path pub $sims2ApkName) -Algorithm SHA256).Hash.ToLowerInvariant()

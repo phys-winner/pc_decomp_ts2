@@ -4,9 +4,15 @@
  * by the FNV-1a 64 hash of the Direct3D 9 bytecode (and, for ps_1_x, the
  * sampler types it was translated for). It travels in the APK's runtime.zip
  * (shaders/s2r_shaderlib.bin), which GameAssets installs into the app's files;
- * libsims2.so does not contain it. The game assembles and compiles its shaders
- * from its own material text at run time, so a shader the library lacks is
- * translated on the device by the same translator (s2r_translate.c). */
+ * libsims2.so does not contain it.
+ *
+ * The game builds its shaders from its own material text at run time with the
+ * D3DX linked into the exe; the bytecode it hands Direct3D only names a library
+ * entry. A known shader needs no Direct3D shader work on the device: no
+ * MojoShader, no glslang (pixel shaders carry a second SPIR-V with the UI FSR 1
+ * reads, s2r_uifilter.c). Only a shader the library lacks (a mod's, a material
+ * no capture saw) is still translated on the device; debug.s2.shaderlib=strict
+ * refuses that, to check a capture's coverage. */
 #ifndef S2R_SHADERLIB_H
 #define S2R_SHADERLIB_H
 #include <stdint.h>
@@ -39,12 +45,14 @@ typedef struct s2r_lib_shader {
     const char *text;             /* the GLSL body */
     const s2r_lib_map *maps;      /* fmap, then imap, then bmap */
     const uint32_t *spirv;        /* NULL: translated on the device (Vulkan compiles the text with glslang) */
+    const uint32_t *spirv_ui;     /* pixel shaders: the SPIR-V with the UI FSR 1 reads; NULL: none in the library */
+    uint32_t spv_ui, spv_ui_words;
     int runtime;                  /* 1: not from the library */
     uint64_t backend_module;      /* the Vulkan backend's module, made once */
     uint32_t backend_gl;          /* the OpenGL ES backend's compiled shader object(s), cached per entry */
 } s2r_lib_shader;
 
-typedef struct s2r_lib_builtin { const char *name; uint32_t gles, spv, spv_words; } s2r_lib_builtin;
+typedef struct s2r_lib_builtin { const char *name; uint32_t gles, spv, spv_words, spv_ui, spv_ui_words; } s2r_lib_builtin;
 enum { S2R_BUILTIN_FF_VS, S2R_BUILTIN_FF_PS, S2R_BUILTIN_PRESENT_VS, S2R_BUILTIN_PRESENT_PS, S2R_BUILTIN_COUNT };
 
 typedef struct s2r_lib {
@@ -68,13 +76,17 @@ uint64_t s2r_fnv64(const void *data, uint32_t size);
  * types). */
 const s2r_lib_shader *s2r_lib_shader_for(int pixel, const uint8_t *code, uint32_t size, uint32_t sampler_types,
     int allow_runtime);
+/* debug.s2.shaderlib=strict: no translation on the device; a shader the
+ * library lacks fails (logged once, dumped with shaderdump=1). */
+int s2r_lib_strict(void);
 /* Clears the backend modules cached on every entry (the Vulkan device went away). */
 void s2r_lib_forget_modules(void);
 /* The device's translations this session (the [mem] line and the exit summary). */
 void s2r_lib_stats(uint32_t *library_hits, uint32_t *runtime_entries, uint64_t *runtime_ns);
 /* debug.s2.shaderdump=1: the bytecode of every game shader the library lacks goes to
- * <data>/shaderdump/<hash>.{vs,ps} (tools/build_shaderlib.py --capture reads them). */
-void s2r_lib_dump_missing(int pixel, const uint8_t *code, uint32_t size, uint64_t hash);
+ * <data>/shaderdump/<hash>.{vs,ps}, and a ps_1_x sampler-type map it lacks to
+ * <hash>.ps.<types>.types (tools/build_shaderlib.py capture reads them). */
+void s2r_lib_dump_missing(int pixel, const uint8_t *code, uint32_t size, uint64_t hash, uint32_t types);
 
 #ifdef __cplusplus
 }
