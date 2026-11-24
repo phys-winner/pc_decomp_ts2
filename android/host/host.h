@@ -1,10 +1,11 @@
-/* The Sims 2 ARM64 host (from The Void port): shared declarations for the Win32 HLE runtime.
+/* The Sims 2 ARM host (from The Void port): shared declarations for the Win32 HLE runtime.
  *
  * Model: the lifted x86 code runs on global registers (recomp_types.h). One
  * guest thread owns the machine at a time (void_machine_enter/leave), exactly
- * the native32 model the Windows build validated; every guest VA is an offset
- * into the 4 GiB window at VOID_GUEST_BASE. Imports resolve to host functions
- * at synthetic VAs; a host function reads its arguments from the guest stack,
+ * the native32 model the Windows build validated. On ARM64 every guest VA is
+ * an offset into the 4 GiB window at VOID_GUEST_BASE. On ARM32 the VA is the
+ * host pointer (VOID_GUEST_SEGMENTED). Imports resolve to host functions at
+ * synthetic VAs; a host function reads its arguments from the guest stack,
  * leaves the result in g_eax (g_edx) and pops like the original convention.
  */
 #ifndef VOID_HOST_H
@@ -40,6 +41,51 @@ extern int void_verbose;
 #define GUEST_THUNK_LIMIT 0x7FFD0000u
 
 int void_guest_reserve(void);
+/* A host fault address inside the guest map. Writes the guest VA and returns 1. */
+int void_fault_guest(uintptr_t fault, uint32_t *guest_va);
+/* ARM64 keeps control in FPCR and cumulative flags in FPSR. ARM32 has one
+ * FPSCR: these split it the same way so a native helper can put the flags back. */
+static inline uint64_t void_host_fpcr(void)
+{
+#if defined(__aarch64__)
+    uint64_t value;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(value));
+    return value;
+#elif defined(__arm__)
+    uint32_t value;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(value));
+    return (uint64_t)(value & 0x07F80000u);
+#else
+    return 0;
+#endif
+}
+static inline uint64_t void_host_fpsr(void)
+{
+#if defined(__aarch64__)
+    uint64_t value;
+    __asm__ volatile("mrs %0, fpsr" : "=r"(value) :: "memory");
+    return value;
+#elif defined(__arm__)
+    uint32_t value;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(value) :: "memory");
+    return value & 0xFFu;
+#else
+    return 0;
+#endif
+}
+static inline void void_host_fpsr_set(uint64_t value)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("msr fpsr, %0" :: "r"(value) : "memory");
+#elif defined(__arm__)
+    uint32_t current;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(current));
+    current = (current & ~0xFFu) | ((uint32_t)value & 0xFFu);
+    __asm__ volatile("vmsr fpscr, %0" :: "r"(current) : "memory");
+#else
+    (void)value;
+#endif
+}
 /* Win32 VirtualAlloc semantics on the guest window. Returns 0 on failure. */
 uint32_t void_vm_alloc(uint32_t address, uint32_t size, uint32_t type, uint32_t protect);
 int void_vm_free(uint32_t address, uint32_t size, uint32_t type);

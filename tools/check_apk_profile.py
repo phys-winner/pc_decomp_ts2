@@ -2,6 +2,7 @@
 import contextlib
 import ctypes
 import io
+import lzma
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,6 +19,9 @@ def check_package(base):
     default = base / 'build/arm64/libsims2.so'
     default.parent.mkdir(parents=True)
     default.write_bytes(b'production')
+    arm32 = base / 'build/arm32/libsims2.so'
+    arm32.parent.mkdir(parents=True)
+    arm32.write_bytes(b'production-arm32')
     chosen = base / 'instrumented.so'
     chosen.write_bytes(b'profile')
     key = base / 'build/android/debug.keystore'
@@ -27,8 +31,9 @@ def check_package(base):
     launcher = apk.launcher_root()
     sys.path.insert(0, str(launcher / 'tools'))
     import launcher as port_launcher
-    (base / 'build/arm64-texconv').mkdir()
-    (base / 'build/arm64-texconv/libs2texconv.so').write_bytes(b'texconv')
+    for target in ('arm64', 'arm32'):
+        (base / f'build/{target}-texconv').mkdir()
+        (base / f'build/{target}-texconv/libs2texconv.so').write_bytes(target.encode())
     (base / 'android/host').mkdir(parents=True)
     (base / 'android/host/fsr1.h').write_text('FSR1 fixture license')
     for encoder in ('astcenc', 'etcpak'):
@@ -62,7 +67,7 @@ def check_package(base):
         assets.mkdir(parents=True)
         return dict(assets=str(assets), manifest=str(manifest), sources=[], package='org.sims2.port.launcher')
 
-    def probe(out, package, ndk, api):
+    def probe(out, package, ndk, api, abi="arm64"):
         assert Path(ndk).is_dir()
         assert api == 29
         out.mkdir(parents=True)
@@ -84,10 +89,20 @@ def check_package(base):
             shutil.copyfile(args[-2], args[-1])
         elif tool == 'apksigner.bat':
             shutil.copyfile(args[-1], args[args.index('--out') + 1])
+        elif tool == 'clang.exe':
+            Path(args[-1]).write_bytes(b'unpacker')
+
+    def compress(library, bcj="arm64"):
+        assert bcj == ('armthumb' if library == arm32 else 'arm64')
+        data = library.read_bytes()
+        packed = base / 'fixture.xz'
+        packed.write_bytes(lzma.compress(data))
+        return packed, hashlib.sha256(data).hexdigest(), len(data), str(packed.stat().st_size)
 
     with patch.object(apk, 'ROOT', base), patch.object(apk, 'OUT', base / 'build/android-game'), \
             patch.object(apk, 'VULKAN_RUNTIME', base / 'vulkan-runtime'), \
-            patch.object(apk, 'run', run), patch.object(apk, 'launcher_root', lambda: launcher), \
+            patch.object(apk, 'run', run), patch.object(apk, 'compress_library', compress), \
+            patch.object(apk, 'launcher_root', lambda: launcher), \
             patch.object(port_launcher, 'prepare', prepare), patch.object(port_launcher, 'build_probe', probe), \
             patch.object(apk.subprocess, 'run') as native:
         for args, expected in [([], b'production'), (['--library', str(chosen)], b'profile'),
@@ -96,13 +111,32 @@ def check_package(base):
             native.reset_mock()
             with patch.object(sys, 'argv', ['build_game_apk.py', *args]):
                 apk.main()
-            # build_overlay, build_shaderlib, build_texconv (+ the native build, + the install)
-            assert native.call_count == 3 + int(not args) + int('--install' in args), args
+            both = '--library' not in args
+            # Two common builds, one converter per ABI, plus requested native builds or cleanup.
+            assert native.call_count == 3 + both + 2 * int(not args) + int('--install' in args), args
             with zipfile.ZipFile(apk.OUT / 'sims2.apk') as archive:
-                assert archive.read('lib/arm64-v8a/libsims2.so') == expected
+                assert 'lib/arm64-v8a/libsims2.so' not in archive.namelist()
+                assert archive.read('lib/arm64-v8a/libs2xz.so') == b'unpacker'
+                engine = archive.getinfo('assets/native/libsims2.so.xz')
+                assert engine.compress_type == zipfile.ZIP_STORED and lzma.decompress(archive.read(engine)) == expected
+                assert archive.read('assets/native/index.txt').decode().split() == [
+                    'libsims2.so', str(len(expected)), hashlib.sha256(expected).hexdigest(),
+                    str(apk.CHUNK), str(engine.file_size)]
                 assert 'lib/arm64-v8a/libs2fsr3.so' not in archive.namelist()
                 for name in ('libadrenotools.so', 'libs2turnip.so', 'libvulkan_panfrost.so', 'libc++_shared.so', 'libmain_hook.so'):
                     assert archive.read('lib/arm64-v8a/' + name).endswith(name.encode()), name
+                    assert 'lib/armeabi-v7a/' + name not in archive.namelist()
+                if both:
+                    for name, content in (('libportprobe.so', b'probe'), ('libs2xz.so', b'unpacker'),
+                                          ('libs2texconv.so', b'arm32')):
+                        assert archive.read('lib/armeabi-v7a/' + name) == content
+                    packed32 = archive.getinfo('assets/native/armeabi-v7a/libsims2.so.xz')
+                    assert packed32.compress_type == zipfile.ZIP_STORED
+                    assert lzma.decompress(archive.read(packed32)) == arm32.read_bytes()
+                    assert archive.read('assets/native/armeabi-v7a/index.txt').decode().split()[2] == (
+                        hashlib.sha256(arm32.read_bytes()).hexdigest())
+                else:
+                    assert not any('armeabi-v7a/' in name for name in archive.namelist())
             if '--install' in args:
                 stop = next(i for i,c in enumerate(calls) if c[-3:] == ('am', 'force-stop', apk.PACKAGE))
                 install = next(i for i,c in enumerate(calls) if 'install' in c)
@@ -112,6 +146,7 @@ def check_package(base):
             apk.main()
         with zipfile.ZipFile(apk.OUT / 'sims2.apk') as archive:
             assert 'lib/arm64-v8a/libsims2.so' not in archive.namelist()
+            assert 'assets/native/index.txt' not in archive.namelist()
         push = next(c for c in calls if 'push' in c)
         assert push[-2:] == (chosen, '/data/local/tmp/sims2/libsims2.so'), push
         assert 'files/libsims2.so.new' in calls[-1][-1], calls[-1]

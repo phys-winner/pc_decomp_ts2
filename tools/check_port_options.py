@@ -6,6 +6,7 @@ import tempfile
 
 from audio_probe import compile_probe
 from check_touch import JDK, ROOT
+from check_virtual_query import function
 from build_game_apk import launcher_root
 
 LAUNCHER = launcher_root() / 'android/src/port/launcher'
@@ -52,10 +53,12 @@ public class OptionsCheck {
  static AlertDialog open(Button b){b.performClick();assert AlertDialog.latest.showing;return AlertDialog.latest;}
  public static void main(String[] args)throws Exception{
   Context context=new Context(new java.io.File(args[0]));Launch launch=new Launch();LinearLayout content=new LinearLayout();
-  PortOptions.append(context,content,launch);assert content.children.size()==Spec.instance.options.size();
+  java.util.List<Spec.Option> visible=new java.util.ArrayList<>(Spec.instance.options);
+  visible.removeIf(option->option.rendererSetting);
+  PortOptions.append(context,content,launch);assert content.children.size()==visible.size();
   int selections=0;
-  for(int i=0;i<Spec.instance.options.size();i++){
-   Spec.Option option=Spec.instance.options.get(i);Button button=content.children.get(i);
+  for(int i=0;i<visible.size();i++){
+   Spec.Option option=visible.get(i);Button button=content.children.get(i);
    if("bool".equals(option.type)){
     CheckBox check=(CheckBox)button;boolean initial=check.isChecked();
     assert initial=="1".equals(option.value)&&check.text.equals(option.title);
@@ -73,7 +76,7 @@ public class OptionsCheck {
     assert button.text.equals(option.title+": "+option.choiceTitles.get(j));
    }
   }
-  Button button=content.children.get(0);Spec.Option option=Spec.instance.options.get(0);String before=Launch.option(context,option);
+  Button button=content.children.get(0);Spec.Option option=visible.get(0);String before=Launch.option(context,option);
   PortHooks.problem="not available";AlertDialog dialog=open(button);dialog.callback.onClick(dialog,0);
   assert dialog.showing&&Toast.last.equals("not available")&&Launch.option(context,option).equals(before);dialog.dismiss();PortHooks.problem=null;
   // A launcher's edit made after opening the dialog survives this option's atomic read/merge/write.
@@ -84,8 +87,8 @@ public class OptionsCheck {
   // Simulate an unwritable destination without relying on host permission semantics.
   java.io.File blocked=new java.io.File(args[0],"file-instead-of-dir");assert blocked.createNewFile();context.files=blocked;
   dialog=open(button);dialog.callback.onClick(dialog,0);assert dialog.showing&&Toast.last.equals("message:2");dialog.dismiss();
-  context.files=new java.io.File(args[0]);Spec.instance.options.get(0).arm64Only=true;android.os.Process.bit64=false;
-  content=new LinearLayout();PortOptions.append(context,content,launch);assert content.children.size()==Spec.instance.options.size()-1;
+  context.files=new java.io.File(args[0]);visible.get(0).arm64Only=true;android.os.Process.bit64=false;
+  content=new LinearLayout();PortOptions.append(context,content,launch);assert content.children.size()==visible.size()-1;
   // FSR 3.1 left the port: a saved \"3\" becomes FSR 1; other choices stay.
   assert State.put(context,State.CHOICES,"option.render_upscaler","3");PortOptions.migrateUpscaler(context);
   assert State.get(context,State.CHOICES,"option.render_upscaler",null).equals("1");
@@ -101,6 +104,10 @@ def main():
     options = spec['options']
     by_key = {option['key']: option for option in options}
     assert by_key['screen_resolution']['default'] == '100'
+    assert by_key['regular_ui_layouts']['default'] == '0'
+    assert by_key['adpf']['default'] == '0'
+    workaround = by_key['mali_g51_workaround']
+    assert workaround['type'] == 'bool' and workaround['default'] == '1' and workaround['rendererSetting'] is True
     assert {choice['value'] for choice in by_key['render_msaa']['choices']} == {'0', '2', '4'}
     assert by_key['frame_rate_limit']['default'] == 'game'
     assert 'loading_animations' not in by_key   # no player option: loading screens keep the game's own pacing (sims2_loading.c)
@@ -108,13 +115,15 @@ def main():
     required = {'game_language', 'screen_resolution', 'frame_rate_limit', 'ui_fsr', 'render_aa', 'render_msaa', 'render_upscaler'}
     assert required <= by_key.keys()
     generated = '''package org.sims2.port.launcher;import java.util.*;class Spec {
-static class Option {String key,type,value;Object title;boolean arm64Only;List<String> choices=new ArrayList<>();List<Object> choiceTitles=new ArrayList<>();}
+static class Option {String key,type,value;Object title;boolean arm64Only,rendererSetting;List<String> choices=new ArrayList<>();List<Object> choiceTitles=new ArrayList<>();}
 static Spec instance=new Spec();List<Option> options=new ArrayList<>();static Spec get(android.content.Context c){return instance;}
 List<Option> options(String distribution){assert distribution.equals("legacy");return options;}Spec(){Option o;
 '''
     for option in options:
         assert option['type'] in ('choice', 'bool')
         generated += 'o=new Option();'
+        if option.get('rendererSetting'):
+            generated += 'o.rendererSetting=true;'
         for name in ('key', 'type', 'default'):
             generated += f'o.{"value" if name == "default" else name}={json.dumps(option[name], ensure_ascii=False)};'
         title = option['title']
@@ -147,9 +156,15 @@ List<Option> options(String distribution){assert distribution.equals("legacy");r
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 static const char *fixture,*override;
 static const char *fixture_env(const char *name){return !strcmp(name,"S2_FPS_LIMIT")?override:fixture;}
 #define getenv(name) fixture_env(name)
+static uint32_t dimensions[2], original_width, original_height;
+#define MEM32(a) dimensions[((a) - 0xA10FB340u) / 4]
+static int void_vm_readable(uint32_t addr, unsigned size){return addr==0xA10FB340u && size==8;}
+static void sub_A0B429B0_lifted(void){dimensions[0]=original_width;dimensions[1]=original_height;}
+''' + function(settings, 'int s2_ui_layout_set(void)') + '\n' + function(settings, 'void sub_A0B429B0(void)\n') + '''
 ''' + next(line for line in settings.splitlines() if line.startswith('static int clamp(')) + '''
 static int parse(void){int render_msaa;
 ''' + msaa + '''return render_msaa;}
@@ -168,7 +183,13 @@ for(unsigned i=0;i<sizeof caps/sizeof *caps;i++){
  override="300";assert(parse_cap(75,&saved)==240&&saved==expected[i]);
  override="1";assert(parse_cap(75,&saved)==5&&saved==expected[i]);
 }
-puts("PASS actual native MSAA/FPS parsers: exact values, malformed FPS keeps game setting, S2 override wins without overwriting saved choice");}
+original_width=800;original_height=600;
+fixture=NULL;sub_A0B429B0();assert(s2_ui_layout_set()==1);
+fixture="0";sub_A0B429B0();assert(s2_ui_layout_set()==1);
+fixture="1";sub_A0B429B0();assert(dimensions[0]==1024&&dimensions[1]==768&&s2_ui_layout_set()==2);
+original_width=1400;original_height=900;sub_A0B429B0();assert(dimensions[0]==1400&&dimensions[1]==900);
+original_width=original_height=0;sub_A0B429B0();assert(s2_ui_layout_set()==0);
+puts("PASS actual native MSAA/FPS parsers: exact values, malformed FPS keeps game setting, S2 override wins without overwriting saved choice, regular UI layouts opt in");}
 '''
     compile_probe('port-options', harness, {})
 

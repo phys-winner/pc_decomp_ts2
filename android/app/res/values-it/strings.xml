@@ -44,4 +44,7 @@
   <string name="target_object">Oggetto %1$d</string>
   <string name="target_changed">Il bersaglio si è spostato. Tocca di nuovo.</string>
   <string name="floor_swipe_hint">Scorri verso l’alto o verso il basso con tre dita per cambiare piano.</string>
+  <string name="mods_ui_title">Mod dell’interfaccia</string>
+  <string name="mods_ui_hint">Le mod che modificano l’interfaccia del gioco potrebbero non avere effetto: con questa scala dell’interfaccia il gioco usa i layout compatti 800×600, mentre la maggior parte delle mod d’interfaccia modifica solo i layout normali (1024×768 e oltre). Per usarle, scegli una scala dell’interfaccia più piccola nelle opzioni grafiche del gioco e riavvia il gioco.</string>
+  <string name="unpacking_engine">Estrazione del codice del gioco…</string>
 </resources>

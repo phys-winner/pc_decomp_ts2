@@ -44,4 +44,7 @@
   <string name="target_object">Objeto %1$d</string>
   <string name="target_changed">El objetivo se ha movido. Toca otra vez.</string>
   <string name="floor_swipe_hint">Desliza tres dedos hacia arriba o hacia abajo para cambiar de planta.</string>
+  <string name="mods_ui_title">Mods de interfaz</string>
+  <string name="mods_ui_hint">Los mods que cambian la interfaz del juego pueden no tener efecto: con esta escala de interfaz el juego usa sus diseños compactos de 800×600, y la mayoría de los mods de interfaz solo cambian los diseños normales (1024×768 o más). Para usarlos, elige una escala de interfaz menor en las opciones gráficas del juego y reinicia el juego.</string>
+  <string name="unpacking_engine">Descomprimiendo el código del juego…</string>
 </resources>

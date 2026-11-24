@@ -53,9 +53,46 @@ static uint64_t thread_cpu_ns(void)
     return (uint64_t)cpu.tv_sec * 1000000000ull + (uint64_t)cpu.tv_nsec;
 }
 
+/* QA profiles (userdata-qa-*) only: a frame whose present came over 100 ms after the previous one,
+ * with what the frame did (d3d9_gl.c long_frame_log for the native renderers): the game thread's CPU
+ * and its machine wait, the render thread's CPU and waits, draws, uploads, programs compiled and
+ * linked, shaders translated on the device. The mono stamp joins CPU profiles. */
+static void long_frame_log(s2r_device *d, uint64_t now, uint64_t game_cpu_ns, uint64_t game_wait_ns, uint64_t rt_wait_ns)
+{
+    static int enabled = -1;
+    static uint64_t last, cpu_last, game_last, wait_last, rt_wait_last, upload_last, texture_last, links_last,
+        link_ns_last, lib_ns_last, async_last, async_ns_last;
+    static uint32_t lib_last;
+    if (enabled < 0) {
+        const char *data = void_data_dir(), *profile = data ? strrchr(data, '/') : NULL;
+        profile = profile ? profile + 1 : data;
+        enabled = profile && !strncmp(profile, "userdata-qa-", 12) && profile[12];
+    }
+    if (!enabled) return;
+    uint64_t cpu = thread_cpu_ns();
+    uint32_t hits = 0, lib = 0;
+    uint64_t lib_ns = 0;
+    s2r_lib_stats(&hits, &lib, &lib_ns);
+    if (last && now - last > 100000000ull)
+        void_log("[s2r-frame] frame %u mono %llu cadence %.1f ms: game cpu %.1f machine wait %.1f, render cpu %.1f waits %.1f; "
+            "%u draws (%u left for linking), %.0f KiB uploads (%.0f textures), %llu programs linked %.1f ms (%llu in the background "
+            "%.1f ms), %u shaders translated %.1f ms, present %.1f ms",
+            d->frame, (unsigned long long)now, (double)(now - last) / 1e6, (double)(game_cpu_ns - game_last) / 1e6,
+            (double)(game_wait_ns - wait_last) / 1e6, (double)(cpu - cpu_last) / 1e6, (double)(rt_wait_ns - rt_wait_last) / 1e6,
+            d->frame_draws, d->frame_skipped, (double)(d->upload_bytes - upload_last) / 1024.0,
+            (double)(d->upload_texture - texture_last) / 1024.0, (unsigned long long)(d->program_links - links_last),
+            (double)(d->program_link_ns - link_ns_last) / 1e6, (unsigned long long)(d->async_links - async_last),
+            (double)(d->async_link_ns - async_ns_last) / 1e6, lib - lib_last, (double)(lib_ns - lib_ns_last) / 1e6, d->present_ms);
+    last = now; cpu_last = cpu; game_last = game_cpu_ns; wait_last = game_wait_ns; rt_wait_last = rt_wait_ns;
+    upload_last = d->upload_bytes; texture_last = d->upload_texture; links_last = d->program_links;
+    link_ns_last = d->program_link_ns; lib_last = lib; lib_ns_last = lib_ns;
+    async_last = d->async_links; async_ns_last = d->async_link_ns;
+}
+
 /* Every 600 frames, or every 5 s when frames are slow (as d3d_gl_present). */
 void s2r_frame_presented(s2r_device *d, uint64_t game_cpu_ns, uint64_t game_wait_ns, uint64_t syncs, uint64_t rt_wait_ns)
 {
+    long_frame_log(d, void_monotonic_ns(), game_cpu_ns, game_wait_ns, rt_wait_ns);
     static uint64_t start, cpu_start, game_start, wait_start, syncs_start, rt_wait_start, gpu_start, gpu_frames_start;
     static uint64_t upload_start, texture_start, stream_start;
     static uint64_t cadence_last, cadence_max;
@@ -77,6 +114,7 @@ void s2r_frame_presented(s2r_device *d, uint64_t game_cpu_ns, uint64_t game_wait
     passes += d->frame_passes;
     loads += d->frame_loads;
     d->frame_draws = d->frame_prims = d->frame_streamed = d->frame_passes = d->frame_loads = 0;
+    d->frame_skipped = 0;
     uint32_t frames = d->frame - frame_start;
     if (start && frames < 600 && now - start < 5000000000ull) return;
     uint64_t cpu = thread_cpu_ns();

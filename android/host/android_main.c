@@ -339,6 +339,12 @@ JNIEXPORT jint JNICALL Java_org_sims2_port_GameActivity_nativeTouchContext(JNIEn
     return (jint)s2_touch_context();
 }
 
+JNIEXPORT jint JNICALL Java_org_sims2_port_GameActivity_nativeUiLayoutSet(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return (jint)s2_ui_layout_set();
+}
+
 JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeTouchRewards(JNIEnv *env, jclass cls)
 {
     (void)env; (void)cls;

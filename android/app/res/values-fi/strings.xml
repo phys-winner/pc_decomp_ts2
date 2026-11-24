@@ -44,4 +44,7 @@
   <string name="target_object">Esine %1$d</string>
   <string name="target_changed">Kohde siirtyi. Napauta uudelleen.</string>
   <string name="floor_swipe_hint">Vaihda kerrosta pyyhkäisemällä kolmella sormella ylös tai alas.</string>
+  <string name="mods_ui_title">Käyttöliittymämodit</string>
+  <string name="mods_ui_hint">Pelin käyttöliittymää muuttavat modit eivät ehkä toimi: tällä käyttöliittymän skaalalla peli käyttää tiiviitä 800×600-asetteluja, kun taas useimmat käyttöliittymämodit muuttavat vain tavallisia asetteluja (1024×768 ja suuremmat). Käytä niitä valitsemalla pienempi käyttöliittymän skaala pelin grafiikka-asetuksista ja käynnistä peli uudelleen.</string>
+  <string name="unpacking_engine">Puretaan pelin koodia…</string>
 </resources>

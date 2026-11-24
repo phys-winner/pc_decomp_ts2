@@ -50,7 +50,7 @@ static uint32_t touch_town_catalog_proc(uint32_t w){(void)w;return 0;}
 static uint32_t touch_chooser_window(uint32_t w){(void)w;return 0;}
 static uint32_t touch_vertical_band(uint32_t w,int x,int y){(void)w;(void)x;(void)y;return 0;}
 static uint32_t void_call_guest_this(uint32_t,uint32_t,int,const uint32_t *);
-static uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}
+static uint32_t touch_input_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}
 static uint32_t touch_time_band(uint32_t w,int x,int y){(void)w;(void)x;(void)y;return 0;}
 static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int count,const uint32_t *args){
     if(va==0x11111111){if(self!=0x2000||count!=2||args[0]!=700||args[1]!=500)bad=1;
@@ -72,6 +72,7 @@ static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int count,const u
         'static uint32_t touch_cas_grid_proc(',
         'static unsigned touch_widget(',
         'static int touch_cas_grid_apply(', 'static int touch_grid_apply(', 'static int touch_catalog_apply('))
+    actual = next(line for line in source.splitlines() if line.startswith('enum { TOUCH_DRAG_FILTER')) + '\n' + actual
     checks = r'''
 static void typed(uint32_t object,uint32_t table,uint32_t col,uint32_t td,const char *name){
     MEM32(object)=table;MEM32(table-4)=col;MEM32(col+12)=td;text(td+8,name);

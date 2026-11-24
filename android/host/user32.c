@@ -304,10 +304,14 @@ static void store_msg(uint32_t va, const qmsg_t *m)
 /* The Android layer's input reaches the queue through this pump; the main
  * thread's also ends a closed fit's linger (sims2_settings.c). */
 int void_is_main_guest_thread(void);
+void s2_preview_tick(void);
 static void pump_host_input(void)
 {
     void_input_pump();
-    if (void_is_main_guest_thread()) s2_fit_tick();
+    if (void_is_main_guest_thread()) {
+        s2_fit_tick();
+        s2_preview_tick();
+    }
 }
 
 WINAPI_EXPORT(U32, PeekMessageA, 5)

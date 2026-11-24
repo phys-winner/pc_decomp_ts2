@@ -7,6 +7,7 @@
 #include "input.h"
 #include "iostat.h"
 #include "sims2_settings.h"
+#include "sims2_extender.h"
 #include <dirent.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -101,6 +102,7 @@ int void_game_main(const char *game, const char *data, const char *images, int s
     void_log_open(log_path);
     void_log("[void] The Sims 2 ARM64 host: game=%s data=%s images=%s", game, data, images);
     void_log("[void] command line: %s", void_command_line);
+    s2_extender_init(data);
     void_stat_start();
     if (!void_guest_reserve()) return 65;
     void_threads_init();
@@ -129,6 +131,7 @@ int void_game_main(const char *game, const char *data, const char *images, int s
     snprintf(binaries, sizeof binaries, "%s/EP9/TSBin", game);
     if (!void_modules_init(binaries)) return 67;
     void_machine_enter();
+    s2_extender_guest_init();
     int code;
     if (getenv("S2_PROBE_MEMCMP")) {
         /* Differential probe of the lifted CRT memcmp (0xA0826B4B) against

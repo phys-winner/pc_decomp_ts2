@@ -16,3 +16,6 @@
 [submodule "reference/etcpak"]
 	path = reference/etcpak
 	url = https://github.com/wolfpld/etcpak.git
+[submodule "reference/xz-embedded"]
+	path = reference/xz-embedded
+	url = https://github.com/tukaani-project/xz-embedded.git

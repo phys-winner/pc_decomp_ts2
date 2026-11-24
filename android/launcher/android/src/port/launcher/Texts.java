@@ -47,9 +47,9 @@ final class Texts {
         TURNIP_NO_RELEASES = 189, TURNIP_RELEASE = 190, TURNIP_NEWER = 191, TURNIP_OLDER = 192,
         TURNIP_NO_NOTES = 193, TURNIP_NO_FILES = 194, TURNIP_CLEAN = 195, TEX_SAMPLE = 196,
         VERIFY_MD5 = 197, E_MD5_MISMATCH = 198, R_MALI = 199, PANVK_DRIVER = 200,
-        PANVK_HINT = 201, E_PANVK = 202, BROWSER_DRIVER = 203;
+        PANVK_HINT = 201, E_PANVK = 202, BROWSER_DRIVER = 203, RENDERER_SETTINGS = 204, E_SAVE_OPTION = 205;
     /** The last id: the table has one row per id (the selfcheck verifies it). */
-    static final int LAST = BROWSER_DRIVER;
+    static final int LAST = E_SAVE_OPTION;
 
     private static final String[][] TEXTS = {
         {"Play", "Играть", "Spielen", "Graj"},
@@ -420,6 +420,10 @@ final class Texts {
         {"Could not import the PanVK driver (%s)", "Не удалось импортировать драйвер PanVK (%s)",
          "PanVK-Treiber konnte nicht importiert werden (%s)", "Nie udało się zaimportować sterownika PanVK (%s)"},
         {"Choose a Vulkan driver", "Выберите драйвер Vulkan", "Vulkan-Treiber auswählen", "Wybierz sterownik Vulkan"},
+        {"Advanced renderer settings", "Дополнительные настройки рендера",
+         "Erweiterte Renderer-Einstellungen", "Zaawansowane ustawienia renderera"},
+        {"Could not save the setting.", "Не удалось сохранить настройку.",
+         "Die Einstellung konnte nicht gespeichert werden.", "Nie udało się zapisać ustawienia."},
     };
 
     private static int column = -1;

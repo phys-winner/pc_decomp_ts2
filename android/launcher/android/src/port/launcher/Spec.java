@@ -75,7 +75,7 @@ final class Spec {
     static final class Option {
         String key, type, value, extra;
         int defaultMinRamGiB;
-        boolean arm64Only;
+        boolean arm64Only, rendererSetting;
         Object title, hint;
         List<String> only = new ArrayList<>();
         List<String> choices = new ArrayList<>();
@@ -235,6 +235,7 @@ final class Spec {
             option.value = String.valueOf(o.opt("default") != null ? o.opt("default") : "");
             option.defaultMinRamGiB = o.optInt("defaultMinRamGiB", 0);
             option.arm64Only = o.optBoolean("arm64Only", false);
+            option.rendererSetting = o.optBoolean("rendererSetting", false);
             option.extra = o.optString("extra", "");
             option.title = o.opt("title") != null ? o.opt("title") : option.key;
             option.hint = o.opt("hint");

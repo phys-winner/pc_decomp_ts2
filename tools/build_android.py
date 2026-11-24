@@ -1,6 +1,8 @@
-"""Build the ARM64 Android stage: generated x86 C for all lifted modules plus
-the Win32 HLE host, compiled with the NDK clang and linked into either a
+"""Build the Android stage: generated x86 C for all lifted modules plus the
+Win32 HLE host, compiled with the NDK clang and linked into either a
 command-line executable (adb shell bring-up) or the shared library for the APK.
+--abi arm32 builds Thumb-2 armeabi-v7a into build/arm32 (identity guest mappings).
+The default remains arm64, build/arm64.
 
 Objects are reused only when the source, every header the generated code can
 see, the compiler and the options are byte-identical (SHA-256 fingerprint).
@@ -15,6 +17,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import ts2_extender_patches
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = ("sims2", "ijl15")
@@ -153,6 +156,10 @@ def glslang_build_info():
 # every call and the dispatch table bind to the native version while the host
 # can still run the lifted body for differential checks.
 NATIVE_OVERRIDES = (
+    "sub_A01B8D75", "sub_A01EA190", "sub_A024FB30", "sub_A02E63A0", "sub_A0362A10",
+    "sub_A05F982C", "sub_A05FA6E6", "sub_A05FB453", "sub_A06B1356", "sub_A0BC6360",  # TS2 Extender
+    "sub_A06CF346", "sub_A06EFF84",  # TS2 Extender Open for Business uniform fix
+    "sub_A0C78B10",  # TS2 Extender Lua libraries
     "sub_A0649404",   # original options radio binder: display-specific FPS choices
     "sub_A0680D8B",   # keep the selected object orientation through purchase
 
@@ -187,9 +194,11 @@ NATIVE_OVERRIDES = (
     "sub_A08BB970",   # map high-resolution glyph pixels into their original logical ink rectangle
     "sub_A090A94E",   # release weak-keyed glyph copies before original font destruction
     "sub_A09713BE",   # window-manager UI scale, including pointer coordinates (sims2_settings.c)
+    "sub_A0B429B0",   # opt into regular interface layouts without changing the view size
     "sub_A05CA399",   # clamp the pie menu in logical coordinates (sims2_settings.c)
     "sub_A05E01E5",   # original CAS paint keeps the bounded native window pan before child painting
     "sub_A0972F48",   # modal dialogs: temporarily fit fixed layouts (sims2_settings.c)
+    "sub_A05D8ED0", "sub_A05DBD1C",   # cancel thumbnail requests before window-procedure detach
     "sub_A0648ADF",   # options categories: temporarily fit fixed layouts (sims2_settings.c)
     "sub_A064785E",   # options resize: keep the fit through category reconstruction (sims2_settings.c)
     "sub_A06491B9",   # whole options panel visibility: balance the temporary fit (sims2_settings.c)
@@ -234,7 +243,8 @@ NATIVE_OVERRIDES = (
     "sub_A01D5B50",   # persistence filename buckets: per-lookup original locale snapshot (sims2_fast.c)
     "sub_A01EC080",   # Russian fallback for shipped University catalog descriptions (sims2_shims.c)
     "sub_A09187BE",   # guarded font-parser substring search with native first-byte skipping (sims2_fast.c)
-    "sub_A0845799",   # CRT _stricmp without a locale: ASCII folding (sims2_fast.c)
+    "sub_A0845799",   # CRT _stricmp: ASCII folding, also under the game's locale (sims2_fast.c)
+    "sub_A08287A0",   # CRT strchr (SSE2 form): libc strchr (sims2_fast.c)
     "sub_A0229E45",   # a job queue's pump: no spinning on an empty queue (sims2_fast.c)
     # EA SND's PC output driver without DirectSound: the mixer renders into the
     # AAudio low-latency FIFO at the device rate (sims2_audio.c, audio.c).
@@ -664,6 +674,7 @@ def override_source(source, local_xmm):
     patched copy under build/ when it defines one of NATIVE_OVERRIDES or (with
     local_xmm) a body that uses the SSE file, and with direct jump tables."""
     original = text = source.read_bytes()
+    flags = []
     if RELEASE is None:
         if source.name == "recomp_dispatch.c":
             # This virtual method has no direct generated calls. Keep its old
@@ -681,10 +692,25 @@ def override_source(source, local_xmm):
         if b"goto _ljump; }" in text:
             text = direct_jump_tables(text, module_image(module))
         if module == "sims2":
+            if RELEASE is None:
+                text = ts2_extender_patches.apply(text, source.name)
+                if text.startswith(b'#include "sims2_extender.h"'):
+                    flags.append("-Iandroid/host")
             text = ui_sampling_return_sites(text)
             text = prefetch_particles(text)
             text = skip_startup_intro(text)
             text = default_neighborhood_flythrough_off(text)
+            if RELEASE is None and source.name == "sims2_A05D8000.c":
+                # Leave the title, visibility and selection in the original setter.
+                calls = {
+                    b"RECOMP_ICALL(MEM32(esi + 0x18)); /* 0xA05D80E9:": b"s2_defer_family_preview",
+                    b"RECOMP_CALL(sub_A07444D5); /* 0xA05DA7A3:": b"s2_defer_lot_preview",
+                }
+                for call, wrapper in calls.items():
+                    if text.count(call) != 1:
+                        raise ValueError("thumbnail call site changed: " + str(call))
+                    text = b"void " + wrapper + b"(void);\n" + text.replace(
+                        call, b"RECOMP_CALL(" + wrapper + b"); /*" + call.split(b"/*", 1)[1], 1)
             if RELEASE is None:
                 text = touch_camera_hover_guard(text)
                 if source.name == "sims2_A0670000.c":
@@ -705,7 +731,7 @@ def override_source(source, local_xmm):
     patched.parent.mkdir(parents=True, exist_ok=True)
     if not patched.is_file() or patched.read_bytes() != text:
         patched.write_bytes(text)
-    return patched, ["-I" + source.parent.relative_to(ROOT).as_posix()]
+    return patched, flags + ["-I" + source.parent.relative_to(ROOT).as_posix()]
 
 
 def sha_file(path):
@@ -783,7 +809,12 @@ def compile_one(source, obj, flags, fingerprint, cache):
 
 
 def main():
+    # One declaration for the whole function. A later `global` after an assignment
+    # is a SyntaxError, and the arm32 branch assigns several of these names.
+    global TARGET, OUT, COMMON, GENERATED_FLAGS, HOST_FLAGS, MOJO_FLAGS, RENDER_GEN
+    global GENERATED, RELEASE, MODULES, MODULE_IMAGES, NATIVE_OVERRIDES
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--abi", choices=("arm64", "arm32"), default="arm64")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 4))
     parser.add_argument("--host-only", action="store_true", help="Recompile host sources and relink only")
     parser.add_argument("--shared", action="store_true", help="Link libvoid.so for the APK instead of the executable")
@@ -809,9 +840,34 @@ def main():
                         help="Build another release of the game lifted by tools/lift_release.py "
                              "(generated/NAME, build/arm64-NAME, libvoid_NAME.so); never with the 2009 profile")
     args = parser.parse_args()
+    if args.abi == "arm32":
+        TARGET = f"armv7a-linux-androideabi{API}"
+        OUT = ROOT / "build/arm32"
+        RENDER_GEN = OUT / "gen"
+        # Thumb-2. The same chunk is 850 KB of ARM code and 560 KB of Thumb
+        # (sims2_A0288000.c, -O2). LLD inserts range-extension thunks, so this
+        # does not pass -mlong-calls. arm64 is unchanged.
+        COMMON = ["--target=" + TARGET, "-mthumb", "-mfpu=neon", "-fno-strict-aliasing", "-fwrapv",
+                  "-fvisibility=hidden", "-fPIC", "-ffp-contract=off", "-fno-math-errno", "-g0",
+                  "-ffunction-sections"]
+        # x87 memory operands are *(float*) and *(double*). That cast drops the
+        # aligned(1) typedef, and Thumb VLDR, VSTR and STRD fault (SIGBUS
+        # BUS_ADRALN) on a guest address that is only 2-aligned. This caps the
+        # alignment the compiler may assume. alignof and struct layout stay
+        # put, so it is not applied to host or renderer code.
+        GENERATED_FLAGS = COMMON + ["-O2", "-w", "-DRECOMP_GENERATED_CODE", "-Iandroid/runtime",
+                                    "-fmax-type-align=1"]
+        HOST_FLAGS = COMMON + ["-O2", "-std=gnu11", "-Wall", "-Wno-unused-function", "-Wno-unused-variable",
+                               "-D_FILE_OFFSET_BITS=64", "-DRECOMP_TRACE", "-Iandroid/runtime", "-Iandroid/host"]
+        MOJO_FLAGS = COMMON + ["-O2", "-w", "-DMOJOSHADER_FLIP_RENDERTARGET", "-DMOJOSHADER_DEPTH_CLIPPING",
+                               "-DSUPPORT_PROFILE_HLSL=0", "-DSUPPORT_PROFILE_ARB1=0", "-DSUPPORT_PROFILE_ARB1_NV=0",
+                               "-DSUPPORT_PROFILE_METAL=0", "-DSUPPORT_PROFILE_SPIRV=0", "-DSUPPORT_PROFILE_GLSPIRV=0",
+                               "-DSUPPORT_PROFILE_GLSL120=0", "-I" + MOJO_DIR, "-Iandroid/runtime"]
+        # The checked-in profile is ARM64 counter data.
+        if args.pgo_use is None and not args.pgo_generate:
+            args.no_pgo = True
     from prepare_dependencies import prepare
     prepare("mojoshader", "dlmalloc")
-    global GENERATED, RELEASE, MODULES, MODULE_IMAGES, NATIVE_OVERRIDES
     if args.release:
         GENERATED = ROOT / "generated" / args.release
         if (GENERATED / "release.json").is_file():
@@ -843,7 +899,6 @@ def main():
     # memory plainly (first location on the Redmi Note 8 Pro: 37-43 fps against
     # 33-39 with both off). The upstream modes build in their own directories
     # (build/arm64-globalregs, build/arm64-volatilemem, ...) for A/B runs.
-    global OUT, GENERATED_FLAGS
     if args.trace:
         GENERATED_FLAGS = GENERATED_FLAGS + ["-DRECOMP_TRACE"]
     GENERATED_FLAGS = (GENERATED_FLAGS + ([] if args.global_regs else ["-DRECOMP_LOCAL_REGS"]) +
@@ -853,8 +908,7 @@ def main():
     if args.release:
         upstream.insert(0, args.release)
     if upstream:
-        OUT = ROOT / ("build/arm64-" + "-".join(upstream))
-    global HOST_FLAGS
+        OUT = ROOT / (("build/arm32-" if args.abi == "arm32" else "build/arm64-") + "-".join(upstream))
     if args.lto:
         GENERATED_FLAGS = GENERATED_FLAGS + ["-flto=thin"]
         HOST_FLAGS = HOST_FLAGS + ["-flto=thin"]
@@ -891,6 +945,8 @@ def main():
             obj = OUT / "obj" / module / (source.stem + ".o")
             digest = gen_digest if source.name == "recomp_dispatch.c" else module_digest[module[:-len("-x86")]]
             source, extra = override_source(source, local_xmm=not args.global_regs)
+            if "-Iandroid/host" in extra:
+                digest += sha_file(ROOT / "android/host/sims2_extender.h")
             flags = GENERATED_FLAGS + extra
             fp = hashlib.sha256(json.dumps([sha_file(source), digest, compiler_sha, flags]).encode()).hexdigest()
             jobs.append((source, obj, flags, fp))
@@ -976,11 +1032,14 @@ def main():
     response = OUT / "link.rsp"
     response.write_text("\n".join(o.replace("\\", "/") for o in objects))
     library = "libsims2.so"
-    output = OUT / (library if args.shared else "sims2-arm64")
+    output = OUT / (library if args.shared else ("sims2-arm32" if args.abi == "arm32" else "sims2-arm64"))
     # clang++ links glslang's C++ runtime statically (libc++ is not a system library).
+    page = "4096" if args.abi == "arm32" else "16384"
     link = [str(CLANGXX), "--target=" + TARGET, "-fuse-ld=lld", "-static-libstdc++", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc",
-            "-Wl,-z,max-page-size=16384", "-Wl,-z,common-page-size=16384",
+            f"-Wl,-z,max-page-size={page}", f"-Wl,-z,common-page-size={page}",
             "-Wl,--build-id=sha1", "@" + str(response), "-o", str(output), "-lm", "-lz", "-llog", "-ldl", "-lEGL", "-lGLESv3"]
+    if args.abi == "arm32":
+        link.append("-latomic")
     link += ["-shared", "-landroid", "-lOpenSLES", "-laaudio"] if args.shared else ["-pie", "-landroid"]
     if args.pgo_generate:
         link.append("-fprofile-instr-generate")

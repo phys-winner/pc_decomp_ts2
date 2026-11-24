@@ -86,6 +86,7 @@ static uint32_t words[8192];
 #define MEM8(a) (*(uint8_t *)GPTR(a))
 static unsigned touch_modal_depth,touch_mode_flags,ui_pie_depth;
 static uint32_t touch_modal_window;
+static int ui_measure_modal(uint32_t manager,uint32_t window,int *w,int *h){(void)manager;(void)window;(void)w;(void)h;return 0;}
 static unsigned touch_input_flags;
 static uint32_t touch_mode_owner;
 static _Atomic unsigned touch_context;
@@ -115,6 +116,7 @@ static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int nargs,const u
 static void ui_fit(int enter,int full_height) { (void)full_height;if(enter)++fit_depth;else --fit_depth; }
 #define ui_fit_depth fit_depth
 static int ui_fit_linger;
+static unsigned ui_fit_height_depth;
 static const char *fit_owner_name(const uint32_t *owner) { (void)owner; return ""; }
 int16_t void_input_key_state(uint32_t key){(void)key;return 0;}
 static void void_input_mouse_warp(int x,int y) { (void)x;(void)y;bad=1; }
@@ -136,6 +138,7 @@ void sub_A0B4C1B0_lifted(void){}
 void s2_touch_text_pump(uint32_t manager){(void)manager;}
 void s2_touch_text_owner(unsigned kind,unsigned serial,uint32_t manager){(void)kind;(void)serial;(void)manager;}
 int s2_touch_text_editable(uint32_t window){(void)window;return 0;}
+void s2_extender_camera_sensitivity(float *yaw,float *pitch){(void)yaw;(void)pitch;}
 int s2_catalog_info(uint32_t proc){(void)proc;return 0;}
 void s2_catalog_track(uint32_t proc){(void)proc;}
 uint32_t s2_catalog_clear_request(void){return 1;}
@@ -308,14 +311,15 @@ static void typed(uint32_t object,uint32_t vtable,uint32_t locator,uint32_t desc
 __declspec(dllexport) int widgets(void) {
     static const char *const names[]={".?AVcGZWinSlider@@",".?AVcGZWinScrollbar2@@",".?AVcGZWinSpinner@@",
         ".?AVcGZWinGrid@@",".?AVcGZWinListBox@@",".?AVcGZWinTreeViewDrag@@",
-        ".?AVcGZWinTextEdit@@",".?AVcGZWinLineInput@@",".?AVcGZWinBtn@@"};
+        ".?AVcGZWinTextEdit@@",".?AVcGZWinLineInput@@",".?AVcGZWinBtn@@",".?AVcTSWinListBox@@"};
     /* Synthetic RTTI alone no longer grants editable TEXT16; the native text fixture checks real classes/flags. */
-    unsigned expected[]={4,4,4,8,8,8,0,0,0};
+    unsigned expected[]={4,4,4,8,8,8,0,0,0,8};
     MEM32(0x300+0x58)=0;
-    for(unsigned i=0;i<9;++i) {
+    for(unsigned i=0;i<sizeof expected/sizeof expected[0];++i) {
         typed(0x300,0x1000,0x1100,0x1200,names[i]);
         if(touch_widget(0x300)!=expected[i] || touch_text(0x300)!=(i==6 || i==7))return i+1;
     }
+    typed(0x300,0x1000,0x1100,0x1200,".?AVcGZWinBtn@@");
     typed(0x1600,0x1700,0x1800,0x1900,".?AVcTSWinProcCatalog@@");
     MEM32(0x300+0xA0)=0x1500;MEM32(0x1500)=0x1510;MEM32(0x1510)=0x1500;MEM32(0x1518)=0x1600;
     if(touch_widget(0x300)!=8)return 10;
@@ -327,6 +331,9 @@ __declspec(dllexport) int widgets(void) {
     if(touch_widget(0x300)!=0)return 16;
     typed(0x1600,0x1700,0x1800,0x1900,".?AVcTSWinProcSimThumbnail@@");
     if(touch_widget(0x300)!=0)return 17;
+    typed(0x1600,0x1700,0x1800,0x1900,".?AVcTSWinDragAndDropMessageFilter@@");
+    if(touch_widget(0x300)!=(4|TOUCH_DRAG_FILTER))return 30;
+    typed(0x1600,0x1700,0x1800,0x1900,".?AVcTSWinProcSimThumbnail@@");
     typed(0x300,0x1000,0x1100,0x1200,".?AVcGZWinTextEdit@@");
     MEM32(0x460)=8;if(touch_widget(0x300)!=8)return 25;
     MEM32(0x460)=9;if(touch_widget(0x300)!=8)return 26;
@@ -374,8 +381,10 @@ __declspec(dllexport) int tools(void) {
         ".?AVcTSUserToolObjectDesign@@",".?AVcTSUserToolEyedropper@@",
         ".?AVcTSUserToolObjectDesignExtra@@",".?AVcTSUserToolEyedropperExtra@@",
         ".?AVcTSUserToolNHoodEyedropper@@",".?AVcTSUserToolUnknown@@","",
-        ".?AVcTSUserToolFireplace@@",".?AVcTSUserToolElevator@@",".?AVcTSUserToolAutoRoof@@"};
-    int expected[]={1,0,3,4,5,6,6,0,0,0,0,0,3,3,3}; /* Object needs the actual retained wrapper, tested separately. */
+        ".?AVcTSUserToolFireplace@@",".?AVcTSUserToolElevator@@",".?AVcTSUserToolAutoRoof@@",
+        ".?AVcTSUserToolPlaceNewLot@@",".?AVcTSUserToolPlaceLotFromInventory@@",".?AVcTSUserToolMoveLot@@",
+        ".?AVcTSUserToolInventoryObject@@"};
+    int expected[]={1,0,3,4,5,6,6,0,0,0,0,0,3,3,3,7,7,7,8}; /* Object needs the actual retained wrapper, tested separately. */
     win_manager=0x100;win_manager_thread=thread_id=1;
     g_ecx=0x2000;g_esp=0x800;sub_A076C5EB();MEM32(0x2020)=0x2100;
     for(unsigned i=0;i<sizeof expected/sizeof expected[0];++i) {

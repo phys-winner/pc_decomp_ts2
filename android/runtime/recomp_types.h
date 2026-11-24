@@ -5,8 +5,10 @@
  * 3c0afef3412074932f0134af4462ec31c05402ccbe38d5692b38e9271bf687cf).
  *
  * The generated x86 C is unchanged; only what the macros expand to differs:
- *   - guest addresses live in one reserved 4 GiB host window at the constant
- *     VOID_GUEST_BASE, so ADDR() is a single add and needs no global load;
+ *   - on ARM64, guest addresses live in one reserved 4 GiB host window at the
+ *     constant VOID_GUEST_BASE, so ADDR() is a single add and needs no global
+ *     load. On ARM32 that window does not fit in a pointer, so VOID_GUEST_BASE
+ *     is 0 and each guest reservation is its own mapping at the guest VA;
  *   - published flags, the shared x87 condition word and the exact int64 x87
  *     shadows are ordinary globals, swapped with the registers when the guest
  *     machine changes hands (the native32 model, without Windows TLS);
@@ -27,18 +29,29 @@
 #include <stdio.h>
 #include <math.h>
 
-#if defined(_MSC_VER) || !defined(__aarch64__)
-#error "This header is the ARM64 runtime model; x86 builds use native/recomp_types.h"
+#if defined(_MSC_VER) || (!defined(__aarch64__) && !defined(__arm__))
+#error "This header is the ARM runtime model; x86 builds use native/recomp_types.h"
 #endif
 
 #define VOID_HIDDEN __attribute__((visibility("hidden")))
 
-/* The guest window. Every guest VA is an offset into it; the host reserves it
- * once at exactly this address (void_guest_reserve) and fails otherwise. */
+/* The guest window. On ARM64 every guest VA is an offset into one reservation
+ * at VOID_GUEST_BASE (void_guest_reserve fails if it lands anywhere else).
+ * On ARM32 the 4 GiB span does not fit in size_t and the host shares the
+ * address space, so the VA is the host pointer and reservations are separate. */
+#if defined(__aarch64__)
 #ifndef VOID_GUEST_BASE
 #define VOID_GUEST_BASE 0x2000000000ull
 #endif
 #define VOID_GUEST_SPAN 0x100000000ull
+#define VOID_GUEST_SEGMENTED 0
+#elif defined(__arm__)
+#ifndef VOID_GUEST_BASE
+#define VOID_GUEST_BASE 0ull
+#endif
+#define VOID_GUEST_SPAN 0ull
+#define VOID_GUEST_SEGMENTED 1
+#endif
 
 /* ============================================================
  * Global Register Model
@@ -320,23 +333,50 @@ void     recomp_set_seg(int sreg, uint32_t selector);
 #else
 #define RECOMP_MEM_QUAL volatile
 #endif
+/* x86 loads have no alignment. ARM mode and AArch64 accept an unaligned LDR.
+ * Thumb-2 does not: the compiler turns neighbouring loads into LDM/LDRD, and
+ * those fault (SIGBUS BUS_ADRALN) when the guest address is only 2-aligned.
+ * The 1-byte alignment keeps the access an lvalue and stops that merge. */
+#if defined(__arm__) && !defined(__aarch64__)
+typedef uint16_t __attribute__((aligned(1))) recomp_u16_unaligned;
+typedef uint32_t __attribute__((aligned(1))) recomp_u32_unaligned;
+typedef uint64_t __attribute__((aligned(1))) recomp_u64_unaligned;
+typedef float    __attribute__((aligned(1))) recomp_f32_unaligned;
+typedef double   __attribute__((aligned(1))) recomp_f64_unaligned;
+#define MEM8(addr)   (*(RECOMP_MEM_QUAL uint8_t *)ADDR(addr))
+#define MEM16(addr)  (*(RECOMP_MEM_QUAL recomp_u16_unaligned *)ADDR(addr))
+#define MEM32(addr)  (*(RECOMP_MEM_QUAL recomp_u32_unaligned *)ADDR(addr))
+#define MEM64(addr)  (*(RECOMP_MEM_QUAL recomp_u64_unaligned *)ADDR(addr))
+#define MEMF(addr)   (*(RECOMP_MEM_QUAL recomp_f32_unaligned *)ADDR(addr))
+#define MEMD(addr)   (*(RECOMP_MEM_QUAL recomp_f64_unaligned *)ADDR(addr))
+#else
 #define MEM8(addr)   (*(RECOMP_MEM_QUAL uint8_t  *)ADDR(addr))
 #define MEM16(addr)  (*(RECOMP_MEM_QUAL uint16_t *)ADDR(addr))
 #define MEM32(addr)  (*(RECOMP_MEM_QUAL uint32_t *)ADDR(addr))
 #define MEM64(addr)  (*(RECOMP_MEM_QUAL uint64_t *)ADDR(addr))
 #define MEMF(addr)   (*(RECOMP_MEM_QUAL float    *)ADDR(addr))
 #define MEMD(addr)   (*(RECOMP_MEM_QUAL double   *)ADDR(addr))
+#endif
 
-/* Set 32-bit values in memory (for rep stosd) */
+/* Set 32-bit values in memory (for rep stosd). x86 does not align edi.
+ * On Thumb the aligned pointer becomes STM, which faults the same way LDM did. */
 static inline void MEMSET32(void* dst, uint32_t val, uint32_t count) {
+#if defined(__arm__) && !defined(__aarch64__)
+    recomp_u32_unaligned* p = (recomp_u32_unaligned*)dst;
+#else
     uint32_t* p = (uint32_t*)dst;
+#endif
     for (uint32_t i = 0; i < count; i++) p[i] = val;
 }
 
 /* And 16-bit, for `rep stosw` -- which is how a run-length codec writes a run
  * of one colour, and so how most of a 1990s background image gets drawn. */
 static inline void MEMSET16(void* dst, uint16_t val, uint32_t count) {
+#if defined(__arm__) && !defined(__aarch64__)
+    recomp_u16_unaligned* p = (recomp_u16_unaligned*)dst;
+#else
     uint16_t* p = (uint16_t*)dst;
+#endif
     for (uint32_t i = 0; i < count; i++) p[i] = val;
 }
 

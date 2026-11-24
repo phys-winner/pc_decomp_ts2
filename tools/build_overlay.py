@@ -3,20 +3,21 @@ images. The host serves these copies at their original game paths.
 
 The Graphics/Performance Options panel (ui.package, type 0, instance
 0x49060F03, groups 0xA99D8A11 for 1024x768 and up and 0x08000600 for
-800x600) gets three option groups in its own style where the PC-only
-controls were (Window Size list, Refresh Rate list, Smooth Edges slider, all
-kept in the tree but hidden for the panel's code):
+800x600) gets four option groups in its own style where the PC-only
+controls were (Window Size list, Refresh Rate list, Smooth Edges slider,
+Use Square Pixels, all kept in the tree but hidden for the panel's code):
 
     UI Scale          100% 150% 200% 300%        radio:s2UIScale
     Frame Rate Limit  Off, 30 and display rates radio:s2FrameRateLimit
     Render Scale      50% 75% 100% 125% 150%     radio:s2RenderScale
+    Minimal Graphics  Off On                     radio:s2MinimalGraphics
 
 The panel base class binds the windows with IDs 0xA0, 0xA1, ... (searched
 recursively, until one is missing or is not a GZWinGen) whose caption reads
 "radio:<property>:<type>:<values>" to that property of the game's user
 property set (Config/userProps.xml). The graphics panel's Object Hiding
 group held 0xA0-0xA2; it moves to 0xB0-0xB2 (its controller follows through
-config/Sims2EP9.patches.json) and the new groups take 0xA0-0xA2. The host
+config/Sims2EP9.patches.json) and the new groups take 0xA0-0xA3. The host
 sees the values change through cGZPropertySetString::SetProperty
 (android/host/sims2_settings.c). The savedProps.txt overlay adds those keys
 to the game's save list, so Apply keeps the chosen values across restarts.
@@ -45,29 +46,30 @@ PORT_STRING_INSTANCE = 0xFF00
 # captionres group 0x7f232750 is Options.package, with one-based string indices.
 PORT_STRING_PACKAGE = Path("EP9/TSData/Res/Text/Options.package")
 # STR# IDs differ from the registry language IDs; verified against original text resources.
+# Per language: the three titles, "Off" (4), the Minimal Graphics title (5) and "On" (6).
 PORT_LABELS = {
-    1: ("UI Scale", "Frame Rate Limit", "Render Scale", "Off"),
-    2: ("UI Scale", "Frame Rate Limit", "Render Scale", "Off"),
-    3: ("Échelle interface", "Limite d'IPS", "Échelle rendu", "Aucune"),
-    4: ("UI-Skalierung", "FPS-Limit", "Render-Skalierung", "Aus"),
-    5: ("Scala interfaccia", "Limite FPS", "Scala rendering", "No"),
-    6: ("Escala interfaz", "Límite de FPS", "Escala renderizado", "No"),
-    7: ("Interfaceschaal", "FPS-limiet", "Renderschaal", "Uit"),
-    8: ("Brugerfladeskala", "FPS-grænse", "Renderingsskala", "Fra"),
-    9: ("Gränssnittsskala", "FPS-gräns", "Renderingsskala", "Av"),
-    10: ("Grensesnittskala", "FPS-grense", "Gjengivelsesskala", "Av"),
-    11: ("Käyttöliittymä", "FPS-raja", "Renderöintiskaala", "Pois"),
-    13: ("Масштаб UI", "Предел FPS", "Масштаб рендера", "Нет"),
-    14: ("Escala interface", "Limite de FPS", "Escala de imagem", "Não"),
-    15: ("UI倍率", "FPS上限", "描画倍率", "なし"),
-    16: ("Skala interfejsu", "Limit FPS", "Skala renderowania", "Brak"),
-    17: ("界面缩放", "帧率上限", "渲染缩放", "关闭"),
-    18: ("介面縮放", "影格率上限", "繪製縮放", "關閉"),
-    19: ("ขนาดส่วนติดต่อ", "จำกัดเฟรมเรต", "ขนาดเรนเดอร์", "ปิด"),
-    20: ("인터페이스 배율", "프레임 제한", "렌더링 배율", "끄기"),
-    26: ("Měřítko rozhraní", "Limit FPS", "Měřítko vykreslení", "Vyp."),
-    28: ("Felület mérete", "FPS-korlát", "Renderelés mérete", "Ki"),
-    35: ("Escala interface", "Limite de FPS", "Escala de imagem", "Não"),
+    1: ("UI Scale", "Frame Rate Limit", "Render Scale", "Off", "Minimal Graphics", "On"),
+    2: ("UI Scale", "Frame Rate Limit", "Render Scale", "Off", "Minimal Graphics", "On"),
+    3: ("Échelle interface", "Limite d'IPS", "Échelle rendu", "Aucune", "Graphismes minimaux", "Activé"),
+    4: ("UI-Skalierung", "FPS-Limit", "Render-Skalierung", "Aus", "Minimalgrafik", "An"),
+    5: ("Scala interfaccia", "Limite FPS", "Scala rendering", "No", "Grafica minima", "Sì"),
+    6: ("Escala interfaz", "Límite de FPS", "Escala renderizado", "No", "Gráficos mínimos", "Sí"),
+    7: ("Interfaceschaal", "FPS-limiet", "Renderschaal", "Uit", "Minimale graphics", "Aan"),
+    8: ("Brugerfladeskala", "FPS-grænse", "Renderingsskala", "Fra", "Minimal grafik", "Til"),
+    9: ("Gränssnittsskala", "FPS-gräns", "Renderingsskala", "Av", "Minimal grafik", "På"),
+    10: ("Grensesnittskala", "FPS-grense", "Gjengivelsesskala", "Av", "Minimal grafikk", "På"),
+    11: ("Käyttöliittymä", "FPS-raja", "Renderöintiskaala", "Pois", "Minimigrafiikka", "Päällä"),
+    13: ("Масштаб UI", "Предел FPS", "Масштаб рендера", "Нет", "Мин. графика", "Да"),
+    14: ("Escala interface", "Limite de FPS", "Escala de imagem", "Não", "Gráficos mínimos", "Sim"),
+    15: ("UI倍率", "FPS上限", "描画倍率", "なし", "最小グラフィック", "あり"),
+    16: ("Skala interfejsu", "Limit FPS", "Skala renderowania", "Brak", "Minimalna grafika", "Tak"),
+    17: ("界面缩放", "帧率上限", "渲染缩放", "关闭", "最低画质", "开启"),
+    18: ("介面縮放", "影格率上限", "繪製縮放", "關閉", "最低畫質", "開啟"),
+    19: ("ขนาดส่วนติดต่อ", "จำกัดเฟรมเรต", "ขนาดเรนเดอร์", "ปิด", "กราฟิกขั้นต่ำ", "เปิด"),
+    20: ("인터페이스 배율", "프레임 제한", "렌더링 배율", "끄기", "최소 그래픽", "켜기"),
+    26: ("Měřítko rozhraní", "Limit FPS", "Měřítko vykreslení", "Vyp.", "Minimální grafika", "Zap."),
+    28: ("Felület mérete", "FPS-korlát", "Renderelés mérete", "Ki", "Minimális grafika", "Be"),
+    35: ("Escala interface", "Limite de FPS", "Escala de imagem", "Não", "Gráficos mínimos", "Sim"),
 }
 
 OPTIONS = [
@@ -76,13 +78,19 @@ OPTIONS = [
     # Runtime supplies the display's rates before the original binder hides unused buttons.
     (0xA1, "s2FrameRateLimit", "Frame Rate Limit", (0, 30, 60), ("Off", "30", "60") + ("",) * 7),
     (0xA2, "s2RenderScale", "Render Scale", (50, 75, 100, 125, 150), ("50%", "75%", "100%", "125%", "150%")),
+    # The game's own options at their lowest (android/host/sims2_settings.c), for devices short of memory.
+    (0xA3, "s2MinimalGraphics", "Minimal Graphics", (0, 1), ("Off", "On")),
 ]
+# Each option's title in the port's string table (Options.package STR# 0xFF00).
+TITLE_INDEX = {0xA0: 1, 0xA1: 2, 0xA2: 3, 0xA3: 5}
+LABEL_INDEX = {"Off": 4, "On": 6}
 # The panel's Object Hiding group held 0xA0-0xA2 (a flat rectangle the binder
 # cannot take, which ended the binding there); it moves to 0xB0-0xB2, and the
 # controller code with it (config/Sims2EP9.patches.json).
 RENUMBERED = {0xA0: 0xB0, 0xA1: 0xB1, 0xA2: 0xB2}
-# The containers they replace, by caption, in column order.
-REPLACED = ("screensize", "refresh rates", "Smooth Edges")
+# The containers they replace, by caption, in OPTIONS order, with the new group's height
+# (None: the container's own).
+REPLACED = (("screensize", 107), ("refresh rates", 107), ("Smooth Edges", 107), ("Square pixels", None))
 
 FLAGS = ("winflag_visible=yes winflag_enabled=yes winflag_moveable=yes winflag_sortable=no winflag_pbuff=no "
          "winflag_pbufftrans={t} winflag_pbufferase={t} winflag_alphablend={a} winflag_acceptfocus={f} "
@@ -93,7 +101,7 @@ def group_markup(option, area, indent="   "):
     ident, prop, title, values, labels = option
     x0, y0, x1, y1 = area
     caption = f"radio:{prop}:int:" + ":".join(str(v) for v in values)
-    title_resource = f" captionres={{7f232750,{PORT_STRING_INSTANCE:04x}{ident - 0xA0 + 1:04x}}}"
+    title_resource = f" captionres={{7f232750,{PORT_STRING_INSTANCE:04x}{TITLE_INDEX[ident]:04x}}}"
     lines = [
         f"{indent}<LEGACY clsid=GZWinGen iid=IGZWinGen id=0x{ident:08x} area=({x0},{y0},{x1},{y1}) fillcolor=(0,0,0) "
         f'caption="{caption}" ' + FLAGS.format(t="no", a="no", f="yes") +
@@ -111,7 +119,8 @@ def group_markup(option, area, indent="   "):
     width = 60 if columns == 2 else 83
     for k, label in enumerate(labels):
         left, top = 62 * (k % columns), 26 + 16 * (k // columns)
-        label_resource = f" captionres={{7f232750,{PORT_STRING_INSTANCE:04x}0004}}" if label == "Off" else ""
+        label_resource = (f" captionres={{7f232750,{PORT_STRING_INSTANCE:04x}{LABEL_INDEX[label]:04x}}}"
+                          if label in LABEL_INDEX else "")
         lines.append(
             f"{indent}   <LEGACY clsid=GZWinBtn iid=IGZWinBtn id=0x{k + 1:08x} area=({left},{top},{left + width},{top + 16}) "
             f'fillcolor=(192,192,192) caption="{label}"' + label_resource + ' ' + FLAGS.format(t="no", a="yes", f="no") +
@@ -125,16 +134,16 @@ def group_markup(option, area, indent="   "):
 
 
 def patch_panel(text):
-    """The panel script with the three replaced containers hidden and the new
-    groups added at their places (same column x, same top, 107 px tall)."""
+    """The panel script with the replaced containers hidden and the new groups
+    added at their places (same column x, same top; see REPLACED for heights)."""
     lines = text.split("\r\n")
     areas = []
-    for caption in REPLACED:
+    for caption, height in REPLACED:
         for i, line in enumerate(lines):
             if line.lstrip().startswith("<LEGACY clsid=GZWinFlatRect") and f'caption="{caption}"' in line:
                 m = re.search(r"area=\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)", line)
                 x0, y0, x1, y1 = (int(v) for v in m.groups())
-                areas.append((x0, y0, x1, y0 + 107))
+                areas.append((x0, y0, x1, y0 + height if height else y1))
                 lines[i] = line.replace("winflag_visible=yes", "winflag_visible=no", 1)
                 break
         else:
@@ -316,7 +325,10 @@ def patch_neighborhood_warning(data):
 
 
 def port_strings():
-    localized = bytearray(b"Android port options".ljust(64, b"\0") + struct.pack("<HH", 0xFFFD, 4 * len(PORT_LABELS)))
+    count = {len(labels) for labels in PORT_LABELS.values()}
+    if len(count) != 1:
+        raise SystemExit("every language needs the same port labels")
+    localized = bytearray(b"Android port options".ljust(64, b"\0") + struct.pack("<HH", 0xFFFD, count.pop() * len(PORT_LABELS)))
     for language, labels in PORT_LABELS.items():
         for label in labels:
             text = label.encode("utf-8")

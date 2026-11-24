@@ -240,6 +240,9 @@ struct s2r_device {
     uint64_t gpu_ns, gpu_frames;           /* GPU time the backend measured (GL timer queries, Vulkan timestamps) */
     uint64_t upload_bytes;            /* all of them; and of those: */
     uint64_t upload_texture, upload_stream;   /* texture levels, draws' vertices and indices */
+    uint64_t program_links, program_link_ns;  /* programs the backend compiled and linked (not from a cache) */
+    uint64_t async_links, async_link_ns;      /* of them, by background linkers (totals, read at present) */
+    uint32_t frame_skipped;                   /* draws left out of this frame: their program was still linking */
     double present_ms;                /* the backend's last present call */
 };
 

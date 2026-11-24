@@ -44,4 +44,7 @@
   <string name="target_object">Objet %1$d</string>
   <string name="target_changed">La cible a bougé. Touchez de nouveau.</string>
   <string name="floor_swipe_hint">Balayez vers le haut ou le bas avec trois doigts pour changer d’étage.</string>
+  <string name="mods_ui_title">Mods d’interface</string>
+  <string name="mods_ui_hint">Les mods qui modifient l’interface du jeu peuvent rester sans effet : à cette échelle d’interface, le jeu utilise ses dispositions compactes 800×600, alors que la plupart des mods d’interface ne modifient que les dispositions normales (1024×768 et plus). Pour les utiliser, choisissez une échelle d’interface plus petite dans les options graphiques du jeu et redémarrez le jeu.</string>
+  <string name="unpacking_engine">Décompression du code du jeu…</string>
 </resources>

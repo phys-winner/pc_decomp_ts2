@@ -64,6 +64,8 @@ static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int nargs,const u
  unsigned bit=*args==0x3000?1:2;g_eax=0xDEAD;g_ecx=0xDEAD;g_esp=0xDEAD;
  return (registry_bits&bit)?0xA5A50001u:0xA5A50000u;
 }
+static int minimal_requested=-1,minimal_resume,minimal_startup;
+static int apply_minimal_graphics(int on,int resume){(void)on;(void)resume;return 1;}
 static void void_input_screen_size(int *w,int *h){*w=input_w;*h=input_h;}
 static void s2_ui_scale_requested(int);
 static void sub_A0972F48_lifted(void);

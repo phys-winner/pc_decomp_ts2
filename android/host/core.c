@@ -525,8 +525,9 @@ static void on_signal(int signo, siginfo_t *info, void *context)
     atomic_store_explicit(&log_in_signal, 1, memory_order_relaxed);
     uintptr_t fault = (uintptr_t)info->si_addr;
     char where[96] = "";
-    if (fault >= VOID_GUEST_BASE && fault < VOID_GUEST_BASE + VOID_GUEST_SPAN)
-        snprintf(where, sizeof where, " (guest VA %08X)", (uint32_t)(fault - VOID_GUEST_BASE));
+    uint32_t guest_va = 0;
+    if (void_fault_guest(fault, &guest_va))
+        snprintf(where, sizeof where, " (guest VA %08X)", guest_va);
     void_log("[void] host signal %d code %d at %p%s", signo, info->si_code, info->si_addr, where);
     if (!atomic_exchange(&dumping, 1)) void_dump_state("host signal");
     void_log_flush();

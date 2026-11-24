@@ -176,6 +176,7 @@ public class GameActivity extends ActivityBase {
  static class Launch {static void openLauncher(GameActivity a,String id){}String distribution(){return "legacy";}}
  Launch launch=new Launch();
  static int context,kind=2,tool=1,picks,clicks,wheel,moves,warps,settingsRequests,textRequests,notices;
+ static boolean cheatHint;static void touchCheatMenuHint(){if(!cheatHint){cheatHint=true;touchNotice(text(R.string.cheat_menu_hint));}}
  static long generation=1;static float x,y;static boolean mouse,rightMouse;static boolean[] keys=new boolean[256];
  static java.util.List<String> events=new java.util.ArrayList<>();static Runnable onPick;
  static boolean cameraContact;static java.util.List<String> contactEvents=new java.util.ArrayList<>();
@@ -490,6 +491,11 @@ public class TouchCheck {
    assert GameActivity.events.get(0).equals("key:"+expected+":true");noExtra(back);noExtra(previous);
   }
   TouchLayer t=layer(64,2,0);int clicks=GameActivity.clicks;tap(t,600,500);assert GameActivity.clicks==clicks;Handler.advance(50);assert GameActivity.mouse;Handler.advance(89);assert GameActivity.mouse;Handler.advance(1);assert !GameActivity.mouse&&GameActivity.clicks==clicks+1;noExtra(t);
+  t=layer(64,2,7);clicks=GameActivity.clicks;int pans=GameActivity.cameraCommands;
+  t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,800,550));t.onTouchEvent(one(1,850,560));clean();
+  assert GameActivity.clicks==clicks&&GameActivity.cameraCommands==pans&&GameActivity.events.contains("move:850:560");
+  t.rotateObjectPreview();assert GameActivity.keys[0xBC];clean();
+  tap(t,850,560);clean();assert GameActivity.clicks==clicks+1;noExtra(t);
   t=layer(512,2,0);clicks=GameActivity.clicks;tap(t,600,500);clean();assert GameActivity.clicks==clicks;
   t=layer(512,0,3);tap(t,600,500);clean();assert GameActivity.clicks==clicks;
   t=layer(0,1,0);tap(t,600,500);clean();assert GameActivity.clicks==clicks+1;noExtra(t);
@@ -530,6 +536,10 @@ public class TouchCheck {
   TouchLayer t=layer(512,2,3);GameActivity.events.clear();t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,800,550));assert GameActivity.mouse;
   assert GameActivity.events.indexOf("button:true:600:500")>=0;assert GameActivity.events.get(GameActivity.events.size()-1).equals("move:800:550");
   t.onTouchEvent(one(1,850,575));assert !GameActivity.mouse;assert GameActivity.events.get(GameActivity.events.size()-1).equals("button:false:850:575");clean();
+  t=layer(256,2,8);GameActivity.hitAt=(x,y)->y>.6f?1:2;GameActivity.events.clear();
+  t.onTouchEvent(one(0,950,500));t.onTouchEvent(one(2,990,560));assert GameActivity.mouse;
+  t.onTouchEvent(one(2,1100,880));t.onTouchEvent(one(1,1100,880));
+  assert GameActivity.events.contains("button:true:950:500")&&GameActivity.events.contains("button:false:1100:880");noExtra(t);
   t=layer(512,2,3);t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,800,550));GameActivity.events.clear();t.onTouchEvent(two(5,1,800,550,1000,550));
   assert GameActivity.events.get(0).equals("key:27:true");assert GameActivity.events.get(1).startsWith("button:false");int clicks=GameActivity.clicks;
   t.onTouchEvent(two(6,0,800,550,1000,550));t.onTouchEvent(event(2,0,new int[]{19},new float[]{1500},new float[]{900}));t.onTouchEvent(event(1,0,new int[]{19},new float[]{1500},new float[]{900}));clean();assert GameActivity.clicks==clicks;
@@ -546,6 +556,11 @@ public class TouchCheck {
   t=layer(4|1024,2,0);GameActivity.events.clear();t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,800,650));assert GameActivity.mouse;assert GameActivity.events.get(GameActivity.events.size()-1).equals("move:800:500");t.onTouchEvent(two(5,1,800,650,1000,650));assert !GameActivity.mouse;assert GameActivity.events.stream().noneMatch(s->s.startsWith("key:27:"));noExtra(t);
  }
  static void ui(){
+  TouchLayer drag=layer(5,1|4|(8<<18),0);GameActivity.events.clear();
+  drag.onTouchEvent(one(0,600,500));drag.onTouchEvent(one(2,1000,650));drag.onTouchEvent(one(1,1000,650));
+  assert GameActivity.events.indexOf("button:true:600:500")<GameActivity.events.indexOf("move:608:500");
+  assert GameActivity.events.indexOf("move:608:500")<GameActivity.events.indexOf("move:1000:650");
+  assert GameActivity.events.get(GameActivity.events.size()-1).equals("button:false:1000:650");noExtra(drag);
   for(int lift:new int[]{0,1}){
    TouchLayer t=layer(4,1|4,0);t.onTouchEvent(one(0,600,500));t.onTouchEvent(one(2,650,500));assert GameActivity.mouse;
    t.onTouchEvent(two(5,1,650,500,1000,600));t.onTouchEvent(two(2,0,700,500,1500,900));assert Math.round(GameActivity.x*2400)==700;
@@ -934,10 +949,12 @@ public class TouchCheck {
    GameActivity.kind=2;t.onTouchEvent(one(2,flag==256?900:500,flag==512?900:500));assert GameActivity.scrolls>scrolls+1&&!GameActivity.mouse;
    noExtra(t);
   }
-  TouchLayer t=layer(64,129,0);int cheats=GameActivity.cheatRequests,clicks=GameActivity.clicks;
+  TouchLayer t=layer(64,129,0);int cheats=GameActivity.cheatRequests,clicks=GameActivity.clicks,notices=GameActivity.notices;
   t.onTouchEvent(one(0,500,500));Handler.advance(450);assert GameActivity.cheatRequests==cheats+1;
-  t.onTouchEvent(one(1,500,500));clean();assert GameActivity.clicks==clicks;
-  t=layer(64,129,0);tap(t,500,500);clean();assert GameActivity.clicks==clicks+1;
+  t.onTouchEvent(one(1,500,500));clean();assert GameActivity.clicks==clicks&&GameActivity.notices==notices;
+  t=layer(64,129,0);tap(t,500,500);clean();assert GameActivity.clicks==clicks+1&&GameActivity.notices==notices+1;
+  assert GameActivity.lastNotice.equals(GameActivity.text(R.string.cheat_menu_hint));
+  tap(t,500,500);clean();assert GameActivity.clicks==clicks+2&&GameActivity.notices==notices+1;
  }
  static void cancelTap(){
   for(int mode:new int[]{64,128,256,512}){

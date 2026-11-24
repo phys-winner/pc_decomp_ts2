@@ -70,7 +70,7 @@ void d3d_rt_set_idle(int (*poll)(int idle)) { atomic_store_explicit(&idle_poll, 
 
 static inline void cpu_relax(void)
 {
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(__arm__)
     __asm__ volatile("yield" ::: "memory");
 #endif
 }

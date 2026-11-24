@@ -2,10 +2,13 @@
 #include "host.h"
 #include "input.h"
 #include "sims2_settings.h"
+#include "sims2_extender.h"
 #include "sims2_cheats.h"
 #include <time.h>
 #include <stdatomic.h>
 #include <math.h>
+
+enum { TOUCH_DRAG_FILTER = 1 << 17, TOUCH_DRAG_STEP_SHIFT = 18 };
 
 static uint32_t win_manager;
 static uint32_t win_manager_thread;
@@ -562,6 +565,7 @@ static int touch_camera_apply(float dx, float dy, float radians, float zoom, flo
     unsigned context = s2_touch_context();
     int town = context == S2_TOUCH_TOWN;
     if (!town && context != S2_TOUCH_LIVE && context != S2_TOUCH_BUY && context != S2_TOUCH_BUILD) return 0;
+    s2_extender_camera_sensitivity(&radians, &pitch);
     uint32_t camera = town ? town_camera : lot_camera;
     if (!touch_layout_matches(context, size, epoch) || !camera || !void_vm_writable(camera, 0x458)) return 0;
     uint32_t table = MEM32(camera), setter;
@@ -724,7 +728,7 @@ static int touch_tool_kind(const char *type)
     static const struct { const char *name; int kind; } known[] = {
         {"StandardAction", 1}, {"SelectSim", 1}, {"CameraBase", 1},
         {"CameraHandDrag", 1}, {"CameraMiddleClick", 1}, {"CameraRightClick", 1},
-        {"Object", 2}, {"InventoryObject", 2}, {"ObjectForSale", 2},
+        {"Object", 2}, {"ObjectForSale", 2},
         {"Eyedropper", 6}, {"ObjectDesign", 6},
         {"Wall", 3}, {"FloorPattern", 3}, {"Wallpaper", 3}, {"DeckFoundation", 3},
         {"CurvedPool", 3}, {"Water", 3}, {"Roof", 3}, {"RoofAngle", 3}, {"RoofPattern", 3},
@@ -732,7 +736,9 @@ static int touch_tool_kind(const char *type)
         {"Fireplace", 3}, {"Elevator", 3}, {"AutoRoof", 3},
         {"FloorElevation", 3}, {"FloorLevel", 3}, {"FloorVisibility", 3},
         {"TerrainBrush", 4}, {"TerrainPaint", 4}, {"TerrainSculpt", 4}, {"FlattenLot", 4},
-        {"SledgeHammer", 5}, {"BulldozeLot", 5}, {"EvictFamily", 5}, {"MoveLotToCatalog", 5}
+        {"SledgeHammer", 5}, {"BulldozeLot", 5}, {"EvictFamily", 5}, {"MoveLotToCatalog", 5},
+        {"PlaceNewLot", 7}, {"PlaceLotFromInventory", 7}, {"MoveLot", 7},
+        {"InventoryObject", 8} /* The inventory Hand uses the game's pickup and drop panel. */
     };
     const char *prefix = ".?AVcTSUserTool";
     size_t length = strlen(prefix);
@@ -1247,7 +1253,8 @@ static unsigned touch_widget(uint32_t window)
         if (strstr(type, "cGZWinSlider@@") || strstr(type, "cGZWinScrollbar") || strstr(type, "cGZWinSpinner@@"))
             flags |= 4;
         if (!depth && s2_touch_text_editable(window)) flags |= 16;
-        if (strstr(type, "cGZWinGrid@@") || strstr(type, "cGZWinListBox@@") || strstr(type, "cGZWinTreeView"))
+        if (strstr(type, "cGZWinGrid@@") || strstr(type, "cGZWinListBox@@") || strstr(type, "cGZWinTreeView") ||
+            !strcmp(type, ".?AVcTSWinListBox@@"))
             flags |= 8;
         /* Description fields can enable both editing and scrolling (town text uses 0x99CB). */
         if (!strcmp(type, ".?AVcGZWinTextEdit@@") &&
@@ -1264,6 +1271,7 @@ static unsigned touch_widget(uint32_t window)
             for (unsigned n = 0; node != head && node && n < 64 && void_vm_readable(node, 12); ++n) {
                 uint32_t object = MEM32(node + 8);
                 const char *proc = touch_type(object);
+                if (!depth && !strcmp(proc, ".?AVcTSWinDragAndDropMessageFilter@@")) flags |= 4 | TOUCH_DRAG_FILTER;
                 if (strstr(proc, "cTSWinProc") && strstr(proc, "Catalog")) flags |= 8;
                 if (touch_grid_proc(object) || touch_cas_grid_proc(object, window)) flags |= 8 | 32;
                 if (!strcmp(proc, ".?AVcTSWinProcCatalogThumbnail@@")) { flags |= 64; s2_catalog_track(object); }
@@ -1275,14 +1283,14 @@ static unsigned touch_widget(uint32_t window)
     return flags;
 }
 
-/* 16 when the full pick (s2_ui_pick) hit a decoration flagged winflag_ignoremouse (0x200000)
- * and the window a mouse click at (x, y) reaches instead is an editable text field. */
-static unsigned touch_mouse_text(uint32_t root, uint32_t hit, int x, int y)
+/* A decorative winflag_ignoremouse overlay can cover an interactive widget. */
+static uint32_t touch_input_pick(uint32_t root, int x, int y)
 {
-    if (!root || !hit || !void_vm_readable(hit, 0xEC) || !(MEM32(hit + 0xE8) & 0x200000u) ||
-        !void_vm_readable(MEM32(root), 0xC4)) return 0;
-    uint32_t field = s2_ui_mouse_pick(root, x, y);
-    return field && field != hit && s2_touch_text_editable(field) ? 16 : 0;
+    uint32_t hit = s2_ui_pick(root, x, y);
+    if (!hit || !void_vm_readable(hit, 0xEC) || !(MEM32(hit + 0xE8) & 0x200000u) ||
+        !void_vm_readable(MEM32(root), 0xC4)) return hit;
+    uint32_t widget = s2_ui_mouse_pick(root, x, y);
+    return (touch_widget(widget) & (4 | 8 | 16)) ? widget : hit;
 }
 
 static uint32_t touch_pie_owner(uint32_t window)
@@ -1408,7 +1416,7 @@ static int touch_pie_hits(uint32_t pie, double factor, int x, int y)
     return 0;
 }
 
-static void touch_pie_center(uint32_t window, double factor, int *x, int *y)
+static void touch_window_center(uint32_t window, double factor, int *x, int *y)
 {
     int left = (int)MEM32(window + 0x24), top = (int)MEM32(window + 0x28);
     float sx = (left + ((int)MEM32(window + 0x2C) - left) / 2) * (float)factor;
@@ -1504,7 +1512,7 @@ static int touch_pie_pick(uint32_t pie, uint32_t manager, int *x, int *y, int si
     }
     for (unsigned i = 0; i < count; ++i) {
         int tx, ty;
-        touch_pie_center(labels[i], factor, &tx, &ty);
+        touch_window_center(labels[i], factor, &tx, &ty);
         /* Only a point the menu itself resolves to an item. */
         if (!touch_pie_hits(pie, factor, tx, ty)) continue;
         *x = tx; *y = ty;
@@ -1579,7 +1587,7 @@ static uint32_t touch_ui_target(uint32_t root, uint32_t hit, int *x, int *y, int
                 : touch_ui_button(parent)) return 0;
         parent = MEM32(parent + 0x58);
     }
-    if (!pie && hit && ((touch_widget(hit) & (4 | 8 | 16)) || touch_mouse_text(root, hit, *x, *y))) return 0;
+    if (!pie && hit && (touch_widget(hit) & (4 | 8 | 16))) return 0;
     int px = (int)(*x / factor), py = (int)(*y / factor);
     double minimum = side / factor, best_distance = 1e30;
     uint32_t stack[512] = {pie ? pie : root}, best = 0;
@@ -1761,7 +1769,7 @@ static int touch_catalog_apply(int x, int y, int amount, int info, unsigned cont
         void_call_guest_this(0xA093550Au, target - 4, 0, NULL);
         return 1;
     }
-    uint32_t window = s2_ui_pick(root, x, y);
+    uint32_t window = touch_input_pick(root, x, y);
     if (!touch_layout_matches(context, size, epoch) || s2_touch_owner_manager() != manager ||
         !void_vm_readable(manager, 0x48) || MEM32(manager + 0x44) != root || MEM32(manager + 0x34)) return 0;
     for (unsigned depth = 0; window && depth < 16 && void_vm_readable(window, 0xA4); ++depth) {
@@ -1795,7 +1803,7 @@ static int touch_fling_apply(int x, int y, int amount, unsigned context, uint64_
     uint32_t manager = s2_touch_owner_manager(), root = (uint32_t)(owner >> 32), window = (uint32_t)owner;
     if (!amount || amount < -8 || amount > 8 || !touch_layout_matches(context, size, epoch) || !manager ||
         !root || !window || MEM32(manager + 0x44) != root || MEM32(manager + 0x34) ||
-        !void_vm_readable(root, 0xEC) || !void_vm_readable(MEM32(root), 0xC0) || s2_ui_pick(root, x, y) != window ||
+        !void_vm_readable(root, 0xEC) || !void_vm_readable(MEM32(root), 0xC0) || touch_input_pick(root, x, y) != window ||
         !touch_layout_matches(context, size, epoch) || s2_touch_owner_manager() != manager || MEM32(manager + 0x44) != root) return 0;
     unsigned flags = touch_widget(window);
     if (!(flags & 8) || (flags & (4 | 64 | 256 | 512))) return 0;
@@ -2885,7 +2893,7 @@ void s2_touch_barrier(unsigned serial)
     void_regs_save(&saved);
     unsigned context = s2_touch_context();
     if (!(context & S2_TOUCH_LOADING) && root && void_vm_readable(root, 0x5C) && void_vm_readable(MEM32(root), 0xC0)) {
-        hit = s2_ui_pick(root, x, y);
+        hit = touch_input_pick(root, x, y);
         if (hit) {
             unsigned modes = S2_TOUCH_CAS | S2_TOUCH_TOWN | S2_TOUCH_LIVE | S2_TOUCH_BUY | S2_TOUCH_BUILD;
             unsigned blockers = S2_TOUCH_MODAL | S2_TOUCH_OPTIONS | S2_TOUCH_CHOOSER | S2_TOUCH_LOT_INFO;
@@ -2894,7 +2902,6 @@ void s2_touch_barrier(unsigned serial)
                     ? 2 : 1 | (int)touch_widget(hit);
             else if (hit != root && touch_type(hit)[0] && (!touch_scene_ancestry(hit) || touch_ui_button(hit)))
                 result = 1 | (int)touch_widget(hit);
-            if ((result & 3) == 1 && !(result & 16)) result |= (int)touch_mouse_text(root, hit, x, y);
         }
         if (context == S2_TOUCH_CHOOSER && touch_chooser_window(root)) result = 1 | 256;
         else if ((result & 3) == 1 || (!step && radius < 0 && result == 2)) {
@@ -2932,6 +2939,21 @@ void s2_touch_barrier(unsigned serial)
             result = 1 | (touch_widget(target) & ~swipe_flags);
         }
         result |= gestures;
+        if ((result & TOUCH_DRAG_FILTER) && void_vm_readable(MEM32(root), 0xC4)) {
+            /* The drag manager needs a move of over three logical pixels inside the source. */
+            double factor = s2_ui_factor();
+            int start_x, start_y, width, height;
+            int step = (int)(4 * factor);
+            step += step < 4 * factor;
+            touch_window_center(hit, factor, &start_x, &start_y);
+            void_input_screen_size(&width, &height);
+            if (step > 0 && step <= 15 && start_x >= 0 && start_x < width - step && start_y >= 0 && start_y < height &&
+                s2_ui_mouse_pick(root, start_x, start_y) == hit && s2_ui_mouse_pick(root, start_x + step, start_y) == hit) {
+                target_x = start_x;
+                target_y = start_y;
+                result |= step << TOUCH_DRAG_STEP_SHIFT;
+            }
+        }
         /* TouchLayer.HOLD_BUTTON: a held finger keeps an original button pressed, as a held mouse. */
         if ((result & 3) == 1)
             for (uint32_t window = hit, depth = 0; window && depth < 4 && void_vm_readable(window, 0xEC); ++depth) {

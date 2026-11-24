@@ -44,4 +44,7 @@
   <string name="target_object">Voorwerp %1$d</string>
   <string name="target_changed">Het doel is verplaatst. Tik opnieuw.</string>
   <string name="floor_swipe_hint">Veeg met drie vingers omhoog of omlaag om van verdieping te wisselen.</string>
+  <string name="mods_ui_title">Interfacemods</string>
+  <string name="mods_ui_hint">Mods die de interface van het spel wijzigen, werken mogelijk niet: bij deze interfaceschaal gebruikt het spel zijn compacte 800×600-indelingen, terwijl de meeste interfacemods alleen de gewone indelingen (1024×768 en groter) wijzigen. Kies een kleinere interfaceschaal in de grafische opties van het spel en start het spel opnieuw om ze te gebruiken.</string>
+  <string name="unpacking_engine">Spelcode uitpakken…</string>
 </resources>

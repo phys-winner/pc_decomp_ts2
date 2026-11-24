@@ -40,6 +40,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     static native void nativeMouseWarp(float x,float y);
     static native void nativeMouseWheel(int delta);
     static native int nativeTouchContext();
+    private static native int nativeUiLayoutSet();
     static native boolean nativeTouchRewards();
     private static native boolean nativeTouchPhoto();
     static native int nativeTouchHitKind(float x,float y);
@@ -135,6 +136,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         if(toolMenu!=null&&!toolMenuValid())closeToolMenu();
         if(targetMenu!=null&&!targetMenu.isCurrent())closeTargetMenu();
         refreshObjectControls();
+        showModsHint();
         showTimeHint();
         showFloorHint();
         if(textSerial!=0)handleTextReceipt(nativeTouchReplaceTextStatus(textSerial));
@@ -144,6 +146,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }};
     static String text(int resource,Object...args){return active==null?"":(active.strings==null?active:active.strings).getString(resource,args);}
     static void touchNotice(String text){if(active!=null)Toast.makeText(active,text,Toast.LENGTH_LONG).show();}
+    static void touchCheatMenuHint(){
+        if(active!=null&&GamePreferences.takeCheatMenuHint(active.getIntent().getStringExtra("userdata")!=null))
+            touchNotice(text(R.string.cheat_menu_hint));
+    }
     static void touchSettingsRequested(){if(active!=null)active.showTouchSettings();}
     static void touchTextRequested(float x,float y){if(active!=null)active.showTextEditor(x,y);}
     static void touchObjectControlsChanged(){if(active!=null)active.refreshObjectControls();}
@@ -318,6 +324,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         float density=getResources().getDisplayMetrics().density;
         objectControls=new LinearLayout(this);objectControls.setOrientation(LinearLayout.VERTICAL);objectControls.setVisibility(View.GONE);
         rotateButton=objectButton(text(R.string.rotate),"↻");placeButton=objectButton(text(R.string.place),"✓");cancelButton=objectButton(text(R.string.cancel),"×");
+        android.graphics.drawable.GradientDrawable rotateBackground=objectControlBackground(density);
+        rotateBackground.setColor(Color.rgb(35,60,112));
+        rotateButton.setBackground(rotateBackground);rotateButton.setTextColor(Color.WHITE);
+        rotateButton.setContentDescription(text(R.string.rotate));
         objectCost=new TextView(this);objectCost.setTextColor(Color.WHITE);objectCost.setTextSize(16);objectCost.setGravity(android.view.Gravity.CENTER);
         objectControls.addView(objectCost);
         for(Button button:new Button[]{rotateButton,placeButton,cancelButton}){
@@ -493,8 +503,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
     private void refreshObjectControls(){
         if(objectControls==null||touch==null)return;
-        boolean visible=active==this&&started&&!inputOverlayOpen()&&touch.objectControlsVisible();
-        objectControls.setVisibility(visible?View.VISIBLE:View.GONE);
+        boolean controlsAllowed=active==this&&started&&!inputOverlayOpen();
+        boolean visible=controlsAllowed&&touch.objectControlsVisible(),townLot=controlsAllowed&&touch.townLotControlsVisible();
+        objectControls.setVisibility(visible||townLot?View.VISIBLE:View.GONE);
+        placeButton.setVisibility(townLot?View.GONE:View.VISIBLE);cancelButton.setVisibility(townLot?View.GONE:View.VISIBLE);
         int mode=nativeTouchContext();
         photoControls.setVisibility(canUsePhotoControls(mode)?View.VISIBLE:View.GONE);
         boolean help=active==this&&started&&!inputOverlayOpen()&&
@@ -515,8 +527,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         int cost=visible?nativeTouchObjectCost():-1;
         objectCost.setText(cost>=0?"§ "+cost:"");objectCost.setVisibility(cost>=0?View.VISIBLE:View.GONE);
         boolean ready=visible&&touch.canUseObjectPreview();
-        rotateButton.setEnabled(ready);placeButton.setEnabled(ready);cancelButton.setEnabled(visible&&touch.canCancelObject());
-        rotateButton.setAlpha(ready?1:.45f);placeButton.setAlpha(ready?1:.45f);
+        rotateButton.setEnabled(ready||townLot);placeButton.setEnabled(ready);cancelButton.setEnabled(visible&&touch.canCancelObject());
+        rotateButton.setAlpha(ready||townLot?1:.45f);placeButton.setAlpha(ready?1:.45f);
     }
 
     private void applySafeInsets(android.view.WindowInsets insets){
@@ -622,14 +634,14 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         getWindow().setAttributes(attributes);
         hideSystemUi();
         base = new File(Environment.getExternalStorageDirectory(), "Sims2");
-        /* Development: a library pushed into the app's own files (run-as)
-         * replaces the packaged one, so Java changes do not need it rebuilt. */
-        File dev = new File(getFilesDir(), "libsims2.so");
+        /* The first start of a build unpacks the engine from the APK (NativeLibrary, a few seconds):
+         * a progress screen while it runs off the UI thread, then this activity anew with the library
+         * in place. Nothing native is called before that. */
+        if(NativeLibrary.needsUnpack(this,"sims2")){showUnpacking();return;}
         try {
-            if(dev.isFile()){
-                if(!dev.setReadOnly())throw new UnsatisfiedLinkError("Cannot make development engine read-only");
-                System.load(dev.getAbsolutePath());
-            }else System.loadLibrary("sims2");
+            /* A development library pushed into the app's own files (run-as) replaces the packaged
+             * one, so Java changes do not need it rebuilt (NativeLibrary.prepare). */
+            NativeLibrary.load(this,"sims2");
             String renderer=launch.renderer();
             /* The native renderers (android/render): OpenGL ES by default, Vulkan when chosen (on the system
              * driver, Mesa Turnip or Mesa PanVK, also the player's own driver: PORT_TURNIP_DRIVER and
@@ -637,7 +649,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             nativeRenderer("vulkan".equals(renderer)?2:"turnip".equals(renderer)?3:"panvk".equals(renderer)?4
                     :"legacy".equals(renderer)?0:1,
                     getApplicationInfo().nativeLibraryDir,getCacheDir().getAbsolutePath());
-        }catch(LinkageError failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
+        }catch(LinkageError|java.io.IOException failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
         started = true;
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
@@ -661,19 +673,67 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         try{data=new File(base,userdataName(getIntent().getStringExtra("userdata")));}
         catch(IllegalArgumentException failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
         if(!data.isDirectory()&&!data.mkdirs()){launch.failed("Cannot create game profile");Launch.openLauncher(this,launch.distribution());finish();return;}
+        String extenderChoice = launch.option("ts2_extender");
+        String qaExtender = "userdata".equals(data.getName()) ? null : getIntent().getStringExtra("qa_ts2_extender");
+        if ("0".equals(qaExtender) || "1".equals(qaExtender)) extenderChoice = qaExtender;
+        boolean useExtender = "1".equals(extenderChoice) || "true".equals(extenderChoice);
         if(!"userdata".equals(data.getName())){
+            try{android.system.Os.setenv("PORT_SKIP_INTRO","1",true);}
+            catch(android.system.ErrnoException failure){android.util.Log.w("Sims2","QA skip intro: "+failure);}
+            if("0".equals(qaExtender)||"1".equals(qaExtender))try{android.system.Os.setenv("PORT_OPTION_TS2_EXTENDER",qaExtender,true);}
+            catch(android.system.ErrnoException failure){android.util.Log.w("Sims2","QA TS2 Extender: "+failure);}
             int qaFps=getIntent().getIntExtra("qa_fps",0);
             if(qaFps>=5&&qaFps<=8)try{android.system.Os.setenv("S2_FPS_LIMIT",Integer.toString(qaFps),true);}
             catch(android.system.ErrnoException failure){android.util.Log.w("Sims2","QA frame limit: "+failure);}
+            /* QA runs choose the interface mode without touching the player's launcher choice. */
+            String qaAdaptive=getIntent().getStringExtra("qa_adaptive_ui");
+            if("0".equals(qaAdaptive)||"1".equals(qaAdaptive))try{android.system.Os.setenv("PORT_OPTION_ADAPTIVE_UI",qaAdaptive,true);}
+            catch(android.system.ErrnoException failure){android.util.Log.w("Sims2","QA adaptive interface: "+failure);}
         }
+        /* The player's profile only: a 32-bit device's first-launch "yes" is one file, consumed
+         * when the preset's snapshot appears. A QA profile must not take or delete that request. */
+        if("userdata".equals(data.getName())){
+            File once=GamePreferences.launcherFlag(this,GamePreferences.MINIMAL_GRAPHICS_ONCE);
+            File backup=new File(data,"Documents/EA Games/The Sims 2 Legacy/Config/port-graphics-before-minimal.txt");
+            if(GamePreferences.armMinimalGraphics(once,backup)){
+                try{
+                    android.system.Os.setenv("PORT_OPTION_MINIMAL_GRAPHICS","1",true);
+                    android.system.Os.setenv("PORT_MINIMAL_GRAPHICS_ONCE",once.getAbsolutePath(),true);
+                }catch(android.system.ErrnoException failure){android.util.Log.w("Sims2","minimal graphics: "+failure);}
+            }
+        }
+        scanMods(data);
         SessionLog.begin(this,data);
         String args = TouchLayer.readText(new File(base, "args.txt")).trim();
         launch.starting();
         new Thread(()->{
             try{
                 File resources=GameAssets.prepare(getAssets(),getFilesDir());
+                File extender = null;
+                ExtenderAssets.Splash loadedSplash = null;
+                try {
+                    android.system.Os.setenv("S2_TS2_EXTENDER_ASSETS", "", true);
+                    if (useExtender) extender = ExtenderAssets.prepare(this, data);
+                    if (extender != null) {
+                        android.system.Os.setenv("S2_TS2_EXTENDER_ASSETS", extender.getAbsolutePath(), true);
+                        loadedSplash = ExtenderAssets.splash(extender, data);
+                    }
+                } catch (java.io.IOException | android.system.ErrnoException failure) {
+                    android.util.Log.w("Sims2", "TS2 Extender ZIP: " + failure);
+                    runOnUiThread(() -> touchNotice("TS2 Extender ZIP: " + failure.getMessage()));
+                }
+                final ExtenderAssets.Splash splash = loadedSplash;
                 runOnUiThread(()->{
                     if(active!=this||isFinishing())return;
+                    if (splash != null) {
+                        android.widget.ImageView image = new android.widget.ImageView(this);
+                        image.setImageBitmap(splash.image);
+                        image.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+                        int height = loadingView.getHeight();
+                        if (height == 0) height = getResources().getDisplayMetrics().heightPixels;
+                        loadingView.removeAllViews();
+                        loadingView.addView(image, new LinearLayout.LayoutParams(-1, Math.round(height * splash.coverage)));
+                    }
                     if(!nativeStart(launch.folder("game").getAbsolutePath(), data.getAbsolutePath(),
                             resources.getAbsolutePath(),args,new File(base,"verbose").exists())){
                         launch.failed(text(R.string.engine_start_failed));
@@ -703,7 +763,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         if(!nativeTouchSetUiScale(desiredScale))touchNotice(text(R.string.scale_busy));
     }
     private void showTimeHint(){
-        if(active!=this||!started||!firstFrame||!hasWindowFocus()||nativeTouchContext()!=TouchLayer.LIVE
+        if(active!=this||!started||!firstFrame||!hasWindowFocus()||settingsDialog!=null||nativeTouchContext()!=TouchLayer.LIVE
                 ||inputOverlayOpen()||textSerial!=0
                 ||!GamePreferences.uiSwipeControls()||GamePreferences.timeHintShown())return;
         AlertDialog.Builder builder=new AlertDialog.Builder(this,R.style.PortDialog);
@@ -716,6 +776,63 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         });
         touch.setBlocked(true);if(gamepad!=null)gamepad.setEnabledInput(false);refreshObjectControls();
         settingsDialog.show();GamePreferences.markTimeHintShown();
+    }
+    /* Downloads holds a package while the game uses its 800x600 interface layouts (a large interface
+       scale): interface mods made for the regular layouts do not apply then, so the player learns once
+       how to get them. The scan runs off the UI thread. */
+    private volatile boolean modsPresent;
+    private void scanMods(File data){
+        File downloads=new File(data,"Documents/EA Games/The Sims 2 Legacy/Downloads");
+        new Thread(()->modsPresent=hasPackage(downloads,0),"Mods scan").start();
+    }
+    static boolean hasPackage(File folder,int depth){
+        File[] files=folder.listFiles();
+        if(files==null||depth>8)return false;
+        for(File file:files)
+            if(file.isDirectory()?hasPackage(file,depth+1):file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".package"))return true;
+        return false;
+    }
+    private void showModsHint(){
+        if(!modsPresent||active!=this||!started||!firstFrame||!hasWindowFocus()||settingsDialog!=null
+                ||inputOverlayOpen()||textSerial!=0||nativeUiLayoutSet()!=1||GamePreferences.modsHintShown())return;
+        AlertDialog.Builder builder=new AlertDialog.Builder(this,R.style.PortDialog);
+        TextView help=new TextView(builder.getContext());help.setText(text(R.string.mods_ui_hint));help.setTextColor(Color.BLACK);
+        int padding=Math.round(20*getResources().getDisplayMetrics().density);help.setPadding(padding,padding,padding,padding);
+        settingsDialog=builder.setTitle(text(R.string.mods_ui_title)).setView(help).setPositiveButton(text(R.string.done),null).create();
+        settingsDialog.setOnDismissListener(d->{
+            settingsDialog=null;
+            if(active==this){touch.setBlocked(!hasWindowFocus());hideSystemUi();if(gamepad!=null)gamepad.setEnabledInput(hasWindowFocus());}
+        });
+        touch.setBlocked(true);if(gamepad!=null)gamepad.setEnabledInput(false);refreshObjectControls();
+        settingsDialog.show();GamePreferences.markModsHintShown();
+    }
+    private void showUnpacking(){
+        launch.starting();
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(android.view.Gravity.CENTER);box.setBackgroundColor(Color.BLACK);
+        TextView title=new TextView(this);title.setText(text(R.string.unpacking_engine));title.setTextColor(Color.WHITE);
+        title.setTextSize(18);title.setGravity(android.view.Gravity.CENTER);box.addView(title);
+        android.widget.ProgressBar bar=new android.widget.ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        box.addView(bar,new LinearLayout.LayoutParams(Math.round(320*getResources().getDisplayMetrics().density),-2));
+        setContentView(box);hideSystemUi();
+        box.post(new Runnable(){public void run(){
+            long[] done=NativeLibrary.progress();
+            if(done!=null)bar.setProgress((int)(1000*done[0]/done[1]));
+            if(!isFinishing()&&!isDestroyed())box.postDelayed(this,100);
+        }});
+        new Thread(()->{
+            try{
+                NativeLibrary.prepare(this,"sims2");
+                runOnUiThread(()->{if(!isFinishing()&&!isDestroyed())recreate();});
+            }catch(java.io.IOException|RuntimeException|LinkageError failure){
+                android.util.Log.e("Sims2","engine unpack failed",failure);
+                runOnUiThread(()->{
+                    if(isFinishing()||isDestroyed())return;
+                    launch.failed(String.valueOf(failure.getMessage()));Launch.openLauncher(this,launch.distribution());finish();
+                });
+            }
+        },"Engine unpack").start();
     }
     private void showFloorHint(){
         if(GamePreferences.floorHintShown()||!firstFrame||!hasWindowFocus()||inputOverlayOpen()||textSerial!=0)return;

@@ -225,12 +225,26 @@ def complete_eh_owner(decoder, function, imports):
         return
     instructions = sorted({i.address: i for b in function.blocks.values()
                            for i in b.instructions}.values(), key=lambda i: i.address)
-    scanner_instructions = instructions
+    # An adjustor thunk in front of the body (`sub ecx, [ecx-4]` or `add/sub ecx, imm`, then `jmp body`):
+    # MSVC places such thunks right before a method, and when no one enters the body directly the body
+    # is lifted into the thunk's function. Its prologue (where the EH frame is installed) is then at the
+    # jump target, not at the entry; the thunk leaves ESP alone, so the runtime's entry ESP still holds.
+    # Sims2EP9 has 290 such thunk-fronted EH bodies; 5 of them have catch blocks, and without this they had
+    # no landing pad: a throw they catch (a mod's material script error, nGZCommandParser::cError caught in
+    # 0xA0ACFDEE) ended the game as uncaught.
+    head = 0
+    if (len(instructions) >= 2 and instructions[0].address == function.address
+            and instructions[0].mnemonic in ("sub", "add") and instructions[0].op_str.startswith("ecx, ")
+            and instructions[1].address == instructions[0].end_address and instructions[1].mnemonic == "jmp"):
+        target = instructions[1].get_branch_target()
+        head = next((k for k, i in enumerate(instructions) if i.address == target), 0)
+    body = instructions[head:]
+    opens = bool(body) and (head > 0 or body[0].address == function.address)
+    scanner_instructions = body
     bias = 0
-    if (len(instructions) >= 3 and instructions[0].address == function.address
-            and instructions[0].mnemonic == "push" and instructions[0].op_str == "ebp"):
-        lea, sub = instructions[1:3]
-        if (lea.address == instructions[0].end_address and sub.address == lea.end_address
+    if opens and len(body) >= 3 and body[0].mnemonic == "push" and body[0].op_str == "ebp":
+        lea, sub = body[1:3]
+        if (lea.address == body[0].end_address and sub.address == lea.end_address
                 and lea.mnemonic == "lea" and len(lea.operands) == 2
                 and lea.operands[0].type == X86_OP_REG and lea.operands[0].reg == X86_REG_EBP
                 and lea.operands[1].type == X86_OP_MEM
@@ -243,11 +257,11 @@ def complete_eh_owner(decoder, function, imports):
                     and sub.operands[1].imm == -memory.disp):
                 bias = -memory.disp
                 # Normalize only the metadata scanner; emitted guest instructions stay exact.
-                scanner_instructions = [instructions[0], replace(lea, mnemonic="mov", op_str="ebp, esp"), *instructions[2:]]
+                scanner_instructions = [body[0], replace(lea, mnemonic="mov", op_str="ebp, esp"), *body[2:]]
     fi = None
-    if len(instructions) >= 2:
-        first, second = instructions[:2]
-        if (first.address == function.address and second.address == first.end_address
+    if opens and len(body) >= 2:
+        first, second = body[:2]
+        if (second.address == first.end_address
                 and first.mnemonic == "mov" and first.op_str.startswith("eax, 0x")
                 and second.mnemonic == "call" and second.op_str == "0xa08248b0"):
             # MSVC's shared __EH_prolog pushes the handler in EAX and sets EBP to entry ESP - 4.
@@ -264,7 +278,7 @@ def complete_eh_owner(decoder, function, imports):
         return
     if fi is None:
         handler = None
-        for instruction in instructions[:PROLOGUE_WINDOW]:
+        for instruction in body[:PROLOGUE_WINDOW]:
             if instruction.mnemonic == "push" and instruction.op_str.startswith("0x"):
                 handler = int(instruction.op_str, 16)
             elif instruction.mnemonic == "mov" and instruction.op_str.endswith("dword ptr fs:[0]") and handler is not None:

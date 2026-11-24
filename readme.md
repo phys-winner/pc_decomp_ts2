@@ -1,9 +1,9 @@
-# The Sims 2 Legacy for ARM64 Android
+# The Sims 2 Legacy for Android
 
-Development build: **0.2.1-dev**.
+Development build: **0.3-dev**.
 
 An unofficial Android port of the PC version of **The Sims 2 Legacy Collection**.
-The original x86 executable is statically recompiled to C and built for ARM64,
+The original x86 executable is statically recompiled to C and built for ARM64 and ARMv7,
 with a Win32 compatibility runtime, native OpenGL ES and Vulkan renderers,
 touch controls, gamepad input and an Android launcher.
 
@@ -31,16 +31,19 @@ and embedded in the APK.
 
 ## Requirements
 
-- An **ARM64 Android** device running **Android 10 / API 29 or later**.
-- **OpenGL ES 3.2**. The app targets API 37 and includes only `arm64-v8a` libraries.
+- Android **10 / API 29 or later** on ARM64 or an experimental ARMv7 device with Thumb-2, NEON and 4 KiB pages.
+- **OpenGL ES 3.2**. The app targets API 37 and includes `arm64-v8a` and `armeabi-v7a` libraries.
 - The data from a compatible Legacy Collection installation, including `Base`
   and the expansion and stuff-pack folders.
 - Enough storage for the original game, saves, optional converted textures and
-  the app's extracted native libraries. Texture conversion requires extra space.
+  the app's native libraries. The APK carries both builds of the engine as XZ
+  in `assets/native`. On first use it unpacks the selected engine into the app's
+  files (about 191 MB for ARM64 or 154 MB for ARMv7). Texture conversion requires extra space.
 - Storage access granted through the launcher; Android 11+ uses All files access.
 
-Native libraries and APK packaging use 16 KiB alignment. Renderer requirements
-are additional to the minimum Android version.
+The APK is aligned for 16 KiB pages. ARM64 native libraries use 16 KiB alignment,
+and ARMv7 native libraries use 4 KiB alignment. Renderer requirements are additional
+to the minimum Android version.
 
 ## Install and play
 
@@ -113,8 +116,44 @@ an existing installation in place.
   storage (subfolders work too); the launcher creates it.
 
 **Adaptive interface is on by default.** Its checkbox in the launcher and in-game
-port settings saves the choice for the next launch. Original UI relayout and
-thumbnail callbacks remain synchronous and can cause stalls.
+port settings saves the choice for the next launch. **Regular UI layouts for mods**
+selects the layouts targeted by most UI mods on the next launch, including when
+the current UI scale would otherwise choose the compact layouts.
+
+Family and lot thumbnails appear as their slots are filled between frames.
+An individual uncached family portrait can still stall a frame.
+
+## TS2 Extender
+
+Enable **TS2 Extender** in the launcher's options to use the ARM64 adaptation of
+[TS2 Extender 1.0.0 for Legacy Collection](https://github.com/LazyDuchess/TS2-Extender/releases/tag/1.0.0).
+The switch defaults to off. The game reads the switch and the INI at startup.
+
+- **TS2Extender.ini** opens the editor. It saves to `Sims2/userdata/TS2Extender.ini`
+  in shared storage. The editor starts with the imported INI, or with the
+  [upstream field names and defaults](https://github.com/LazyDuchess/TS2-Extender/blob/1.0.0/files_lc/TSBin/TS2Extender.ini).
+  A saved profile INI takes precedence over the copy in the ZIP.
+- **Import LC ZIP** accepts the original Legacy Collection archive and stores it
+  as `Sims2/userdata/TS2Extender.zip`. While enabled, the game reads the date,
+  timing and wall cutaway packages from it. The OFB uniforms fix uses its
+  companion package when `FixOFBUniform` is enabled and the game loads custom
+  content. Choose **Enable Custom Content** in the game's startup dialog and
+  restart if the game reports that custom content is disabled.
+  The port uses a file of the same name in the ordinary Downloads folder
+  if the player has installed their own copy.
+- On Android, `Console` enables verbose logging in `sims2.log`.
+  `UIScaleResolution` sets the reference height for the port's UI scale
+  when `UIScale` is enabled. The two **Sims 3 Camera** sensitivity values
+  apply to the rotation and tilt gestures. **Splash** uses the image from the
+  imported archive while the game starts.
+- `ExtendedLua` enables additional libraries in the game's existing Lua VM.
+  Mods that require the extender's additional Lua functions and script loader
+  still require the Windows version. The port uses its own graphics settings
+  interface and its statically compiled game code.
+
+QA profiles keep their own INI and ZIP. The launcher switch also applies to
+QA runs unless the test specifies `--es qa_ts2_extender 0` or
+`--es qa_ts2_extender 1`. QA launches always skip both intro movies.
 
 ## Renderers
 
@@ -267,6 +306,7 @@ Copy-Item "C:/Games/The Sims 2 Legacy/EP9/TSBin/ijl15.dll" original/
 
 python -X utf8 -B tools/lift_sims2.py --jobs 12
 python -X utf8 -B tools/build_android.py --shared --jobs 12 --no-pgo
+python -X utf8 -B tools/build_android.py --abi arm32 --shared --jobs 12
 python -X utf8 -B tools/build_game_apk.py --skip-native
 ```
 
@@ -315,27 +355,40 @@ Installation is optional and requires an explicit target:
 python -X utf8 -B tools/build_game_apk.py --skip-native --install --serial DEVICE_SERIAL
 ```
 
+Use a separate QA profile for device tests. The game skips both startup movies
+when launched with a `userdata-qa-*` profile.
+
+```powershell
+adb -s DEVICE_SERIAL shell am start -n org.sims2.port/.GameActivity --es userdata userdata-qa-touch --es renderer gles
+```
+
 ## Local release artifacts
 
-Version `0.2.1-dev` and version code `6` are stored in
+Version `0.3-dev` and version code `7` are stored in
 `android/app/AndroidManifest.xml`. Increase the code for subsequent published updates.
 
 Package a published release from its reviewed commit so that the launcher's
 `assets/launcher/build.json` records that source commit. Name the artifact
-**`pub/sims2-0.2.1-dev-COMMIT.apk`**, where `COMMIT`
+**`pub/sims2-0.3-dev-COMMIT.apk`**, where `COMMIT`
 is the first eight characters of the Git commit, with a matching `.apk.sha256`.
 For a local build with uncommitted changes, append `-dirty` to the commit suffix.
 
 ```powershell
+$env:PORT_LAUNCHER = (Resolve-Path android/launcher).Path
 python -X utf8 -B tools/build_game_apk.py --skip-native
 $sims2Commit = git rev-parse --short=8 HEAD
 if (git status --porcelain) { $sims2Commit += "-dirty" }
-$sims2ApkName = "sims2-0.2.1-dev-$sims2Commit.apk"
+$sims2ApkName = "sims2-0.3-dev-$sims2Commit.apk"
 New-Item -ItemType Directory -Force pub | Out-Null
 Copy-Item build/android-game/sims2.apk (Join-Path pub $sims2ApkName)
 $sims2Hash = (Get-FileHash (Join-Path pub $sims2ApkName) -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -Encoding ascii (Join-Path pub "$sims2ApkName.sha256") "$sims2Hash  $sims2ApkName"
 ```
+
+The release APK includes both ABIs. Android selects the app process ABI, and
+the app unpacks that ABI's engine on first use. The ARM32 variant encodes
+textures to ETC2. The bundled Vulkan drivers are for ARM64. Pass `--abi arm32`
+or `--abi arm64` to `tools/build_game_apk.py` for a single-ABI development build.
 
 `pub`, build outputs, originals, signing keys and machine-specific `port.json`
 remain outside Git. This procedure creates local artifacts only.
@@ -368,6 +421,13 @@ against a simulated AAudio device (MSVC and the NDK's `clang-cl`);
 including the audio producer's urgency and the loans to it, to run on a device;
 `tools/check_file_audio_yield.py` does the same for file calls that release
 the machine.
+
+## License
+
+Original source code written for this port and owned by the project authors is
+licensed under the [GNU General Public License, version 3 only](LICENSE)
+(`GPL-3.0-only`). Third-party components and game content are subject to their
+respective rights holders' terms.
 
 ## Credits and third-party code
 

@@ -169,14 +169,26 @@ static void hold_sample_handler(int signo, siginfo_t *info, void *context)
     int asked = HOLD_ASKED;
     if (!atomic_compare_exchange_strong(&hold_sample_state, &asked, HOLD_RECORDING)) return;
     const ucontext_t *uc = (const ucontext_t *)context;
+#if defined(__aarch64__)
     atomic_store(&hold_sample_pc, (uintptr_t)uc->uc_mcontext.pc);
     atomic_store(&hold_sample_lr, (uintptr_t)uc->uc_mcontext.regs[30]);
     atomic_store(&hold_sample_x8, (uintptr_t)uc->uc_mcontext.regs[8]);
-    uintptr_t lo = atomic_load(&holder_stack_lo), hi = atomic_load(&holder_stack_hi);
     uintptr_t fp = (uintptr_t)uc->uc_mcontext.regs[29];
+    unsigned fp_align = 7;
+#elif defined(__arm__)
+    atomic_store(&hold_sample_pc, (uintptr_t)uc->uc_mcontext.arm_pc);
+    atomic_store(&hold_sample_lr, (uintptr_t)uc->uc_mcontext.arm_lr);
+    atomic_store(&hold_sample_x8, (uintptr_t)uc->uc_mcontext.arm_r7);
+    uintptr_t fp = (uintptr_t)uc->uc_mcontext.arm_fp;
+    unsigned fp_align = 3;
+#else
+#error "hold sample needs an ARM signal context"
+#endif
+    uintptr_t lo = atomic_load(&holder_stack_lo), hi = atomic_load(&holder_stack_hi);
     for (int i = 0; i < HOLD_FRAMES; ++i) {
         uintptr_t ret = 0;
-        if (lo && fp >= lo && hi >= 16 && fp <= hi - 16 && !(fp & 7)) {
+        if (lo && fp >= lo && hi >= (uintptr_t)(2 * sizeof(uintptr_t)) &&
+            fp <= hi - 2 * sizeof(uintptr_t) && !(fp & fp_align)) {
             const uintptr_t *record = (const uintptr_t *)fp;      /* {previous fp, return address} */
             ret = record[1];
             fp = record[0] > fp ? record[0] : 0;
@@ -245,7 +257,13 @@ static void hold_sample_text(char *out, size_t size)
         size_t used = (size_t)snprintf(out, size, "; host pc");
         hold_address_text(out + used, size - used, atomic_load(&hold_sample_pc));
         used = strlen(out);
-        used += (size_t)snprintf(out + used, size - used, " x8 %lu lr", (unsigned long)atomic_load(&hold_sample_x8));
+        used += (size_t)snprintf(out + used, size - used,
+#if defined(__arm__) && !defined(__aarch64__)
+            " r7 %lu lr",
+#else
+            " x8 %lu lr",
+#endif
+            (unsigned long)atomic_load(&hold_sample_x8));
         hold_address_text(out + used, size - used, atomic_load(&hold_sample_lr));
         used = strlen(out);
         used += (size_t)snprintf(out + used, size - used, " frames");

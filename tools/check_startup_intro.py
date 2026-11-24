@@ -28,6 +28,8 @@ compile_probe('startup-movie-choice', r'''
 #include <stdio.h>
 static uint32_t g_eax,g_esp,calls;
 static const char *choice;
+static int extender;
+static int s2_extender_skips_intro(void){return extender;}
 static const char *test_getenv(const char *key){assert(!strcmp(key,"PORT_SKIP_INTRO"));return choice;}
 #define getenv test_getenv
 static void sub_A05C089B_lifted(void){++calls;g_eax=42;g_esp+=12;}
@@ -39,6 +41,8 @@ int main(void){
   assert(g_esp==0x1000C);
   assert(i==3||i==4 ? (!calls&&!g_eax) : (calls==1&&g_eax==42));
  }
+ extender=1;choice="0";calls=0;g_esp=0x10000;g_eax=99;sub_A05C089B();
+ assert(!calls&&!g_eax&&g_esp==0x1000C);
  puts("PASS actual movie-open wrapper: skip both clips only when requested; original path and stack preserved otherwise");
  return 0;
 }

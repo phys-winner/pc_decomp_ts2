@@ -13,6 +13,8 @@ static uint32_t guest[64], g_eax, g_ecx, g_esp;
 #define MEM32(a) (*(uint32_t *)GPTR(a))
 #define MEM8(a) (*(uint8_t *)GPTR(a))
 void void_log(const char *, ...);
+double s2_extender_ui_reference(void) { return 0; }
+void s2_extender_custom_content(int allowed) { (void)allowed; }
 typedef struct { uint32_t eax, ecx, esp; } void_regs;
 static void void_regs_save(void_regs *r) { *r = (void_regs){g_eax, g_ecx, g_esp}; }
 static void void_regs_load(const void_regs *r) { g_eax = r->eax; g_ecx = r->ecx; g_esp = r->esp; }
@@ -33,6 +35,7 @@ static void void_end_modal_messages(unsigned previous) {
 }
 #include "../android/host/sims2_settings.c"
 void s2_touch_reset_camera(void) {}
+int s2_loading_animations(void) { return 1; }
 void s2_touch_reset_cas_pan(void) {}
 
 static int resize_count, resized_scale;

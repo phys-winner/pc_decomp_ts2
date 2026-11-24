@@ -56,8 +56,9 @@ static uint32_t void_call_guest_this(uint32_t va,uint32_t self,int n,const uint3
 }
 static const char *touch_type(uint32_t w){return MEM32(w)==0xA0E53EECu?".?AVcGZWinBtn@@":"";}
 static unsigned touch_widget(uint32_t w){return w==0x2800?fixture_flags:0;}
-static unsigned touch_mouse_text(uint32_t r,uint32_t h,int x,int y){(void)r;(void)h;(void)x;(void)y;return 0;}
 static int fixture_world_x;
+static uint32_t fixture_mouse_pick;
+static uint32_t s2_ui_mouse_pick(uint32_t root,int x,int y){assert(root==0x1000);(void)x;(void)y;return fixture_mouse_pick;}
 static uint32_t s2_ui_pick(uint32_t root,int x,int y){
  assert(root==0x1000);if(fixture_world_x&&x>=fixture_world_x)return scene_window;if(reenter==1)++fixture_epoch;if(reenter==2)++fixture_context;
  if(reenter==3)MEM32(0x844)=0;
@@ -81,7 +82,7 @@ static void window(uint32_t w,uint32_t parent,int l,int t,int r,int b){
 }
 static void reset(void){
  memset(memory,0,sizeof memory);fixture_context=128;fixture_epoch=3;fixture_manager=0x800;fixture_factor=2;reenter=0;
- fixture_pick=0x2000;fixture_flags=8;wheels=warps=pages=0;MEM32(fixture_manager+0x44)=0x1000;
+ fixture_pick=0x2000;fixture_mouse_pick=0;fixture_flags=8;wheels=warps=pages=0;MEM32(fixture_manager+0x44)=0x1000;
  window(0x1000,0,0,0,1300,600);MEM32(0x1000)=1;
  window(0x2000,0x1000,100,100,120,120);window(0x2400,0x1000,140,100,160,120);
  MEM32(0x1054)=0x4000;MEM32(0x4000)=0x4010;MEM32(0x4010)=0x4020;
@@ -190,6 +191,11 @@ int main(void){
  px=300;py=300;assert(touch_pie_outside(0x3000,0x1000,&px,&py)&&px==1069&&py==300);fixture_world_x=0;}
  uint64_t size=(uint64_t)1080<<32|2340,owner=(uint64_t)0x1000<<32|0x2800;
  reset();fixture_pick=0x2800;assert(touch_fling_apply(400,500,2,128,size,3,owner)&&wheels==240&&warps==1);
+ reset();fixture_pick=0x2400;MEM32(0x24E8)|=0x200000;fixture_mouse_pick=0x2800;
+ assert(touch_input_pick(0x1000,400,500)==0x2800);
+ assert(touch_fling_apply(400,500,2,128,size,3,owner)&&wheels==240&&warps==1);
+ fixture_mouse_pick=0x2000;assert(touch_input_pick(0x1000,400,500)==0x2400);
+ assert(!touch_fling_apply(400,500,2,128,size,3,owner)&&wheels==240&&warps==1);
  reset();fixture_pick=0x2800;fixture_flags=8|32;assert(touch_fling_apply(400,500,2,128,size,3,owner)&&pages==1&&!wheels);
  for(unsigned n=0;n<8;++n){
   reset();fixture_pick=0x2800;
@@ -206,6 +212,6 @@ int main(void){
 if __name__ == '__main__':
     source=Path(__file__).resolve().parents[1].joinpath('android/host/sims2_touch.c').read_text(encoding='utf-8')
     actual='\n'.join(function(source,name) for name in ['static int touch_ui_button(', 'static int touch_live_hud_background(', 'static uint32_t touch_pie_owner(',
-        'static int touch_pie_item(', 'static uint32_t touch_pie_label(', 'static uint32_t touch_open_pie(', 'static int touch_pie_rect(', 'static int touch_pie_direct(', 'static int touch_pie_hits(', 'static void touch_pie_center(', 'static int touch_pie_pick(', 'static int touch_pie_outside(',
-        'static uint32_t touch_ui_target(', 'static int touch_fling_apply('])
+        'static int touch_pie_item(', 'static uint32_t touch_pie_label(', 'static uint32_t touch_open_pie(', 'static int touch_pie_rect(', 'static int touch_pie_direct(', 'static int touch_pie_hits(', 'static void touch_window_center(', 'static int touch_pie_pick(', 'static int touch_pie_outside(',
+        'static uint32_t touch_input_pick(', 'static uint32_t touch_ui_target(', 'static int touch_fling_apply('])
     compile_probe('touch-ux',PRELUDE+actual+CHECK,{})

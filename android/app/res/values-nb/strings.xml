@@ -44,4 +44,7 @@
   <string name="target_object">Gjenstand %1$d</string>
   <string name="target_changed">Målet har flyttet seg. Trykk igjen.</string>
   <string name="floor_swipe_hint">Sveip opp eller ned med tre fingre for å bytte etasje.</string>
+  <string name="mods_ui_title">Grensesnittmods</string>
+  <string name="mods_ui_hint">Mods som endrer spillets grensesnitt, virker kanskje ikke: Med denne skaleringen bruker spillet de kompakte 800×600-oppsettene, mens de fleste grensesnittmods bare endrer de vanlige oppsettene (1024×768 og større). Velg en mindre grensesnittskala i spillets grafikkinnstillinger og start spillet på nytt for å bruke dem.</string>
+  <string name="unpacking_engine">Pakker ut spillkoden…</string>
 </resources>

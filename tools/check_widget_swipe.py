@@ -53,6 +53,7 @@ static int touch_layout_matches(unsigned c,uint64_t size,unsigned e){return c==c
 static uint32_t void_call_guest_this(uint32_t,uint32_t,int,const uint32_t *);
 static double s2_ui_factor(void){return 1;}
 static uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}
+static uint32_t touch_input_pick(uint32_t root,int x,int y){return s2_ui_pick(root,x,y);}
 static uint32_t touch_town_catalog_proc(uint32_t w){(void)w;return 0;}
 static uint32_t touch_bound_catalog_proc(uint32_t w){(void)w;return 0;}
 static uint32_t touch_cas_grid_proc(uint32_t p,uint32_t w){(void)p;(void)w;return 0;}

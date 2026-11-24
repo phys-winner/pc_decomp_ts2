@@ -44,4 +44,7 @@
   <string name="target_object">物品 %1$d</string>
   <string name="target_changed">目標已移動。請再次輕觸。</string>
   <string name="floor_swipe_hint">用三根手指向上或向下滑動即可切換樓層。</string>
+  <string name="mods_ui_title">介面模組</string>
+  <string name="mods_ui_hint">修改遊戲介面的模組可能不會生效：在目前的介面縮放下，遊戲使用 800×600 的精簡版面，而大多數介面模組只修改一般版面（1024×768 以上）。若要使用這些模組，請在遊戲的圖形選項中選擇較小的介面縮放，然後重新啟動遊戲。</string>
+  <string name="unpacking_engine">正在解壓遊戲程式碼…</string>
 </resources>

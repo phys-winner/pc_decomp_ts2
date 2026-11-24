@@ -44,4 +44,7 @@
   <string name="target_object">Objeto %1$d</string>
   <string name="target_changed">O alvo moveu-se. Toque novamente.</string>
   <string name="floor_swipe_hint">Desliza três dedos para cima ou para baixo para mudar de andar.</string>
+  <string name="mods_ui_title">Mods de interface</string>
+  <string name="mods_ui_hint">Os mods que alteram a interface do jogo podem não ter efeito: com esta escala de interface o jogo usa as disposições compactas de 800×600, e a maioria dos mods de interface altera apenas as disposições normais (1024×768 ou mais). Para os usar, escolha uma escala de interface menor nas opções gráficas do jogo e reinicie o jogo.</string>
+  <string name="unpacking_engine">A descompactar o código do jogo…</string>
 </resources>

@@ -33,6 +33,11 @@ PRELUDE = r'''
 #include "iostat.h"
 #include "readcache.h"
 #include "zip_files.h"
+#include "sims2_extender.h"
+unsigned s2_extender_flags;
+const char s2_extender_downloads_dir[] = "";
+const char *s2_extender_download_name(unsigned index){(void)index;return NULL;}
+const char *s2_extender_download_path(const char *name){(void)name;return NULL;}
 static long long s2_zip_read_stub(const zm_entry *e,void *b,size_t n,uint64_t at){(void)e;(void)b;(void)n;(void)at;assert(0);return -1;}
 #define s2_zip_read s2_zip_read_stub
 /* dircache.c, iostat.c and readcache.c are not linked: nothing is cached, so
@@ -170,7 +175,8 @@ def main():
            'static void find_destroy(', 'static uint64_t unix_to_filetime(', 'static int fill_find_data(',
            'static uint32_t find_first_uncounted(',
            'static uint32_t find_first_uncounted(char *pattern_path, uint32_t out, int wide)\n{',
-           'static void release_file_operation(', 'WINAPI_EXPORT(K32, ReadFile, 5)', 'static uint32_t delete_file(')
+           'static off_t overlapped_offset(', 'static void release_file_operation(',
+           'WINAPI_EXPORT(K32, ReadFile, 5)', 'static uint32_t delete_file(')
     out=ROOT/'build/test/file-audio-yield'
     out.mkdir(parents=True,exist_ok=True)
     fixture=out/'probe.c'

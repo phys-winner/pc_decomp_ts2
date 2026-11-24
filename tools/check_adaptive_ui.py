@@ -15,6 +15,11 @@ static unsigned ui_fit_height_depth,ui_pie_depth;
 static int ui_startup_fit,ui_fit_linger,ui_modal_floor_right,ui_modal_floor_bottom,ui_layout_pending;
 static uint64_t ui_fit_linger_until,now;
 static double ui_applied_factor=1;
+static int minimal_requested=-1,minimal_resume,minimal_startup,minimal_applications;
+static int apply_minimal_graphics(int on,int resume) {
+ assert(on==1&&resume==1&&!minimal_resume);
+ return ++minimal_applications==2;
+}
 static uint32_t memory[1024],fixture_manager=100;
 static uint32_t g_ecx,g_esp,g_eax,pie_bounds[4];
 #define MEM32(p) memory[(p)/4]
@@ -62,16 +67,26 @@ int main(void){
  ui_modal_floor_bottom=900;assert(ui_desired_factor()==1.8);ui_modal_floor_bottom=0;adaptive_ui=1;
  bank=17;s2_fit_tick();assert(calls==1&&epochs==1&&bank==17);
  assert(s2_ui_pick(1000,585,293)==101);
+ MEM32(1300+4)=fixture_manager;
+ MEM32(1300+0x24)=64;MEM32(1300+0x28)=(uint32_t)-45;
+ MEM32(1300+0x2C)=735;MEM32(1300+0x30)=415;
+ assert(ui_measure_modal(fixture_manager,1300,&w,&h)&&w==687&&h==476);
+ ui_modal_floor_bottom=h;
+ assert(fabs(ui_desired_factor()-1080./476.)<1e-6 && ui_applied_factor==2.925);
+ ui_modal_floor_bottom=0;
+ assert(!ui_measure_modal(fixture_manager+4,1300,&w,&h));
  for(int i=0;i<1000;++i){ui_layout_pending=1;s2_fit_tick();}assert(calls==1);
  ui_fit_height_depth=1;s2_fit_tick();assert(ui_applied_factor==1.8&&calls==2);
  ui_fit_height_depth=0;ui_fit_linger=2;ui_fit_linger_until=400;now=399;s2_fit_tick();assert(calls==2);
  now=400;ui_pie_depth=1;s2_fit_tick();assert(calls==2&&ui_applied_factor==1.8&&!ui_fit_linger);
  ui_pie_depth=0;s2_fit_tick();assert(calls==3&&ui_applied_factor==2.925);
  ui_startup_fit=1;fixture_manager=0;s2_fit_tick();assert(calls==3);fixture_manager=100;s2_fit_tick();assert(calls==4&&ui_applied_factor==1.8);
+ minimal_resume=1;s2_fit_tick();assert(!minimal_applications&&minimal_resume);
  ui_fit_chooser=2000;MEM32(2000)=0xA0DF9358u;MEM32(2000+0x198)=1600;
  MEM32(1600+4)=fixture_manager;MEM32(1600+0x58)=1200;MEM32(1600+0xE8)=1;
  MEM32(1200+4)=fixture_manager;MEM32(1200+0x58)=1000;MEM32(1200+0xE8)=1;
- s2_fit_tick();assert(ui_fit_chooser==2000);
+ s2_fit_tick();assert(ui_fit_chooser==2000&&minimal_resume&&minimal_applications==1);
+ s2_fit_tick();assert(ui_fit_chooser==2000&&!minimal_resume&&minimal_applications==2);
  MEM32(1200+0xE8)=0;ui_chooser_attach_depth=1;s2_fit_tick();assert(ui_fit_chooser==2000);
  ui_chooser_attach_depth=0;s2_fit_tick();assert(!ui_fit_chooser);
  MEM32(1000+0x2C)=1300;MEM32(1000+0x30)=600;
@@ -156,7 +171,7 @@ int main(void){
 if __name__ == '__main__':
     source = Path(__file__).resolve().parents[1].joinpath('android/host/sims2_settings.c').read_text(encoding='utf-8')
     actual = '\n'.join(function(source, name) for name in [
-        'void s2_game_resolution(', 'uint32_t s2_ui_pick(', 'static double ui_desired_factor(', 'static void ui_reposition_card(',
+        'void s2_game_resolution(', 'static int ui_measure_modal(', 'uint32_t s2_ui_pick(', 'static double ui_desired_factor(', 'static void ui_reposition_card(',
         'static void ui_sync_chooser(', 'void s2_fit_tick(', 'void sub_A05CA399(void)\n{',
         'void sub_A05C0B82(void)\n{', 'void sub_A0C47EFC(void)\n{', 'void sub_A0C44B8C(void)\n{', 'void sub_A0C42D84(void)\n{'])
     actual += '\n' + next(line for line in source.splitlines() if line.startswith('void s2_fit_scene_attached('))

@@ -750,6 +750,12 @@ int d3d_program_cache_on(void)
     if (program_cache_state) return program_cache_state > 0;
     program_cache_state = -1;
     const char *env = getenv("S2_PROGRAM_CACHE"), *base = void_app_cache_dir();
+#ifdef __ANDROID__
+    /* development: debug.s2.progcache=0 links every program from source (the APK takes no environment) */
+    static char prop[92];
+    __system_property_get("debug.s2.progcache", prop);
+    if (prop[0] == '0') env = "0";
+#endif
     GLint formats = 0;
     glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &formats);
     if ((env && *env == '0') || !base || !*base || formats <= 0) {

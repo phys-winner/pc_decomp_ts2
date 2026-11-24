@@ -74,6 +74,8 @@
       {
         "id": "gles",
         "kind": "gles",
+        "gles": "3.2",
+        "textureCache": "read",
         "title": "OpenGL ES",
         "description": {
           "en": "The port's native OpenGL ES 3.2 renderer",
@@ -85,6 +87,7 @@
       {
         "id": "vulkan",
         "kind": "vulkan",
+        "textureCache": "read",
         "title": "Vulkan",
         "description": {
           "en": "The port's native Vulkan 1.1 renderer",
@@ -98,6 +101,7 @@
       {
         "id": "turnip",
         "kind": "turnip",
+        "textureCache": "read",
         "title": "Vulkan (Turnip)",
         "description": {
           "en": "The native Vulkan renderer on Mesa Turnip for Adreno 6xx/7xx (or your own driver)",
@@ -126,6 +130,7 @@
       {
         "id": "panvk",
         "kind": "panvk",
+        "textureCache": "read",
         "title": "Vulkan (PanVK)",
         "description": {
           "en": "The native Vulkan renderer on Mesa PanVK for compatible Mali GPUs (or your own driver)",
@@ -151,7 +156,8 @@
   },
   "textures": {
     "backend": "org.sims2.port.TextureCache",
-    "separateCache": true
+    "separateCache": true,
+    "formats": ["DXT1", "DXT3", "DXT5"]
   },
   "folders": [
     {
@@ -181,6 +187,24 @@
     }
   },
   "options": [
+    {
+      "key": "mali_g51_workaround",
+      "type": "bool",
+      "default": "1",
+      "rendererSetting": true,
+      "title": {
+        "en": "Mali-G51 rendering fix",
+        "ru": "Исправление отрисовки Mali-G51",
+        "de": "Darstellungsfix für Mali-G51",
+        "pl": "Poprawka renderowania dla Mali-G51"
+      },
+      "hint": {
+        "en": "Fixes flicker and missing objects on Mali-G51 in OpenGL ES. Applies on the next game launch.",
+        "ru": "Устраняет мерцание и пропавшие объекты на Mali-G51 в OpenGL ES. Применяется при следующем запуске игры.",
+        "de": "Behebt Flackern und fehlende Objekte auf Mali-G51 mit OpenGL ES. Gilt ab dem nächsten Spielstart.",
+        "pl": "Usuwa migotanie i brakujące obiekty na Mali-G51 w OpenGL ES. Zacznie działać po następnym uruchomieniu gry."
+      }
+    },
     {
       "key": "game_language",
       "type": "choice",
@@ -293,6 +317,17 @@
         "pl": "Interfejs adaptacyjny (po ponownym uruchomieniu)"
       },
       "default": "1"
+    },
+    {
+      "key": "regular_ui_layouts",
+      "type": "bool",
+      "title": {
+        "en": "Regular UI layouts for mods (next launch)",
+        "ru": "Обычные макеты для модов интерфейса (после перезапуска)",
+        "de": "Standardlayouts für UI-Mods (nächster Start)",
+        "pl": "Standardowe układy dla modów interfejsu (po ponownym uruchomieniu)"
+      },
+      "default": "0"
     },
     {
       "key": "screen_resolution",
@@ -471,6 +506,35 @@
           "title": "FSR 1"
         }
       ]
+    },
+    {
+      "key": "adpf",
+      "type": "bool",
+      "title": {
+        "en": "Performance hints (ADPF)",
+        "ru": "Подсказки производительности (ADPF)",
+        "de": "Leistungshinweise (ADPF)",
+        "pl": "Wskazówki wydajności (ADPF)"
+      },
+      "hint": {
+        "en": "Reports each frame's work time to Android so it can raise the processor clocks the game needs. Turn it off if the device overheats or the frame rate becomes unstable. Applied at the next game start.",
+        "ru": "Сообщает Android время работы каждого кадра, чтобы система могла поднять нужные игре частоты процессора. Выключите, если устройство перегревается или частота кадров становится нестабильной. Применяется при следующем запуске игры.",
+        "de": "Meldet Android die Arbeitszeit jedes Bildes, damit das System die Prozessortakte anheben kann, die das Spiel braucht. Ausschalten, wenn das Gerät überhitzt oder die Bildrate instabil wird. Gilt ab dem nächsten Spielstart.",
+        "pl": "Przekazuje Androidowi czas pracy każdej klatki, aby system mógł podnieść taktowanie procesora potrzebne grze. Wyłącz, jeśli urządzenie się przegrzewa lub liczba klatek staje się niestabilna. Zacznie działać po ponownym uruchomieniu gry."
+      },
+      "default": "0"
+    },
+    {
+      "key": "ts2_extender",
+      "type": "bool",
+      "default": "0",
+      "title": "TS2 Extender",
+      "hint": {
+        "en": "Community fixes and enhancements. Changes apply when the game starts.",
+        "ru": "Исправления и улучшения от сообщества. Применяются при запуске игры.",
+        "de": "Community-Korrekturen und Erweiterungen. Änderungen gelten beim Spielstart.",
+        "pl": "Poprawki i usprawnienia społeczności. Zmiany są wczytywane przy uruchomieniu gry."
+      }
     }
   ]
 }

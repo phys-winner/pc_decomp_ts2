@@ -2,7 +2,6 @@
 from pathlib import Path
 import subprocess,tempfile
 from check_touch import JDK,ROOT,method
-from build_game_apk import launcher_root
 
 STUBS={
 'android/content/Context.java':'package android.content;public class Context {public String getString(int id){return "label";}}',
@@ -24,9 +23,9 @@ STUBS={
   public AlertDialog create(){return d;}public AlertDialog show(){d.show();return d;}}
 }''',
 'org/sims2/port/R.java':'package org.sims2.port;public class R {public static class style {public static final int PortDialog=1;}public static class string {public static final int cancel=2,enable=3,settings_save_failed=4;}}',
-'org/sims2/port/launcher/Spec.java':'''package org.sims2.port.launcher;public class Spec {static Option fixture=new Option();public static Spec get(android.content.Context c){return new Spec();}public java.util.List<Option> options(String d){return java.util.Collections.singletonList(fixture);}public static class Option {boolean arm64Only;String type="choice",key="adaptive_ui",title="Adaptive";java.util.List<String> choices=java.util.Arrays.asList("0","1"),choiceTitles=java.util.Arrays.asList("Off","On");}}''',
+'org/sims2/port/launcher/Spec.java':'''package org.sims2.port.launcher;public class Spec {static Option fixture=new Option();public static Spec get(android.content.Context c){return new Spec();}public java.util.List<Option> options(String d){return java.util.Collections.singletonList(fixture);}public static class Option {boolean arm64Only,rendererSetting;String type="choice",key="adaptive_ui",title="Adaptive";java.util.List<String> choices=java.util.Arrays.asList("0","1"),choiceTitles=java.util.Arrays.asList("Off","On");}}''',
 'org/sims2/port/launcher/Launch.java':'package org.sims2.port.launcher;public class Launch {String distribution(){return "legacy";}static String option(android.content.Context c,Spec.Option o){return State.value;}}',
-'org/sims2/port/launcher/State.java':'package org.sims2.port.launcher;public class State {static final String CHOICES="choices";static int writes;static boolean fail;static String value="0";static boolean put(android.content.Context c,String file,String k,String v){assert k.equals("option.adaptive_ui");if(fail)return false;writes++;value=v;return true;}}',
+'org/sims2/port/launcher/State.java':'package org.sims2.port.launcher;public class State {static final String CHOICES="choices";static int writes;static boolean fail;static String value="0";static String get(android.content.Context c,String file,String k,String fallback){return fallback;}static boolean put(android.content.Context c,String file,String k,String v){assert k.equals("option.adaptive_ui");if(fail)return false;writes++;value=v;return true;}}',
 'org/sims2/port/launcher/Texts.java':'package org.sims2.port.launcher;public class Texts {static final int OPTIONS=1,OK=2,CANCEL=3,CONTINUE=4;static String of(android.content.Context c,Object o){return o.toString();}static String t(android.content.Context c,int i){return "label";}}',
 'org/sims2/port/launcher/PortHooks.java':'''package org.sims2.port.launcher;public class PortHooks {static PortHooks fixture=new PortHooks();String problem;static PortHooks of(android.content.Context c){return fixture;}String optionProblem(android.content.Context c,String k,String v){return problem;}CharSequence optionWarning(android.content.Context c,String k,String v){return v.equals("1")?"RED WARNING":null;}}'''
 }
@@ -70,7 +69,7 @@ public class WarningCheck extends android.content.Context {
 '''
 
 if __name__=='__main__':
-    source=(launcher_root()/'android/src/port/launcher/LauncherActivity.java').read_text(encoding='utf-8')
+    source=(ROOT/'android/launcher/android/src/port/launcher/LauncherActivity.java').read_text(encoding='utf-8')
     check='package org.sims2.port.launcher;\n'+CHECK.replace('METHOD',method(source,'private void selectOption('))
     with tempfile.TemporaryDirectory(prefix='s2-option-warning-') as folder:
         base=Path(folder);paths=[]

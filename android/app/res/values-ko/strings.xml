@@ -44,4 +44,7 @@
   <string name="target_object">물건 %1$d</string>
   <string name="target_changed">대상이 움직였습니다. 다시 터치하세요.</string>
   <string name="floor_swipe_hint">세 손가락으로 화면을 위나 아래로 밀면 층을 바꿀 수 있습니다.</string>
+  <string name="mods_ui_title">인터페이스 모드</string>
+  <string name="mods_ui_hint">게임 인터페이스를 바꾸는 모드가 적용되지 않을 수 있습니다. 이 인터페이스 배율에서는 게임이 800×600용 간단한 레이아웃을 사용하지만, 대부분의 인터페이스 모드는 일반 레이아웃(1024×768 이상)만 바꿉니다. 이런 모드를 쓰려면 게임 그래픽 옵션에서 인터페이스 배율을 줄이고 게임을 다시 시작하세요.</string>
+  <string name="unpacking_engine">게임 코드 압축을 푸는 중…</string>
 </resources>

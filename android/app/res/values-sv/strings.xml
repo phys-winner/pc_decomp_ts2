@@ -44,4 +44,7 @@
   <string name="target_object">Föremål %1$d</string>
   <string name="target_changed">Målet har flyttats. Tryck igen.</string>
   <string name="floor_swipe_hint">Svep uppåt eller nedåt med tre fingrar för att byta våning.</string>
+  <string name="mods_ui_title">Gränssnittsmoddar</string>
+  <string name="mods_ui_hint">Moddar som ändrar spelets gränssnitt kanske inte fungerar: med den här gränssnittsskalan använder spelet sina kompakta 800×600-layouter, medan de flesta gränssnittsmoddar bara ändrar de vanliga layouterna (1024×768 och större). Välj en mindre gränssnittsskala i spelets grafikinställningar och starta om spelet för att använda dem.</string>
+  <string name="unpacking_engine">Packar upp spelets kod…</string>
 </resources>

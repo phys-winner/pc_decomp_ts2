@@ -122,7 +122,10 @@ def main():
                 fold[value] = value + 32
             fold[0xA8] = 0xB8
         if locale == 'Turkish':
-            fold[ord('I')] = 0xFD
+            # The CRT's lower-case table (___acrt_locale_initialize_ctype) comes from
+            # LCMapString(LCMAP_LOWERCASE) without LCMAP_LINGUISTIC_CASING: file-system casing,
+            # where ASCII 'I' stays 'i' in every locale (the port's LCMapStringEx: towlower).
+            # A non-ASCII capital may still fold to an ASCII letter (cp1254 0xDD -> 'i').
             fold[0xDD] = ord('i')
         current_fold = bytes(fold)
         for case in range(128):

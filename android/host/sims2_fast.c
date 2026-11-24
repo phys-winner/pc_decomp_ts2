@@ -345,18 +345,27 @@ static uint32_t find_child(uint32_t self, uint32_t id)
 }
 
 /* The CRT's case-insensitive comparisons fold ASCII only while no locale was
- * set (__locale_changed, 0xA10DFCAC); otherwise the guest's own code runs. */
+ * set (__locale_changed, 0xA10DFCAC). With one set (the Russian game sets
+ * one) they map every byte through the locale's lower-case table, which the
+ * CRT fills with LCMapString(LCMAP_LOWERCASE) of the locale's code page: for
+ * the ASCII bytes of every Windows code page that is A-Z -> a-z, the rest
+ * unchanged, the same as without a locale. So ASCII pairs fold here, and only
+ * a differing pair with a byte above 0x7F leaves the answer to the guest's own
+ * code (whose locale path costs a per-thread-data lookup a call: half of the
+ * long first frame on a lot, Honor 9 Lite 2026-11-22). Identical bytes are
+ * equal under any table. */
 #define LOCALE_CHANGED_VA 0xA10DFCACu
 
 static int same_ignoring_case(const uint8_t *a, const uint8_t *b, uint32_t n)
 {
-    if (MEM32(LOCALE_CHANGED_VA)) {
-        if (!memcmp(a, b, n)) return 1;
-        uint32_t args[3] = { GVA(a), GVA(b), n };
-        return void_call_guest(0xA0845872u, 3, args, 0) == 0;
-    }
+    int locale = MEM32(LOCALE_CHANGED_VA) != 0;
     for (uint32_t i = 0; i < n; ++i) {
         uint8_t x = a[i], y = b[i];
+        if (x == y) continue;
+        if (locale && (x | y) >= 0x80u) {
+            uint32_t args[3] = { GVA(a), GVA(b), n };
+            return void_call_guest(0xA0845872u, 3, args, 0) == 0;
+        }
         if (x - 'A' < 26u) x += 32;
         if (y - 'A' < 26u) y += 32;
         if (x != y) return 0;
@@ -413,24 +422,47 @@ void sub_A01BF191(void)
     g_esp += 8;
 }
 
-/* _stricmp (0xA0845799, cdecl): with both strings present and no locale set
- * it is __ascii_stricmp (0xA0845760), the difference of the first two
- * characters that differ after folding A-Z. Containers keyed by names
- * compare through it; lifted, each character cost a dozen guest operations. */
+/* _stricmp (0xA0845799, cdecl): the difference of the first two characters
+ * that differ after folding (__ascii_stricmp 0xA0845760 without a locale,
+ * _stricmp_l 0xA08457E2 with one: the same for ASCII, see LOCALE_CHANGED_VA).
+ * Containers keyed by names compare through it; lifted, each character cost a
+ * dozen guest operations, and with the game's locale each call also looked up
+ * the CRT's per-thread data (TlsGetValue, Get/SetLastError): the UI scripts'
+ * name maps took 29% of the 17.8 s first frame on a lot. A differing pair with
+ * a byte above 0x7F under a locale is the guest's to compare. */
 void sub_A0845799_lifted(void);
 void sub_A0845799(void)
 {
     uint32_t a = MEM32(g_esp + 4), b = MEM32(g_esp + 8);
-    if (MEM32(LOCALE_CHANGED_VA) || !a || !b) { sub_A0845799_lifted(); return; }
+    if (!a || !b) { sub_A0845799_lifted(); return; }
+    int locale = MEM32(LOCALE_CHANGED_VA) != 0;
     const uint8_t *x = (const uint8_t *)GPTR(a), *y = (const uint8_t *)GPTR(b);
     uint32_t f, l;
-    do {
+    for (;;) {
         f = *x++;
-        if (f - 'A' < 26u) f += 32;
         l = *y++;
+        if (f == l) {
+            if (!f) break;
+            continue;
+        }
+        if (locale && (f | l) >= 0x80u) { sub_A0845799_lifted(); return; }
+        if (f - 'A' < 26u) f += 32;
         if (l - 'A' < 26u) l += 32;
-    } while (f == l && f);
+        if (f != l) break;
+    }
     g_eax = f - l;
+    g_esp += 4;
+}
+
+/* strchr (0xA08287A0, cdecl; the CRT's SSE2 form): the first (char)c in s,
+ * its terminator for c == 0, else NULL. The UI scripts' tokenizer calls it for
+ * every token: 5% of the first frame on a lot, lifted 16 bytes at a time. */
+void sub_A08287A0(void)
+{
+    uint32_t s = MEM32(g_esp + 4);
+    const char *p = (const char *)GPTR(s);
+    const char *r = strchr(p, (int)(uint8_t)MEM32(g_esp + 8));
+    g_eax = r ? s + (uint32_t)(r - p) : 0;
     g_esp += 4;
 }
 
@@ -534,8 +566,7 @@ static int quant_row(int alpha)
     uint32_t _flag_k, _flag_a, _flag_b, _cf;
     RECOMP_ENTER(alpha ? 0xA003AA9Fu : 0xA0039752u);
     (void)_flag_k; (void)_flag_a; (void)_flag_b; (void)_cf;
-    uint64_t fpsr;
-    __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr) :: "memory");
+    uint64_t fpsr = void_host_fpsr();
     uint32_t bp = sp - 4u, saved = g_fpu_cw | (alpha ? y & 0xFFFF0000u : 0u);
     int32_t dir = x & 1u ? -1 : 1;
     uint32_t first = x & 1u ? n - 1u : 0u;
@@ -592,7 +623,7 @@ static int quant_row(int alpha)
         X87_SHADOW(g_stp)[-2] = 0;
     }
     X87_SHADOW(g_stp)[-1] = 0;
-    __asm__ volatile("msr fpsr, %0" :: "r"(fpsr) : "memory");
+    void_host_fpsr_set(fpsr);
     g_eax = saved;
     g_ecx = 16u * (first + (n + 1u) * (uint32_t)dir);
     g_edx = n;

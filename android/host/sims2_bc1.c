@@ -460,7 +460,7 @@ void sub_A0084173(void)
     uint8_t block[8];
     float luminance[6];
     memcpy(luminance,GPTR(LUM_VA),12);memcpy(luminance+3,GPTR(LUM_INV_VA),12);
-    uint64_t fpcr;__asm__ volatile("mrs %0, fpcr":"=r"(fpcr));
+    uint64_t fpcr = void_host_fpcr();
     /* Adjacent portrait blocks repeat the same background; reuse only an exact input. */
     if(bc1_last.valid && bc1_last.color_key==color_key && bc1_last.dither==dither && bc1_last.fpcr==fpcr &&
         !memcmp(px,bc1_last.pixels,sizeof px) && !memcmp(luminance,bc1_last.luminance,sizeof luminance)) {

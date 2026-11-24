@@ -11,6 +11,7 @@
  * uploads. */
 #include "host.h"
 #include "sims2_settings.h"
+#include "sims2_extender.h"
 
 void sub_A0C52180_lifted(void);
 void sub_A0C52180(void)
@@ -201,14 +202,15 @@ void sub_A064ADC6(void)
 void s2_intro_latch(uint32_t owner)
 {
     const char *value = getenv("PORT_SKIP_INTRO");
-    if (!value || (strcmp(value, "0") && strcmp(value, "false"))) MEM8(owner + 0x11) = 1;
+    if (!value || (strcmp(value, "0") && strcmp(value, "false")) || s2_extender_skips_intro())
+        MEM8(owner + 0x11) = 1;
 }
 
 void sub_A05C089B_lifted(void);
 void sub_A05C089B(void)
 {
     const char *value = getenv("PORT_SKIP_INTRO");
-    if (value && (!strcmp(value, "1") || !strcmp(value, "true"))) {
+    if ((value && (!strcmp(value, "1") || !strcmp(value, "true"))) || s2_extender_skips_intro()) {
         /* The caller's original missing-movie path advances to loading, with its usual cleanup. */
         g_eax = 0;
         g_esp += 12;

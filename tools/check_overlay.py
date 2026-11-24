@@ -17,9 +17,9 @@ def main():
     strings = port_strings()
     rows = entries(strings)
     by_language = {lang: [text for code, text, _ in rows if code == lang] for lang, _, _ in rows}
-    assert len(rows) == 88 and len(by_language) == 22
+    assert len(rows) == 132 and len(by_language) == 22
     assert [lang for lang, _, _ in rows] == sorted(lang for lang, _, _ in rows)
-    assert by_language[1] == ['UI Scale', 'Frame Rate Limit', 'Render Scale', 'Off']
+    assert by_language[1] == ['UI Scale', 'Frame Rate Limit', 'Render Scale', 'Off', 'Minimal Graphics', 'On']
     assert by_language[13][1] == 'Предел FPS' and by_language[4][0] == 'UI-Skalierung'
     assert by_language[16][2] == 'Skala renderowania'
     original_strings = GAME / PORT_STRING_PACKAGE
@@ -29,7 +29,7 @@ def main():
         original = dbpf.Package(original_strings)
         # Resolve original captions through the same package and one-based indices
         # used below. Merely finding translations in an unrelated package hid the
-        # previous failure: all four port labels fell back to English on device.
+        # previous failure: port labels fell back to English on device.
         def table(package, instance, language):
             entry = next(e for e in package.entries
                          if (e['type'], e['group'], e['instance']) == (0x53545223, 0xFFFFFFFF, instance))
@@ -49,9 +49,8 @@ def main():
             refs = re.findall(r'caption="([^"]*)" captionres=\{7f232750,([0-9a-f]{8})\}', patched_panel)
             port_refs = [(caption, int(address, 16) & 0xffff) for caption, address in refs
                          if int(address, 16) >> 16 == PORT_STRING_INSTANCE]
-            assert len(port_refs) == 4
+            assert sorted(index for _, index in port_refs) == [1, 2, 3, 4, 4, 5, 6]
             for caption, index in port_refs:
-                assert 1 <= index <= 4
                 assert table(actual, PORT_STRING_INSTANCE, 1)[index - 1] == caption
                 for language, labels in by_language.items():
                     assert table(actual, PORT_STRING_INSTANCE, language)[index - 1] == labels[index - 1]
@@ -161,7 +160,7 @@ def main():
             assert patch_saved_props(after) == after, source
         first = {p.relative_to(out): p.read_bytes() for p in targets}
         assert {p.relative_to(out): p.read_bytes() for p in write_saved_props(GAME, out)} == first
-    print('savedProps overlay: all 16 pack paths covered, original bytes preserved, three keys once, idempotent PASS')
+    print('savedProps overlay: all 16 pack paths covered, original bytes preserved, four keys once, idempotent PASS')
     globals = sorted(GAME.glob('*/TSData/Res/Config/globalProps.xml'))
     assert len(globals) == 16, len(globals)
     with tempfile.TemporaryDirectory(prefix='sims2-camera-defaults-') as directory:

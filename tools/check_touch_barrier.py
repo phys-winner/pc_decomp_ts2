@@ -94,6 +94,7 @@ void s2_touch_cancel_text(void){}
 void s2_touch_text_pump(uint32_t manager){(void)manager;}
 void s2_touch_text_owner(unsigned kind,unsigned serial,uint32_t manager){(void)kind;(void)serial;(void)manager;}
 int s2_touch_text_editable(uint32_t window){(void)window;return 0;}
+void s2_extender_camera_sensitivity(float *yaw,float *pitch){(void)yaw;(void)pitch;}
 int s2_catalog_info(uint32_t proc){(void)proc;return 0;}
 void s2_catalog_track(uint32_t proc){(void)proc;}
 uint32_t s2_catalog_clear_request(void){return 1;}
@@ -185,9 +186,9 @@ static void reset(void){
 uint32_t cases;
 uint32_t selftest(void){
     reset();pend(0x202,0,0);REQUIRE(s2_touch_pick(700,500)==2);
-    REQUIRE(guest_calls==1 && picker_calls==1 && s2_touch_tool()==2 && !bad);++cases;
+    REQUIRE(guest_calls==1 && picker_calls==1 && s2_touch_tool()==8 && !bad);++cases;
     reset();nested=1;pend(0x202,0,0);REQUIRE(s2_touch_pick(700,500)==2);
-    REQUIRE(guest_calls==1 && picker_calls==1 && !touch_barrier_deferred && s2_touch_tool()==2 && !bad);++cases;
+    REQUIRE(guest_calls==1 && picker_calls==1 && !touch_barrier_deferred && s2_touch_tool()==8 && !bad);++cases;
     reset();mode=0;REQUIRE(!s2_touch_pick(700,500) && !pick_pending);
     mode=1;drive();REQUIRE(!picker_calls && !guest_calls && !bad);++cases;
     reset();s2_touch_request_pick(1,2);unsigned old=pick_serial;s2_touch_request_pick(700,500);

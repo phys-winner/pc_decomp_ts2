@@ -6,6 +6,10 @@
  *   s2FrameRateLimit  0 (off), 30 and this display's refresh rates
  *   s2RenderScale     50..150 %   of the screen's own pixels, for the
  *                                 backbuffer the game draws into
+ *   s2MinimalGraphics 0, 1        the game's own graphics options at their
+ *                                 lowest, for devices short of memory.
+ *                                 PORT_OPTION_MINIMAL_GRAPHICS=1 asks for
+ *                                 it once, before the player has a snapshot
  *
  * They live in the game's user property set like every other option
  * (Config/userProps.xml, saved by the game): read from the file before the
@@ -14,6 +18,7 @@
  * which the panel's radio bindings call when a button is clicked. */
 #include "host.h"
 #include "sims2_settings.h"
+#include "sims2_extender.h"
 #include "input.h"
 #include <sys/stat.h>
 #include <stdatomic.h>
@@ -54,6 +59,11 @@ static _Atomic unsigned touch_context;
 static _Atomic int touch_rewards;
 static _Atomic uint32_t touch_photo_owner;
 static int phys_w = 2780, phys_h = 1264;
+/* Minimal Graphics: the state applied, and the panel's choice waiting for the next pump (-1: none). */
+static int minimal_graphics, minimal_requested = -1, minimal_resume, minimal_startup;
+/* The Graphics/Performance panel's controller (its second interface, as its refresh gets it) and that
+ * interface's table: the pointer is used only while Options are open and the table still matches. */
+static uint32_t graphics_panel, graphics_panel_table;
 static char props_path[1200];
 static int display_rates[10] = {0, 30, 60}, display_rate_count = 3;
 
@@ -284,8 +294,20 @@ static void ui_fit(int enter, int full_height)
 
 /* Consecutive dialogs share a fit; apply at an owner-thread pump boundary,
  * or before a hidden card builds its layout, without rebuilding the scene. */
+static int apply_minimal_graphics(int on, int resume);
+
 void s2_fit_tick(void)
 {
+    if (minimal_requested >= 0) {
+        int on = minimal_requested;
+        minimal_requested = -1;
+        apply_minimal_graphics(on, 0);
+    } else if (minimal_startup) {
+        if (apply_minimal_graphics(1, 0)) minimal_startup = 0;
+    } else if (minimal_resume && (ui_fit_chooser || ui_fit_town_loading)) {
+        minimal_resume = 0;
+        if (!apply_minimal_graphics(1, 1)) minimal_resume = 1;
+    }
     ui_sync_chooser();
     if (ui_fit_linger && void_monotonic_ns() >= ui_fit_linger_until) {
         ui_fit_linger = 0;
@@ -471,6 +493,21 @@ static int ui_modal_fits(uint32_t manager, uint32_t window)
     return 0;
 }
 
+/* The story dialog is laid out again by the manager when the factor changes. */
+static int ui_measure_modal(uint32_t manager, uint32_t window, int *width, int *height)
+{
+    if (!adaptive_ui || !manager || manager != s2_touch_owner_manager() ||
+        !void_vm_readable(window, 0x34) || MEM32(window + 4) != manager) return 0;
+    int64_t w = (int64_t)(int32_t)MEM32(window + 0x2C) - (int32_t)MEM32(window + 0x24);
+    int64_t h = (int64_t)(int32_t)MEM32(window + 0x30) - (int32_t)MEM32(window + 0x28);
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
+    int sw, sh;
+    s2_game_resolution(&sw, &sh);
+    *width = (int)w + 16;
+    *height = (int)h + 16;
+    return *width * ui_applied_factor > sw || *height * ui_applied_factor > sh;
+}
+
 /* Fitting modals retain their measured edges through later UI scale changes.
  * Stack-local saves restore outer floors without retaining destroyed windows. */
 void sub_A0972F48_lifted(void);
@@ -482,9 +519,17 @@ void sub_A0972F48(void)
     /* A dialog right after a fitted one fits only by its size: it continues
      * the fit instead (no resize now, and none to a floor in between). */
     /* Story procs stay attached after Close; fit only their RunModal lifetime. */
-    int fit = !pie && (ui_fit_linger || ui_story_window(g_ecx, window) || !ui_modal_fits(g_ecx, window));
+    int story = !pie && ui_story_window(g_ecx, window);
+    int fit = !pie && (ui_fit_linger || story || !ui_modal_fits(g_ecx, window));
     int saved_right = ui_modal_floor_right, saved_bottom = ui_modal_floor_bottom;
-    if (!fit && !pie) {
+    int width, height;
+    int dialog = fit && void_vm_readable(window, 4) && MEM32(window) == 0xA0DE3704u;
+    int measured = fit && (story || dialog) && !ui_fit_linger && !ui_fit_height_depth &&
+        ui_measure_modal(g_ecx, window, &width, &height);
+    if (measured) {
+        if (width > ui_modal_floor_right) ui_modal_floor_right = width;
+        if (height > ui_modal_floor_bottom) ui_modal_floor_bottom = height;
+    } else if (!fit && !pie) {
         int right = (int)MEM32(window + 0x2C), bottom = (int)MEM32(window + 0x30);
         if (right > ui_modal_floor_right) ui_modal_floor_right = right;
         if (bottom > ui_modal_floor_bottom) ui_modal_floor_bottom = bottom;
@@ -493,12 +538,22 @@ void sub_A0972F48(void)
     ++touch_modal_depth;
     touch_modal_window = window;
     touch_publish();
-    if (fit) { void_log("[fit] modal open %08X (depth %u)", window, ui_fit_depth + 1); ui_fit(1, 1); }
+    if (fit) {
+        if (measured) void_log("[fit] modal measured %08X %dx%d", window, width, height);
+        else void_log("[fit] modal open %08X (depth %u)", window, ui_fit_depth + 1);
+        ui_fit(1, !measured);
+    }
     unsigned previous_depth = void_begin_modal_messages();
     sub_A0972F48_lifted();
     void_end_modal_messages(previous_depth);
-    if (fit) { void_log("[fit] modal close %08X (depth %u)", window, ui_fit_depth ? ui_fit_depth - 1 : 0); ui_fit(0, 1); }
-    else if (!pie) {
+    if (fit) {
+        if (measured) {
+            ui_modal_floor_right = saved_right;
+            ui_modal_floor_bottom = saved_bottom;
+        }
+        void_log("[fit] modal close %08X (depth %u)", window, ui_fit_depth ? ui_fit_depth - 1 : 0);
+        ui_fit(0, !measured);
+    } else if (!pie) {
         int old_w, old_h, new_w, new_h;
         s2_game_resolution(&old_w, &old_h);
         ui_modal_floor_right = saved_right;
@@ -774,15 +829,20 @@ static char *read_text(const char *path, size_t *size)
     return text;
 }
 
-/* <AnyUint32 key="NAME" type="...">VALUE</AnyUint32>: VALUE, or -1. */
-static int xml_value(const char *text, const char *name)
+static const char *xml_property_value(const char *text, const char *name)
 {
     char needle[96];
     snprintf(needle, sizeof needle, "key=\"%s\"", name);
-    const char *at = strstr(text, needle);
-    if (!at) return -1;
-    at = strchr(at, '>');
-    return at ? atoi(at + 1) : -1;
+    const char *at = text ? strstr(text, needle) : NULL;
+    at = at ? strchr(at, '>') : NULL;
+    return at ? at + 1 : NULL;
+}
+
+/* <AnyUint32 key="NAME" type="...">VALUE</AnyUint32>: VALUE, or -1. */
+static int xml_value(const char *text, const char *name)
+{
+    const char *value = xml_property_value(text, name);
+    return value ? atoi(value) : -1;
 }
 
 /* Set (or add) one AnyUint32 / AnyString property in the file's text. */
@@ -843,6 +903,12 @@ static void option_overrides(void)
 #endif
 }
 
+static void minimal_backup_path(char *out, size_t size)
+{
+    snprintf(out, size, "%.*s/port-graphics-before-minimal.txt",
+             (int)(strrchr(props_path, '/') ? strrchr(props_path, '/') - props_path : 0), props_path);
+}
+
 void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
 {
     read_display_rates();
@@ -854,12 +920,29 @@ void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
     snprintf(props_path, sizeof props_path, "%s/Documents/EA Games/The Sims 2 Legacy/Config/userProps.xml", data_dir);
     size_t size = 0;
     char *text = read_text(props_path, &size);
+    const char *disabled_content = xml_property_value(text, "disableCustomObjects");
+    const char *allowed_content = xml_property_value(text, "allowCustomContent");
+    s2_extender_custom_content(disabled_content && !strncmp(disabled_content, "false<", 6) &&
+                              (!allowed_content || !strncmp(allowed_content, "true<", 5)));
     if (text) {
         int v;
         if ((v = xml_value(text, "s2UIScale")) > 0) ui_scale = v;
         if ((v = xml_value(text, "s2FrameRateLimit")) >= 0) fps_limit = v;
         if ((v = xml_value(text, "s2RenderScale")) > 0) render_scale = v;
     }
+    /* The game can exit before userProps.xml is flushed. The stock values' saved copy
+     * also marks the preset as enabled, and stays intact when it is reapplied. */
+    char backup[1300];
+    struct stat snapshot;
+    minimal_backup_path(backup, sizeof backup);
+    minimal_resume = !stat(backup, &snapshot) && snapshot.st_size > 0;
+    /* A saved snapshot already owns the preset. The launcher's request must not
+     * take a new snapshot of the lowered options and overwrite the originals. */
+    const char *minimal_request = getenv("PORT_OPTION_MINIMAL_GRAPHICS");
+    if (minimal_request && !strcmp(minimal_request, "1") && !minimal_resume)
+        minimal_startup = 1;
+    void_log("[settings] minimal graphics preset %s",
+             minimal_startup ? "requested" : minimal_resume ? "saved" : "off");
     ui_scale = clamp(ui_scale, 100, 300);
     fps_limit = fps_limit ? clamp(fps_limit, 15, 240) : 0;
     render_scale = clamp(render_scale, 25, 200);
@@ -886,6 +969,8 @@ void s2_settings_init(const char *data_dir, int screen_w, int screen_h)
     void_log("[settings] launcher resolution %d%%, UI FSR1 %d, FXAA %d, render upscaler %d",percent,ui_fsr,render_aa,render_upscaler);
     const char *ui_override = getenv("S2_UI_SCALE"), *fps_override = getenv("S2_FPS_LIMIT"),
                *render_override = getenv("S2_RENDER_SCALE");
+    double extender_reference = s2_extender_ui_reference();
+    if (extender_reference > 0) ui_scale = clamp((int)(phys_h * 100.0 / extender_reference + 0.5), 100, 300);
     if (ui_override) ui_scale = clamp(atoi(ui_override), 100, 300);
     if (fps_override) {
         int fps = atoi(fps_override);
@@ -939,6 +1024,9 @@ static void changed(const char *key, uint32_t value)
             s2_ui_scale_requested(ui_scale);
             void_log("[settings] render scale %d%%", render_scale);
         }
+    } else if (!strcmp(key, "s2MinimalGraphics")) {
+        int v = value ? 1 : 0;
+        minimal_requested = v != minimal_graphics ? v : -1;
     } else if (!strcmp(key, "s2UIScale")) {
         int v = clamp((int)value, 100, 300);
         if (v != ui_scale_choice) {
@@ -1064,14 +1152,14 @@ void sub_A01BF515(void)
  * before the bindings read them: the panel shows the values in effect. */
 static void put_live_settings(void)
 {
-    static const char *const names[3] = { "s2UIScale", "s2FrameRateLimit", "s2RenderScale" };
-    uint32_t values[3] = { (uint32_t)ui_scale_choice, (uint32_t)fps_limit, (uint32_t)render_scale };
+    static const char *const names[4] = { "s2UIScale", "s2FrameRateLimit", "s2RenderScale", "s2MinimalGraphics" };
+    uint32_t values[4] = { (uint32_t)ui_scale_choice, (uint32_t)fps_limit, (uint32_t)render_scale, (uint32_t)minimal_graphics };
     uint32_t slot = void_galloc(4 + 24 + 32 + 8);
     uint32_t key = slot + 4, chars = slot + 28, any = slot + 60;
     MEM32(slot) = 0;
     void_call_guest_this(0xA01CBAF3u, slot, 0, NULL);          /* the user property set (cTSUserProps) */
     uint32_t set = MEM32(slot);
-    for (int i = 0; set && i < 3; ++i) {
+    for (int i = 0; set && i < 4; ++i) {
         uint32_t length = (uint32_t)strlen(names[i]);
         memset(GPTR(key), 0, 24);
         memset(GPTR(chars), 0, 32);
@@ -1088,10 +1176,129 @@ static void put_live_settings(void)
     void_gfree(slot);
 }
 
+/* Minimal Graphics sets the game's own options (Graphics Rules) to their lowest through its option
+ * manager, as the panel's buttons do (0xA064D4AD: SetOption(name, value) at vt+52, then 0xA064C42A).
+ * Texture Detail Low loads every texture two mip levels down (imageDataSizeReductionOnLoad 2): with
+ * the neighbouring lots, the town's people and a smaller skirt left out of lots it saves the most
+ * memory; textures and those parts change at the next lot or town load. Off restores the values in
+ * effect when it was set (kept beside userProps.xml, so they survive restarts). */
+static const struct { const char *name; uint32_t minimal; } minimal_options[] = {
+    { "MaterialDetail", 1 }, { "ObjectDetail", 2 }, { "Shadows", 1 }, { "EffectsQuality", 1 },
+    { "LightingQuality", 1 }, { "Reflection", 0 }, { "SnowOnGround", 0 }, { "EnableLotImpostersInLot", 0 },
+    { "EnableNeighborhoodOccupantsInLot", 0 }, { "LotSkirtSizeIncrease", 0 }, { "AnimationSamplingLevel", 1 },
+};
+#define MINIMAL_OPTION_COUNT (sizeof minimal_options / sizeof minimal_options[0])
+
+static uint32_t option_manager(void)
+{
+    uint32_t service = void_call_guest_this(0xA020DDFBu, 0, 0, NULL);
+    if (!service || !void_vm_readable(service, 4)) return 0;
+    uint32_t manager = void_call_guest_this(MEM32(MEM32(service) + 84), service, 0, NULL);
+    return manager && void_vm_readable(manager, 4) ? manager : 0;
+}
+
+static int apply_minimal_graphics(int on, int resume)
+{
+    if (on == minimal_graphics) return 1;
+    void_regs saved;
+    void_regs_save(&saved);
+    uint32_t manager = option_manager();
+    if (!manager) {
+        void_regs_load(&saved);
+        if (!resume) void_log("[settings] minimal graphics: no option manager");
+        return 0;
+    }
+    char path[1300];
+    minimal_backup_path(path, sizeof path);
+    uint32_t block = void_galloc(64);
+    if (!block) {
+        void_regs_load(&saved);
+        return 0;
+    }
+    uint32_t name = block, value = block + 56;
+    uint32_t before[MINIMAL_OPTION_COUNT], target[MINIMAL_OPTION_COUNT];
+    int known[MINIMAL_OPTION_COUNT];
+    for (size_t i = 0; i < MINIMAL_OPTION_COUNT; ++i) {
+        snprintf((char *)GPTR(name), 48, "%s", minimal_options[i].name);
+        MEM32(value) = 0xFFFFFFFFu;
+        uint32_t args[2] = { name, value };
+        void_call_guest_this(MEM32(MEM32(manager) + 56), manager, 2, args);   /* GetOption(name, &value) */
+        before[i] = MEM32(value);
+        known[i] = before[i] != 0xFFFFFFFFu;
+        target[i] = on ? minimal_options[i].minimal : before[i];
+    }
+    int saved_options = 1;
+    if (on && !resume) {
+        char temporary[sizeof path + 4];
+        snprintf(temporary, sizeof temporary, "%s.tmp", path);
+        FILE *f = fopen(temporary, "w");
+        saved_options = 0;
+        if (f) {
+            int count = 0;
+            for (size_t i = 0; i < MINIMAL_OPTION_COUNT; ++i)
+                if (known[i] && fprintf(f, "%s %u\n", minimal_options[i].name, before[i]) > 0) ++count;
+            saved_options = count && !ferror(f) && !fflush(f) && !fsync(fileno(f));
+            if (fclose(f)) saved_options = 0;
+            if (saved_options) saved_options = rename(temporary, path) == 0;
+            if (!saved_options) remove(temporary);
+        }
+    } else if (!on) {
+        FILE *f = fopen(path, "r");
+        char line[96], option[64];
+        unsigned v;
+        while (f && fgets(line, sizeof line, f))
+            if (sscanf(line, "%63s %u", option, &v) == 2)
+                for (size_t i = 0; i < MINIMAL_OPTION_COUNT; ++i)
+                    if (!strcmp(option, minimal_options[i].name)) target[i] = v;
+        if (f) {
+            int failed = ferror(f);
+            fclose(f);
+            saved_options = !failed && remove(path) == 0;
+        } else {
+            saved_options = 0;
+        }
+    }
+    if (!saved_options) {
+        void_gfree(block);
+        void_regs_load(&saved);
+        void_log("[settings] minimal graphics: unable to %s saved options", on ? "write" : "read and clear");
+        return 0;
+    }
+    char changes[512] = "";
+    size_t used = 0;
+    for (size_t i = 0; i < MINIMAL_OPTION_COUNT; ++i) {
+        if (!known[i] || target[i] == before[i]) continue;
+        snprintf((char *)GPTR(name), 48, "%s", minimal_options[i].name);
+        uint32_t args[2] = { name, target[i] };
+        void_call_guest_this(MEM32(MEM32(manager) + 52), manager, 2, args);   /* SetOption(name, value) */
+        if (used < sizeof changes)
+            used += (size_t)snprintf(changes + used, sizeof changes - used, " %s %u->%u", minimal_options[i].name,
+                                     before[i], target[i]);
+    }
+    void_gfree(block);
+    void_call_guest_this(0xA064C42Au, 0, 0, NULL);   /* what the panel does after each of its buttons */
+    minimal_graphics = on;
+    /* The panel's buttons show the new values (its refresh reads them back). */
+    if (ui_fit_option && graphics_panel && void_vm_readable(graphics_panel, 4) &&
+        MEM32(graphics_panel) == graphics_panel_table)
+        void_call_guest_this(0xA064CB41u, graphics_panel, 0, NULL);
+    void_regs_load(&saved);
+    void_log("[settings] minimal graphics %s%s:%s", on ? "on" : "off",
+             resume ? " (restored)" : "", changes[0] ? changes : " nothing to change");
+    if (on && minimal_startup) {
+        const char *once = getenv("PORT_MINIMAL_GRAPHICS_ONCE");
+        if (once && *once && unlink(once))
+            void_log("[settings] minimal graphics: could not retire the request (%s)", once);
+    }
+    return 1;
+}
+
 void sub_A064CB41_lifted(void);
 void sub_A064CB41(void)
 {
     uint32_t self = g_ecx;
+    graphics_panel = self;
+    graphics_panel_table = MEM32(self);
     sub_A064CB41_lifted();
     uint32_t eax = g_eax;
     put_live_settings();
@@ -1163,4 +1370,29 @@ void sub_A0649404(void)
     options_display_rates(MEM32(g_esp + 4));
     void_regs_load(&saved);
     sub_A0649404_lifted();
+}
+
+/* The game keeps two sets of interface layouts: 800x600 (group 0x08000600, 60 screens such as the CAS
+ * steps) and the regular one for 1024x768 and up (0xA99D8A11). At its first interface load it reads its
+ * view size once (0xA0B429B0) and below 1024x768 caches 800x600 at 0xA10FB340/44: the 800x600 group
+ * wins wherever it exists. The port's view is the screen divided by the interface scale, so at large
+ * scales the compact set is in use, and interface mods made for the regular set (the usual case) do
+ * not apply there. 0: not decided yet, 1: compact set, 2: regular set. */
+int s2_ui_layout_set(void)
+{
+    if (!void_vm_readable(0xA10FB340u, 8)) return 0;
+    uint32_t width = MEM32(0xA10FB340u), height = MEM32(0xA10FB344u);
+    if (!width || !height) return 0;
+    return width == 800 && height == 600 ? 1 : 2;
+}
+
+void sub_A0B429B0_lifted(void);
+void sub_A0B429B0(void)
+{
+    sub_A0B429B0_lifted();
+    const char *regular = getenv("PORT_OPTION_REGULAR_UI_LAYOUTS");
+    if (regular && !strcmp(regular, "1") && s2_ui_layout_set() == 1) {
+        MEM32(0xA10FB340u) = 1024;
+        MEM32(0xA10FB344u) = 768;
+    }
 }

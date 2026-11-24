@@ -11,6 +11,7 @@
 #include "dircache.h"
 #include "readcache.h"
 #include "zip_files.h"
+#include "sims2_extender.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -294,6 +295,8 @@ static char *to_host_uncounted(const char *windows_path, int *parent_exists, cha
     char norm[1024];
     if (!windows_path || !normalize(windows_path, norm, sizeof norm)) return NULL;
     if (normalized_out) snprintf(normalized_out, 1024, "%s", norm);
+    if ((s2_extender_flags & S2_EXTENDER_GROUPS) &&
+        !strcasecmp(norm, "C:\\Users\\Player\\Documents\\EA Games\\The Sims 2 Legacy\\Groups.cache")) return NULL;
     const char *overlay = void_overlay_path(norm);
     if (overlay) {
         if (parent_exists) *parent_exists = 1;
@@ -322,6 +325,18 @@ static char *to_host_uncounted(const char *windows_path, int *parent_exists, cha
         void_blocking_begin();
         walk_components(host, rest, 0, &ok, &kind);
         void_blocking_end();
+    }
+    if (kind == -1 && s2_extender_download_name(0)) {
+        size_t prefix = strlen(s2_extender_downloads_dir);
+        if (!strncasecmp(norm, s2_extender_downloads_dir, prefix) && norm[prefix] == '\\') {
+            const char *package = s2_extender_download_path(norm + prefix + 1);
+            if (package) {
+                free(host);
+                host = strdup(package);
+                ok = 1;
+                kind = DT_REG;
+            }
+        }
     }
     if (parent_exists) *parent_exists = ok;
     if (type) *type = kind;
@@ -436,6 +451,13 @@ static int file_flush(file_t *f)
     if (done && f->path_key) void_readcache_changed_key(f->path_key);
     if (rc) { errno = f->werr; void_log("[files] buffered write to %s failed: %s", f->host_path ? f->host_path : "?", strerror(f->werr)); }
     return rc;
+}
+
+/* Combine the two 32-bit halves of the Win32 OVERLAPPED file offset. */
+static off_t overlapped_offset(uint32_t overlapped)
+{
+    uint64_t at = (uint64_t)MEM32(overlapped + 8) | ((uint64_t)MEM32(overlapped + 12) << 32);
+    return (off_t)at;
 }
 
 /* Where the next byte goes: the descriptor's position plus the buffered bytes. */
@@ -702,6 +724,8 @@ static uint32_t create_file(const char *path, uint32_t access, uint32_t disposit
     files_flush_all();
     VSTAT_BEGIN(start);
     uint32_t h = create_file_uncounted(path, access, disposition, flags);
+    if (h != WIN_INVALID_HANDLE && s2_extender_download_name(0))
+        s2_extender_note_package_open(path);
     VSTAT_END(start, VS_OPEN, 0);
     IOTRACE("O %08X %08X %u %llu %s\n", h, access, disposition, (unsigned long long)((void_stat_now() - start) / 1000), path ? path : "");
     return h;
@@ -898,7 +922,7 @@ WINAPI_EXPORT(K32, ReadFile, 5)
         if (d != f && d->wlen && d->path_key == f->path_key) file_flush(d);
     if (f->path_key && f->cached_reads && size) {
         VSTAT_BEGIN(cached_start);
-        off_t at = overlapped ? (off_t)MEM32(overlapped + 8) | ((off_t)MEM32(overlapped + 12) << 32)
+        off_t at = overlapped ? overlapped_offset(overlapped)
                  : f->lazy ? f->lazy_pos : lseek(f->fd, 0, SEEK_CUR);
         int cfd = f->fd;                /* -1 while lazy: blocks in memory only */
         ssize_t got = at < 0 ? -2 : void_readcache_pread(cfd, f->path_key, GPTR(buffer), size, at);
@@ -925,7 +949,7 @@ WINAPI_EXPORT(K32, ReadFile, 5)
     if (file_open_now(f, h)) { void_set_last_error(void_errno_to_win32(errno)); return 0; }
     void_readcache_flush_key(f->path_key);
     int fd = f->fd;
-    off_t offset = overlapped ? (off_t)MEM32(overlapped + 8) | ((off_t)MEM32(overlapped + 12) << 32) : 0;
+    off_t offset = overlapped ? overlapped_offset(overlapped) : 0;
     ssize_t got;
     int blocking = size != 0;
     VSTAT_BEGIN(start);
@@ -971,7 +995,7 @@ WINAPI_EXPORT(K32, WriteFile, 5)
         return 1;
     }
     if (file_open_now(f, h)) { void_set_last_error(void_errno_to_win32(errno)); return 0; }
-    IOTRACE("W %08X %u %lld %lld %u\n", h, size, overlapped ? (long long)((off_t)MEM32(overlapped + 8) | ((off_t)MEM32(overlapped + 12) << 32)) : -1LL,
+    IOTRACE("W %08X %u %lld %lld %u\n", h, size, overlapped ? (long long)overlapped_offset(overlapped) : -1LL,
         io_trace ? (long long)lseek(f->fd, 0, SEEK_CUR) + f->wlen : 0LL, f->wlen);
     if (f->werr) {
         /* A buffered write failed after an earlier WriteFile reported success. */
@@ -980,7 +1004,7 @@ WINAPI_EXPORT(K32, WriteFile, 5)
         return 0;
     }
     if (f->path_key && size && (f->lazy_flags & O_ACCMODE) != O_RDONLY && void_readcache_active()) {
-        off_t at = overlapped ? (off_t)MEM32(overlapped + 8) | ((off_t)MEM32(overlapped + 12) << 32) : lseek(f->fd, 0, SEEK_CUR);
+        off_t at = overlapped ? overlapped_offset(overlapped) : lseek(f->fd, 0, SEEK_CUR);
         ssize_t put = at < 0 ? -2 : void_readcache_pwrite(f->fd, f->path_key, f->host_path, GPTR(buffer), size, at);
         if (put >= 0) {
             if (!overlapped) lseek(f->fd, at + put, SEEK_SET);
@@ -1006,7 +1030,7 @@ WINAPI_EXPORT(K32, WriteFile, 5)
     ssize_t put;
     VSTAT_BEGIN(start);
     if (overlapped) {
-        off_t offset = (off_t)MEM32(overlapped + 8) | ((off_t)MEM32(overlapped + 12) << 32);
+        off_t offset = overlapped_offset(overlapped);
         put = pwrite(f->fd, GPTR(buffer), size, offset);
     } else {
         put = write(f->fd, GPTR(buffer), size);
@@ -1479,6 +1503,7 @@ typedef struct {
     char **names;
     int count, next;
     int wide;                  /* WIN32_FIND_DATAW (592 bytes) or A (320) */
+    int extender_downloads;
     char dir[2048];
 } find_t;
 
@@ -1517,7 +1542,10 @@ static int fill_find_data(find_t *f, const char *name, uint32_t out)
     snprintf(host, sizeof host, "%s/%s", f->dir, name);
     struct stat st;
     memset(GPTR(out), 0, f->wide ? 592 : 320);
-    if (dircache_stat(host, &st)) return 0;
+    if (dircache_stat(host, &st)) {
+        const char *package = f->extender_downloads ? s2_extender_download_path(name) : NULL;
+        if (!package || dircache_stat(package, &st)) return 0;
+    }
     MEM32(out) = S_ISDIR(st.st_mode) ? 0x10u : 0x20u;
     uint64_t ct = unix_to_filetime(st.st_ctim.tv_sec, st.st_ctim.tv_nsec);
     uint64_t at = unix_to_filetime(st.st_atim.tv_sec, st.st_atim.tv_nsec);
@@ -1550,6 +1578,7 @@ static uint32_t find_first_uncounted(char *pattern_path, uint32_t out, int wide)
     snprintf(pattern, sizeof pattern, "%s", slash ? slash + 1 : norm);
     if (slash) *slash = 0;
     if (strlen(norm) == 2) strcat(norm, "\\");
+    int extender_downloads = s2_extender_download_name(0) && !strcasecmp(norm, s2_extender_downloads_dir);
     int parent_ok = 0, dir_type = -1;
     char *host_dir = to_host_typed(norm, &parent_ok, NULL, &dir_type);
     if (!host_dir || dir_type == DT_REG || (dir_type == -1 && dircache_active())) {
@@ -1561,6 +1590,7 @@ static uint32_t find_first_uncounted(char *pattern_path, uint32_t out, int wide)
     void_readcache_flush_dir(host_dir);
     find_t gathered = {0}, *f = &gathered;
     f->wide = wide;
+    f->extender_downloads = extender_downloads;
     snprintf(f->dir, sizeof f->dir, "%s", host_dir);
     /* "*.*" matches every name, as on Windows. Every directory but a drive
      * root lists "." and ".." there; Android's FUSE /sdcard leaves them out,
@@ -1593,6 +1623,16 @@ static uint32_t find_first_uncounted(char *pattern_path, uint32_t out, int wide)
             }
         }
         void_blocking_end();
+    }
+    if (extender_downloads) {
+        const char *name;
+        for (unsigned i = 0; (name = s2_extender_download_name(i)); ++i) {
+            if (!s2_extender_download_path(name)) continue;
+            int j = 0;
+            while (j < f->count && strcasecmp(f->names[j], name)) ++j;
+            if (j == f->count) find_gather(&match, name, DT_REG);
+            listed = 1;
+        }
     }
     free(host_dir);
     if (!listed) {

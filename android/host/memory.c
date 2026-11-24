@@ -1,11 +1,25 @@
-/* The guest address space: one 4 GiB reservation, a Win32-style page map
- * (64 KiB allocation granularity, reserve/commit, protection) and Win32 heaps
- * built on dlmalloc mspaces whose system memory comes from the same map. */
+/* The guest address space: a Win32-style page map (64 KiB allocation
+ * granularity, reserve/commit, protection) and Win32 heaps built on dlmalloc
+ * mspaces. ARM64 reserves one 4 GiB window. ARM32 cannot: size_t holds at most
+ * 4 GiB - 1 and the host lives in the same space, so each reservation is its
+ * own mapping at the guest VA (VOID_GUEST_SEGMENTED). Image bases are held
+ * before this library is loaded (android/unpack/unpack.c, [anon:sims2-guest]). */
 #define _GNU_SOURCE
 #include "host.h"
 #include <errno.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <unistd.h>
+
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+#ifndef PR_SET_VMA
+#define PR_SET_VMA 0x53564d41
+#define PR_SET_VMA_ANON_NAME 0
+#endif
 
 #define PAGES (1u << 20)               /* 4 GiB / 4 KiB */
 #define GRANULES (1u << 16)            /* 4 GiB / 64 KiB */
@@ -35,11 +49,118 @@ static uint16_t page_protect[PAGES];   /* Win32 PAGE_* of committed pages */
 static uint16_t page_alloc[PAGES];     /* allocation base (VA >> 16), 0 if free */
 static uint16_t alloc_protect[GRANULES]; /* initial protection by allocation base */
 static uint8_t granule_used[GRANULES];
+#if VOID_GUEST_SEGMENTED
+/* 1 once a host mapping covers the granule. Pre-held image granules are mapped
+ * and not used, so find_free leaves them for the exact claim. */
+static uint8_t granule_mapped[GRANULES];
+#endif
 static pthread_mutex_t vm_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t host_page = GUEST_PAGE;
 /* Reserved pages expose protection 0; reuse their unused field so fresh
  * anonymous commits remain demand-zero without touching their data pages. */
 #define RESERVED_DIRTY 0xFFFFu
+#define HOST_OWNED 3u
+
+#if VOID_GUEST_SEGMENTED
+static const struct { uint32_t base, size; } image_holds[] = {
+    { 0xA0000000u, 0x0120F000u }, /* Sims2EP9.exe SizeOfImage */
+    { 0x60000000u, 0x00058000u }, /* ijl15.dll SizeOfImage */
+};
+
+static int image_hold(unsigned long start, unsigned long end)
+{
+    for (size_t i = 0; i < sizeof image_holds / sizeof image_holds[0]; ++i)
+        if (start == image_holds[i].base && end == (unsigned long)image_holds[i].base + image_holds[i].size)
+            return 1;
+    return 0;
+}
+
+/* Mark host mappings occupied. A sims2-guest hold stays allocatable by an
+ * exact claim. Returns how many granules became host-owned. */
+static int host_scan_maps(void)
+{
+    FILE *maps = fopen("/proc/self/maps", "re");
+    if (!maps) return -1;
+    int owned = 0;
+    char line[768];
+    while (fgets(line, sizeof line, maps)) {
+        unsigned long long start, end;
+        char perms[8];
+        /* unsigned long is 32-bit here, so a map that ends on the 4 GiB line does not fit in it. */
+        if (sscanf(line, "%llx-%llx %7s", &start, &end, perms) != 3 || end <= start || start >= 0x100000000ull)
+            continue;
+        if (end > 0x100000000ull) end = 0x100000000ull;
+        int guest = strstr(line, "[anon:sims2-guest]") != NULL ||
+            (end <= 0xFFFFFFFFull && perms[0] == '-' && perms[1] == '-' && perms[2] == '-' &&
+             image_hold((unsigned long)start, (unsigned long)end));
+        uint32_t g0 = (uint32_t)(start >> 16);
+        uint32_t g1 = (uint32_t)((end + GUEST_GRANULARITY - 1) >> 16);
+        if (g1 > GRANULES) g1 = GRANULES;
+        for (uint32_t g = g0; g < g1; ++g) {
+            if (guest) {
+                if (!granule_used[g]) granule_mapped[g] = 1;
+            } else if (!granule_used[g] && !granule_mapped[g]) {
+                granule_used[g] = HOST_OWNED;
+                ++owned;
+            }
+        }
+    }
+    fclose(maps);
+    return owned;
+}
+
+static int host_map_new(uint32_t address, uint32_t size)
+{
+    void *want = GPTR(address);
+    void *got = mmap(want, size, PROT_NONE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+    if (got != want) {
+        if (got != MAP_FAILED) munmap(got, size);
+        return 0;
+    }
+    prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, (unsigned long)got, (unsigned long)size, (unsigned long)"sims2-guest");
+    return 1;
+}
+
+static void hold_image(uint32_t address, uint32_t size)
+{
+    uint32_t g0 = address >> 16;
+    uint32_t g1 = (uint32_t)(((uint64_t)address + size + GUEST_GRANULARITY - 1) >> 16);
+    for (uint32_t g = g0; g < g1; ++g)
+        if (granule_used[g] || granule_mapped[g]) return;
+    if (!host_map_new(address, size)) {
+        void_log("[void] image hold %08X+%X missed: %s", address, size, strerror(errno));
+        host_scan_maps();
+        return;
+    }
+    for (uint32_t g = g0; g < g1; ++g) granule_mapped[g] = 1;
+}
+#endif
+
+static int granule_blocked(uint32_t g)
+{
+#if VOID_GUEST_SEGMENTED
+    return granule_used[g] || granule_mapped[g];
+#else
+    return granule_used[g];
+#endif
+}
+
+int void_fault_guest(uintptr_t fault, uint32_t *guest_va)
+{
+#if VOID_GUEST_SEGMENTED
+    if (fault >= GUEST_USER_TOP) return 0;
+    uint32_t page = (uint32_t)fault >> 12;
+    if (page >= PAGES || (page_state[page] == ST_FREE && !granule_mapped[page >> 4])) return 0;
+    *guest_va = (uint32_t)fault;
+    return 1;
+#else
+    if (fault < (uintptr_t)VOID_GUEST_BASE ||
+        fault >= (uintptr_t)VOID_GUEST_BASE + (uintptr_t)VOID_GUEST_SPAN) return 0;
+    *guest_va = (uint32_t)(fault - (uintptr_t)VOID_GUEST_BASE);
+    return 1;
+#endif
+}
 
 int void_guest_reserve(void)
 {
@@ -49,6 +170,18 @@ int void_guest_reserve(void)
         return 0;
     }
     host_page = (uint32_t)page;
+#if VOID_GUEST_SEGMENTED
+    if (host_page != GUEST_PAGE) {
+        void_log("[void] segmented guest map needs 4 KiB host pages, got %u", host_page);
+        return 0;
+    }
+    if (host_scan_maps() < 0) {
+        void_log("[void] cannot read /proc/self/maps");
+        return 0;
+    }
+    for (size_t i = 0; i < sizeof image_holds / sizeof image_holds[0]; ++i)
+        hold_image(image_holds[i].base, image_holds[i].size);
+#else
     void *want = (void *)(uintptr_t)VOID_GUEST_BASE;
     void *got = mmap(want, VOID_GUEST_SPAN, PROT_NONE,
         MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -61,6 +194,7 @@ int void_guest_reserve(void)
         munmap(got, VOID_GUEST_SPAN);
         return 0;
     }
+#endif
     /* Null guard: the first 64 KiB are never allocatable, as on Windows. */
     granule_used[0] = 1;
     /* Synthetic thunk VAs: reserved, never accessible. */
@@ -69,8 +203,19 @@ int void_guest_reserve(void)
     granule_used[0xDEAD0000u >> 16] = 1;
     /* Everything above the user top stays unavailable. */
     for (uint32_t g = GUEST_USER_TOP >> 16; g < GRANULES; ++g) granule_used[g] = 1;
+#if VOID_GUEST_SEGMENTED
+    uint32_t free_g = 0, hole = 0, best = 0, limit = GUEST_USER_TOP >> 16;
+    for (uint32_t g = 1; g < limit; ++g) {
+        hole = granule_blocked(g) ? 0 : hole + 1;
+        free_g += hole ? 1 : 0;
+        if (hole > best) best = hole;
+    }
+    void_log("[void] segmented guest map: %u MiB free, largest hole %u MiB, holds exe=%d ijl=%d (host page %u)",
+        free_g >> 4, best >> 4, granule_mapped[0xA0000000u >> 16], granule_mapped[0x60000000u >> 16], host_page);
+#else
     void_log("[void] guest window %p..%p reserved (host page %u, guest page %u)", want,
         (void *)((uintptr_t)want + VOID_GUEST_SPAN), host_page, GUEST_PAGE);
+#endif
     return 1;
 }
 
@@ -103,13 +248,13 @@ static uint32_t find_free(uint32_t size, int top_down)
     if (top_down) {
         uint32_t run = 0;
         for (uint32_t g = limit; g-- > 1;) {
-            run = granule_used[g] ? 0 : run + 1;
+            run = granule_blocked(g) ? 0 : run + 1;
             if (run == need) return g << 16;
         }
     } else {
         uint32_t run = 0;
         for (uint32_t g = 1; g < limit; ++g) {
-            run = granule_used[g] ? 0 : run + 1;
+            run = granule_blocked(g) ? 0 : run + 1;
             if (run == need) return (g - need + 1) << 16;
         }
     }
@@ -195,6 +340,17 @@ static int reserve_exact(uint32_t address, uint32_t size, uint32_t protect)
     uint32_t g0 = address >> 16, g1 = (uint32_t)(((uint64_t)address + size + GUEST_GRANULARITY - 1) >> 16);
     if ((address & (GUEST_GRANULARITY - 1)) || g1 > (GUEST_USER_TOP >> 16) || g1 <= g0) return 0;
     for (uint32_t g = g0; g < g1; ++g) if (granule_used[g]) return 0;
+#if VOID_GUEST_SEGMENTED
+    /* A pre-held image is already mapped. A searched range is not (find_free
+     * skips mapped granules), so it must not straddle the two. */
+    uint32_t mapped = 0;
+    for (uint32_t g = g0; g < g1; ++g) mapped += granule_mapped[g];
+    if (mapped && mapped != g1 - g0) return 0;
+    if (!mapped) {
+        if (!host_map_new(address, size)) return 0;
+        for (uint32_t g = g0; g < g1; ++g) granule_mapped[g] = 1;
+    }
+#endif
     for (uint32_t g = g0; g < g1; ++g) granule_used[g] = 1;
     uint32_t pages = (size + GUEST_PAGE - 1) / GUEST_PAGE;
     set_pages(address >> 12, pages, ST_RESERVE, 0, address >> 12);
@@ -218,9 +374,28 @@ uint32_t void_vm_alloc(uint32_t address, uint32_t size, uint32_t type, uint32_t 
         uint32_t span = (uint32_t)((((uint64_t)address + size + GUEST_PAGE - 1) & ~(uint64_t)(GUEST_PAGE - 1)) - base);
         if (!address) {
             span = (size + GUEST_PAGE - 1) & ~(GUEST_PAGE - 1);
+#if VOID_GUEST_SEGMENTED
+            int placed = 0;
+            for (int attempt = 0; attempt < 64 && !placed; ++attempt) {
+                base = find_free(span, (type & MEM_TOP_DOWN_) != 0);
+                if (!base) break;
+                if (reserve_exact(base, span, protect)) { placed = 1; break; }
+                int owned = host_scan_maps();
+                if (owned <= 0) {
+                    uint32_t g1 = (uint32_t)(((uint64_t)base + span + GUEST_GRANULARITY - 1) >> 16);
+                    for (uint32_t g = base >> 16; g < g1; ++g)
+                        if (!granule_used[g]) granule_used[g] = HOST_OWNED;
+                }
+            }
+            if (!placed) { pthread_mutex_unlock(&vm_lock); void_set_last_error(ERROR_NOT_ENOUGH_MEMORY_); return 0; }
+#else
             base = find_free(span, (type & MEM_TOP_DOWN_) != 0);
             if (!base) { pthread_mutex_unlock(&vm_lock); void_set_last_error(ERROR_NOT_ENOUGH_MEMORY_); return 0; }
+#endif
         }
+#if VOID_GUEST_SEGMENTED
+        if (address)
+#endif
         if (!reserve_exact(base, span, protect)) {
             pthread_mutex_unlock(&vm_lock);
             void_set_last_error(ERROR_INVALID_ADDRESS_);
@@ -277,14 +452,23 @@ int void_vm_free(uint32_t address, uint32_t size, uint32_t type)
         while (p < PAGES && page_state[p] != ST_FREE && page_alloc[p] == (page >> 4)) ++p;
         uint32_t span = (p - page) << 12;
         void *host = GPTR(address);
+#if VOID_GUEST_SEGMENTED
+        if (munmap(host, span)) {
+#else
         if (mmap(host, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE, -1, 0) == MAP_FAILED) {
+#endif
             pthread_mutex_unlock(&vm_lock);
             void_set_last_error(ERROR_NOT_ENOUGH_MEMORY_);
             return 0;
         }
         set_pages(page, p - page, ST_FREE, 0, 0);
         uint32_t g1 = (uint32_t)(((uint64_t)address + span + GUEST_GRANULARITY - 1) >> 16);
-        for (uint32_t g = address >> 16; g < g1; ++g) granule_used[g] = 0;
+        for (uint32_t g = address >> 16; g < g1; ++g) {
+            granule_used[g] = 0;
+#if VOID_GUEST_SEGMENTED
+            granule_mapped[g] = 0;
+#endif
+        }
     } else if (type & MEM_DECOMMIT_) {
         uint32_t first = page;
         uint32_t last = size ? (uint32_t)(((uint64_t)address + size - 1) >> 12) : first;
@@ -399,8 +583,24 @@ uint32_t void_vm_map_file(int fd, uint64_t offset, uint32_t size, int writable, 
     if (offset & (GUEST_GRANULARITY - 1)) { void_set_last_error(ERROR_INVALID_PARAMETER_); return 0; }
     pthread_mutex_lock(&vm_lock);
     uint32_t span = (size + GUEST_PAGE - 1) & ~(GUEST_PAGE - 1);
-    uint32_t base = find_free(span, 0);
-    if (!base || !reserve_exact(base, span, writable ? PAGE_READWRITE_ : PAGE_READONLY_)) {
+    uint32_t base = 0;
+#if VOID_GUEST_SEGMENTED
+    for (int attempt = 0; attempt < 64 && !base; ++attempt) {
+        uint32_t found = find_free(span, 0);
+        if (!found) break;
+        if (reserve_exact(found, span, writable ? PAGE_READWRITE_ : PAGE_READONLY_)) { base = found; break; }
+        int owned = host_scan_maps();
+        if (owned <= 0) {
+            uint32_t g1 = (uint32_t)(((uint64_t)found + span + GUEST_GRANULARITY - 1) >> 16);
+            for (uint32_t g = found >> 16; g < g1; ++g)
+                if (!granule_used[g]) granule_used[g] = HOST_OWNED;
+        }
+    }
+#else
+    base = find_free(span, 0);
+    if (base && !reserve_exact(base, span, writable ? PAGE_READWRITE_ : PAGE_READONLY_)) base = 0;
+#endif
+    if (!base) {
         pthread_mutex_unlock(&vm_lock);
         void_set_last_error(ERROR_NOT_ENOUGH_MEMORY_);
         return 0;
@@ -411,7 +611,15 @@ uint32_t void_vm_map_file(int fd, uint64_t offset, uint32_t size, int writable, 
         int e = errno;
         set_pages(base >> 12, span >> 12, ST_FREE, 0, 0);
         uint32_t g1 = (uint32_t)(((uint64_t)base + span + GUEST_GRANULARITY - 1) >> 16);
-        for (uint32_t g = base >> 16; g < g1; ++g) granule_used[g] = 0;
+        for (uint32_t g = base >> 16; g < g1; ++g) {
+            granule_used[g] = 0;
+#if VOID_GUEST_SEGMENTED
+            granule_mapped[g] = 0;
+#endif
+        }
+#if VOID_GUEST_SEGMENTED
+        munmap(GPTR(base), span);
+#endif
         pthread_mutex_unlock(&vm_lock);
         void_log("[void] mmap view failed: %s", strerror(e));
         void_set_last_error(ERROR_ACCESS_DENIED_);

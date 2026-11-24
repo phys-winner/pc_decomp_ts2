@@ -9,6 +9,8 @@ import java.io.File;
 public interface TextureBackend {
     int ETC2 = 1, ASTC = 2;
 
+    default boolean canEncode(int format) { return format == ETC2 || format == ASTC; }
+
     final class Scan {
         public long textures, bytes;          /* convertible originals and their size */
         public boolean sampled;              /* one package checked; full discovery happens on conversion */

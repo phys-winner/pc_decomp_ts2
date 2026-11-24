@@ -19,7 +19,9 @@
 #include <unordered_set>
 #include <vector>
 
+#ifndef S2TC_NO_ASTC
 #include "../../reference/astcenc/Source/astcenc.h"
+#endif
 #include "../../reference/etcpak/ProcessRGB.hpp"
 
 #include <dirent.h>
@@ -551,6 +553,7 @@ void decode_dxt(int source, const uint8_t *src, uint32_t width, uint32_t height,
 
 /* -------------------------------------------------------------- encoders */
 
+#ifndef S2TC_NO_ASTC
 struct AstcContext {
     astcenc_context *context = nullptr;
     ~AstcContext() { if (context) astcenc_context_free(context); }
@@ -566,6 +569,7 @@ struct AstcContext {
 };
 
 thread_local AstcContext astc_context;
+#endif
 
 int encode_rgba(int encoding, const uint8_t *rgba, uint32_t w, uint32_t h, uint8_t *out)
 {
@@ -584,6 +588,9 @@ int encode_rgba(int encoding, const uint8_t *rgba, uint32_t w, uint32_t h, uint8
         else CompressEtc2Rgba(bgra.data(), reinterpret_cast<uint64_t *>(out), blocks, pw, true);
         return 0;
     }
+#ifdef S2TC_NO_ASTC
+    return -1;
+#else
     if (encoding != S2TC_ENC_ASTC_4x4) return -1;
     astcenc_context *context = astc_context.get();
     if (!context) return -1;
@@ -600,6 +607,7 @@ int encode_rgba(int encoding, const uint8_t *rgba, uint32_t w, uint32_t h, uint8
     astcenc_error status = astcenc_compress_image(context, &image, &swizzle, out, s2tc_encoded_bytes(S2TC_ENC_ASTC_4x4, w, h), 0);
     astcenc_compress_reset(context);
     return status == ASTCENC_SUCCESS ? 0 : -1;
+#endif
 }
 
 /* ------------------------------------------------------------ the cache */
@@ -718,6 +726,9 @@ int convert(const Source &source, const std::string &output, int format, int thr
     begin(S2TEXCONV_SCANNING);
     cancelled = false;
     if (format != S2TC_FORMAT_ETC2 && format != S2TC_FORMAT_ASTC) return fail("Unknown texture format %d", format);
+#ifdef S2TC_NO_ASTC
+    if (format == S2TC_FORMAT_ASTC) return fail("ASTC encoding is not in this build");
+#endif
     std::vector<std::string> files = game_packages(source);
     if (cancelled) { set_state(S2TEXCONV_CANCELLED); return 1; }
     if (files.empty()) return fail("No package files under %s/*/TSData", game.c_str());

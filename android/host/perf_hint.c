@@ -22,6 +22,10 @@ static int tried;
 void void_perf_hint_start(int32_t game_tid, int32_t render_tid, int64_t target)
 {
     if (tried++) return;
+    const char *option = getenv("PORT_OPTION_ADPF");
+    if (!option || (strcmp(option, "1") && strcmp(option, "true"))) {
+        void_log("[hint] performance hints off (launcher option)"); return;
+    }
     const char *env = getenv("S2_PERF_HINT");
     if (env && *env == '0') return;
     void *lib = dlopen("libandroid.so", RTLD_NOW);

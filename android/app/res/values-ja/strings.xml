@@ -44,4 +44,7 @@
   <string name="target_object">オブジェクト %1$d</string>
   <string name="target_changed">対象が移動しました。もう一度タップしてください。</string>
   <string name="floor_swipe_hint">3本の指で上または下にスワイプすると、階を切り替えられます。</string>
+  <string name="mods_ui_title">インターフェースMOD</string>
+  <string name="mods_ui_hint">ゲームのインターフェースを変更するMODが反映されない場合があります。このUI倍率ではゲームは800×600用のコンパクトなレイアウトを使いますが、多くのインターフェースMODは通常のレイアウト（1024×768以上）だけを変更します。使うには、ゲームのグラフィック設定でUI倍率を小さくし、ゲームを再起動してください。</string>
+  <string name="unpacking_engine">ゲームのコードを展開しています…</string>
 </resources>

@@ -101,4 +101,8 @@
     <string name="target_area_label">Tap size</string>
     <string name="target_area_hint">Move the slider to change how far from a tap the game looks for objects. The circle shows the search area.</string>
   <string name="floor_swipe_hint">Swipe up or down with three fingers to change floors.</string>
+  <string name="cheat_menu_hint">Touch and hold the ellipsis to open the cheat menu.</string>
+  <string name="mods_ui_title">Interface mods</string>
+  <string name="mods_ui_hint">Mods that change the game interface may have no effect: at this interface scale the game uses its compact 800×600 layouts, while most interface mods change only the regular layouts (1024×768 and larger). Enable “Regular UI layouts for mods” in the port settings, then restart the game.</string>
+  <string name="unpacking_engine">Unpacking the game code…</string>
 </resources>

@@ -21,6 +21,7 @@ final class TouchLayer extends View {
     private static final int BLOCKERS=MODAL|OPTIONS|CHOOSER|LOADING|LOT_INFO;
     private static final int ESC=0x1B;
     private static final int ROTATE=1,FILL=2;
+    private static final int TOWN_LOT_TOOL=7;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final Map<Integer,Integer> keys=new HashMap<>();
     private final Map<Integer,float[]> chordPoints=new HashMap<>();
@@ -58,6 +59,7 @@ final class TouchLayer extends View {
     private static final int PIE_ITEM=32768;
     /** An original button (cGZWinBtn). A right press does nothing on it, so a hold keeps it pressed. */
     private static final int HOLD_BUTTON=65536;
+    private static final int DRAG_STEP_SHIFT=18;
     private boolean heldButton;
     private long token,originToken,chordTime;
     private long originSize,originEpoch;
@@ -258,8 +260,12 @@ final class TouchLayer extends View {
         return !retired&&!blocked&&(h&3)==2&&(c&~TEXT_FOCUS)==(mode&~TEXT_FOCUS)
                 &&(c&BLOCKERS)==0&&t==expected&&((c&TEXT_FOCUS)==0||(c&CAS)!=0);
     }
-    private boolean navigation(){return(originContext&(TOWN|CAS))!=0||tool==1||((originContext&LIVE)!=0&&tool==0);}
-    private boolean cameraAllowed(){return navigation()||((originContext&(BUY|BUILD))!=0&&tool>=2&&originToken!=0);}
+    private boolean townLotGesture(){return originContext==TOWN&&(int)originToken==TOWN_LOT_TOOL;}
+    private boolean navigation(){return (originContext&(TOWN|CAS))!=0&&!townLotGesture()||tool==1||((originContext&LIVE)!=0&&tool==0);}
+    private boolean cameraAllowed(){return navigation()||townLotGesture()||((originContext&(BUY|BUILD))!=0&&tool>=2&&originToken!=0);}
+    boolean townLotControlsVisible(){
+        return !retired&&!blocked&&GameActivity.nativeTouchContext()==TOWN&&(int)GameActivity.nativeTouchToolToken()==TOWN_LOT_TOOL;
+    }
     boolean objectControlsVisible(){
         int mode=GameActivity.nativeTouchContext();
         return !retired&&!blocked&&(mode==BUY||mode==BUILD)&&(int)GameActivity.nativeTouchToolToken()==2;
@@ -298,6 +304,10 @@ final class TouchLayer extends View {
     }
     void rotateObjectPreview(){rotateObjectPreview(-1);}
     private void rotateObjectPreview(int direction){
+        if(townLotControlsVisible()){
+            if(!stream&&pending==null&&keys.isEmpty())controllerKey(direction<0?0xBC:0xBE);
+            return;
+        }
         if(!canUseObjectPreview())return;
         Preview chosen=preview;
         if(!validate(chosen.x,chosen.y,chosen.expected,chosen.mode)||!chosen.matches()){preview=null;return;}
@@ -336,6 +346,7 @@ final class TouchLayer extends View {
                 if(pending!=this)return;
                 if(placement!=null&&!placement.environmentMatches()){releaseAll();return;}
                 GameActivity.nativeMouseButton(button,false);down=false;pending=null;
+                if(button==0&&(kind&MORE_BUTTON)!=0)GameActivity.touchCheatMenuHint();
                 if((kind&16)!=0&&!blocked&&!retired)GameActivity.touchTextRequested(x/getWidth(),y/getHeight());
             };
             press=()->{
@@ -395,6 +406,11 @@ final class TouchLayer extends View {
     private void startCapture(float x,float y){
         cameraContact(false);
         point(x,y);GameActivity.nativeMouseButton(0,true);held=true;
+        int step=originKind>>>DRAG_STEP_SHIFT;
+        if(step!=0){
+            float scale=Math.min(originWidth/(float)(int)originSize,originHeight/(float)(originSize>>>32));
+            point(x+step*scale,y);
+        }
         // CAS model rotation is a native mouse drag, not cancellable build geometry.
         heldWorld=(originKind&3)==2&&(originContext&CAS)==0;
     }
@@ -653,9 +669,14 @@ final class TouchLayer extends View {
                     originKind=2;cameraContact(true);
                 }
                 if(widgetSwipe||((originKind&3)==2&&navigation()&&(originContext&CAS)==0)){lastX=gestureX;lastY=gestureY;}
-                if((originKind&3)==1){if(!widgetSwipe&&(originKind&4)!=0)startCapture(downX,downY);}
+                if((originKind&3)==1){
+                    if(!widgetSwipe&&(originKind&4)!=0){
+                        if(!stableOrigin()){releaseAll();return true;}
+                        startCapture(downX,downY);
+                    }
+                }
                 else if(tool==6){consumed=true;return true;}
-                else if((originContext&CAS)!=0||tool>=3){if(!validate(downX,downY,originToken,originContext)){consumed=true;return true;}startCapture(downX,downY);}
+                else if((originContext&CAS)!=0||tool>=3&&!townLotGesture()){if(!validate(downX,downY,originToken,originContext)){consumed=true;return true;}startCapture(downX,downY);}
             }
             if(dragging){
                 if(widgetSwipe){
@@ -686,6 +707,9 @@ final class TouchLayer extends View {
                 else if((originKind&3)==1&&(originKind&8)!=0){
                     scrollBy(x-lastX,y-lastY,false);
                 }
+                else if((originKind&3)==2&&townLotGesture()){
+                    if(stableOrigin())point(x,y);else releaseAll();
+                }
                 else if(tool==2)previewObject(x,y);else if((originKind&3)==2)pan(x-lastX,y-lastY);
             }
             lastX=x;lastY=y;return true;
@@ -709,6 +733,8 @@ final class TouchLayer extends View {
             if(a==MotionEvent.ACTION_UP&&id==pointer&&
                     (singleCamera||dragging&&!held&&!consumed&&!multi&&(originKind&3)==2&&navigation()&&(originContext&CAS)==0)
                     &&stableOrigin())pan(e.getX(idx)-lastX,e.getY(idx)-lastY);
+            if(a==MotionEvent.ACTION_UP&&id==pointer&&dragging&&!consumed&&!multi&&(originKind&3)==2&&townLotGesture()&&stableOrigin())
+                point(e.getX(idx),e.getY(idx));
             if(singleCamera){singleCamera=false;consumed=true;}
             if(objectTwist){objectTwist=false;consumed=true;}
             if(camera||uiPan){camera=uiPan=false;consumed=true;}

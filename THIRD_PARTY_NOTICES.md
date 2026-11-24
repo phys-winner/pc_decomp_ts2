@@ -13,6 +13,7 @@ origins are recorded in [dependencies.json](dependencies.json).
 | ASTC encoder | Apache-2.0; `reference/astcenc/LICENSE.txt`. |
 | etcpak | BSD-3-Clause; `reference/etcpak/LICENSE.txt`. Its bundled `bcdec.h` is MIT OR Unlicense. |
 | FidelityFX FSR 1 | MIT; retained in `android/host/fsr1.h`. |
+| XZ Embedded | 0BSD; `reference/xz-embedded/COPYING`, copied into the APK as `assets/licenses/xz-embedded.txt`. Compiled unmodified into `libs2xz.so`, which unpacks the xz-packed engine library on the first start of a build (`android/unpack/unpack.c`). |
 | Android NDK libc++ | Apache-2.0 WITH LLVM-exception; linked statically into `libsims2.so` (glslang is C++). The LLVM exception covers object code embedded this way. `libc++_shared.so` (the adrenotools libraries' runtime) is packaged with the NDK `NOTICE` as `assets/licenses/libcxx-ndk.txt`. |
 | adrenotools and linkernsbypass | BSD-2-Clause; the pinned runtime licenses are copied into the APK (`assets/licenses/adrenotools.txt`, `linkernsbypass.txt`). They load the app-local Vulkan drivers of the native Vulkan renderer. |
 | Mesa Turnip community binary | See the distribution limitation below and the APK's `assets/licenses/turnip-mesa.txt`. |

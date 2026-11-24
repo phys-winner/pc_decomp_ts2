@@ -484,6 +484,8 @@ static int64_t frame_budget_ns(void)
     return 1000000000ll / (fps > 0 ? fps : 120);
 }
 
+void s2_preview_frame_submitted(void);
+
 void d3d_present(d3d_device *d)
 {
     static uint64_t frame_start;
@@ -517,6 +519,7 @@ void d3d_present(d3d_device *d)
     d3d_rt_flush();
     ++d->frame;
     d3d_rt_frame_wait(1);
+    s2_preview_frame_submitted();
     frame_start = void_monotonic_ns();   /* the next frame's work starts here */
 }
 

@@ -190,6 +190,9 @@ def validate(spec):
              f"option {o.get('key')}: defaultMinRamGiB requires a bool option")
         need(type(o.get("arm64Only", False)) is bool,
              f"option {o.get('key')}: arm64Only must be a boolean")
+        renderer_setting = o.get("rendererSetting", False)
+        need(type(renderer_setting) is bool and (not renderer_setting or o.get("type", "bool") == "bool"),
+             f"option {o.get('key')}: rendererSetting must be a boolean and requires a bool option")
         for only in o.get("only", []):
             need(only in ids, f"option {o.get('key')}: unknown distribution {only}")
         if o.get("type") == "choice":
@@ -376,15 +379,21 @@ def jni_class(package):
     return (package + ".Probe").replace(".", "/")
 
 
-def build_probe(out, package, ndk=None, api=30):
-    """Compiles libportprobe.so (the Vulkan driver check) for arm64-v8a into the folder out, with
-    16 KB page alignment; returns its path. The Java class it registers with is the game's."""
+def build_probe(out, package, ndk=None, api=30, abi="arm64"):
+    """Compiles libportprobe.so (the Vulkan driver check) into the folder out. arm64-v8a is 16 KB
+    aligned; armeabi-v7a (abi="arm32") is 4 KB. Returns its path."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     library = out / PROBE_LIBRARY
-    command = [str(ndk_clang(ndk)), f"--target=aarch64-linux-android{api}", "-std=c11", "-O2", "-fPIC", "-shared",
+    if abi == "arm32":
+        target, page = f"armv7a-linux-androideabi{api}", "4096"
+    elif abi == "arm64":
+        target, page = f"aarch64-linux-android{api}", "16384"
+    else:
+        raise SpecError(f"probe abi must be arm64 or arm32, not {abi}")
+    command = [str(ndk_clang(ndk)), f"--target={target}", "-std=c11", "-O2", "-fPIC", "-shared",
                "-Wall", "-Wextra", "-Werror", f'-DPORT_PROBE_CLASS="{jni_class(package)}"',
-               "-Wl,-z,max-page-size=16384", "-Wl,--build-id=sha1", "-o", str(library), str(PROBE_SOURCE), "-ldl"]
+               f"-Wl,-z,max-page-size={page}", "-Wl,--build-id=sha1", "-o", str(library), str(PROBE_SOURCE), "-ldl"]
     subprocess.run(command, check=True)
     return library
 

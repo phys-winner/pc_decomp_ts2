@@ -123,4 +123,6 @@ void s2_ui_device_reset(int dimensions_only);
 int s2_ui_take_material_resize(void);
 void s2_touch_barrier(unsigned serial);
 
+int s2_ui_layout_set(void);  /* 0 not yet, 1 the 800x600 layouts, 2 the regular ones */
+
 #endif

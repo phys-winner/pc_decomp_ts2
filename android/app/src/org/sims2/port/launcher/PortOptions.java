@@ -21,7 +21,7 @@ public final class PortOptions {
     public static void append(Context context, LinearLayout content, Launch launch) {
         Spec spec = Spec.get(context);
         for (Spec.Option option : spec.options(launch.distribution())) {
-            if (option.arm64Only && !android.os.Process.is64Bit()) continue;
+            if (option.rendererSetting || (option.arm64Only && !android.os.Process.is64Bit())) continue;
             if ("bool".equals(option.type)) {
                 android.widget.CheckBox check = new android.widget.CheckBox(context);
                 check.setText(Texts.of(context, option.title));

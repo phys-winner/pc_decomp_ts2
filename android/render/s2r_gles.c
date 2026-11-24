@@ -14,6 +14,8 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <android/native_window.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -113,7 +115,12 @@ typedef struct gl_program {
     uint32_t vs_uid, ps_uid;
     GLuint name;
     struct gl_program *next;
+    /* linked by a background linker (link_queue): LINK_PENDING until it is done, then the program */
+    _Atomic int link_state;
+    _Atomic GLuint linked;
 } gl_program;
+
+enum { LINK_NONE = 0, LINK_PENDING = 1, LINK_DONE = 2, LINK_FAILED = 3 };
 
 typedef struct gl_query { GLuint name; GLsync fence; uint32_t type; int active, ended; } gl_query;
 
@@ -142,6 +149,8 @@ typedef struct gl_state {
        orphaning and mapped or SubData writes into a buffer in flight wait for the GPU or copy it) */
     int persistent_buffers;
     uint64_t store_creates, store_retired;
+    /* Indexed draws with a base vertex move the attribute pointers on affected Mali drivers. */
+    int base_vertex_attrib;
     int swap_applied;
     pid_t thread;
     /* caches */
@@ -352,6 +361,29 @@ static uint32_t ring_put(gl_ring *r, const void *data, uint32_t size)
     return at;
 }
 
+static void linkers_stop(void);
+
+static int mali_g51(const char *renderer)
+{
+    const char *model = renderer ? strstr(renderer, "Mali-G51") : NULL;
+    if (!model) return 0;
+    /* Mali-G510 shares the prefix. */
+    char next = model[sizeof("Mali-G51") - 1];
+    return next < '0' || next > '9';
+}
+
+static int use_base_vertex_attrib(const char *renderer, const char *choice, const char *g51_setting)
+{
+    int g51_enabled = !g51_setting || strcmp(g51_setting, "0");
+    int affected_mali = (renderer && strstr(renderer, "Mali-T")) || (g51_enabled && mali_g51(renderer));
+    return !strcmp(choice, "attrib") || (affected_mali && strcmp(choice, "draw"));
+}
+
+static int mali_g51_r18(const char *renderer, const char *version)
+{
+    return mali_g51(renderer) && version && strstr(version, "v1.r18p0");
+}
+
 static int gl_init(s2r_device *d)
 {
     (void)d;
@@ -416,6 +448,17 @@ static int gl_init(s2r_device *d)
         G.persistent_buffers = G.buffer_storage && (!strcmp(choice, "persistent") || (powervr && strcmp(choice, "plain")));
         if (G.persistent_buffers) LOGGL("dynamic buffers in persistent coherent stores (%d a buffer at most)", GL_BUF_STORES + 1);
     }
+    {
+        /* glDrawElementsBaseVertex hangs Midgard and drops neighbourhood draws on Mali-G51 r18p0.
+           Use equivalent attribute offsets on these GPUs regardless of the reported driver version. */
+        const char *renderer = (const char *)glGetString(GL_RENDERER);
+        char choice[92] = "";
+        __system_property_get("debug.s2.basevertex", choice);
+        G.base_vertex_attrib = use_base_vertex_attrib(renderer, choice, getenv("PORT_OPTION_MALI_G51_WORKAROUND"));
+        if (G.base_vertex_attrib)
+            LOGGL("base vertices by attribute offsets (%s)", !strcmp(choice, "attrib") ? "debug.s2.basevertex" : renderer);
+        else if (mali_g51(renderer)) LOGGL("base-vertex workaround disabled (%s)", renderer);
+    }
     GLint align = 256;
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
     /* constants: 1.45 MiB a frame on a lot (Monty Ranch, Pixel 10a, ring_report): 8 MiB hold five frames */
@@ -454,6 +497,7 @@ static void gl_shutdown(s2r_device *d)
 {
     (void)d;
     if (G.display == EGL_NO_DISPLAY) return;
+    linkers_stop();
     eglMakeCurrent(G.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (G.surface != EGL_NO_SURFACE) eglDestroySurface(G.display, G.surface);
     if (G.pbuffer != EGL_NO_SURFACE) eglDestroySurface(G.display, G.pbuffer);
@@ -1021,7 +1065,191 @@ static int stage_compile(gl_stage *s)
     return s->name != 0;
 }
 
-static gl_program *program_get(s2r_device *d, const s2r_draw *draw)
+/* Background linking. A program that misses the binary cache used to compile and link on the render
+ * thread inside the draw that first needed it: on a Mali-T830 about 100 ms a program, and zooming a lot
+ * out to the neighbourhood view needs 40 new ones at once (a 6.3 s frame; 12 at the next zoom level,
+ * 33 at a floor change; Honor 9 Lite, 2026-11-22). Now linkers (threads with contexts sharing this one)
+ * compile and link them while the frame goes on. A draw into the screen-sized scene waits for its
+ * program a little (LINK_WAIT_NS a frame in all), then is left out of this frame and drawn once the
+ * program is there; a draw into any other target (thumbnails, imposters, reflections, what the game may
+ * read back) waits for it, as before. debug.s2.asynclink=0 links on the render thread again. */
+#define LINKERS_MAX 3
+#define LINK_WAIT_NS 12000000ull
+typedef struct link_job { gl_program *p; const char *vs, *ps; d3d_program_key key; struct link_job *next; } link_job;
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t wake, done;
+    link_job *head, *tail;
+    int threads, stop, state;               /* state: 0 untried, 1 on, -1 off */
+    pthread_t thread[LINKERS_MAX];
+    EGLContext context[LINKERS_MAX];
+    EGLSurface surface[LINKERS_MAX];
+    uint64_t frame_wait_ns;                 /* render thread: this frame's waits for linkers */
+    _Atomic uint64_t links, link_ns;
+} L = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER };
+static pthread_mutex_t program_store_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static GLuint linker_compile(GLenum type, const char *src)
+{
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, NULL);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (ok) return sh;
+    char log[2048];
+    glGetShaderInfoLog(sh, sizeof log, NULL, log);
+    LOGGL("GLSL compile failed (linker): %s", log);
+    glDeleteShader(sh);
+    return 0;
+}
+
+static void *linker_main(void *arg)
+{
+    int i = (int)(intptr_t)arg;
+    char name[16];
+    snprintf(name, sizeof name, "s2-link%d", i);
+    pthread_setname_np(pthread_self(), name);
+    eglMakeCurrent(G.display, L.surface[i], L.surface[i], L.context[i]);
+    for (;;) {
+        pthread_mutex_lock(&L.lock);
+        while (!L.head && !L.stop) pthread_cond_wait(&L.wake, &L.lock);
+        link_job *job = L.head;
+        if (job) { L.head = job->next; if (!L.head) L.tail = NULL; }
+        int stop = L.stop;
+        pthread_mutex_unlock(&L.lock);
+        if (!job) { if (stop) break; continue; }
+        uint64_t start = s2r_now_ns();
+        GLuint vs = linker_compile(GL_VERTEX_SHADER, job->vs), ps = vs ? linker_compile(GL_FRAGMENT_SHADER, job->ps) : 0;
+        GLuint prog = 0;
+        GLint ok = 0;
+        if (vs && ps) {
+            prog = glCreateProgram();
+            glAttachShader(prog, vs);
+            glAttachShader(prog, ps);
+            glProgramParameteri(prog, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+            glLinkProgram(prog);
+            glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+            if (ok) {
+                pthread_mutex_lock(&program_store_lock);
+                d3d_program_cache_store(job->key, prog);
+                pthread_mutex_unlock(&program_store_lock);
+            } else {
+                char log[2048];
+                glGetProgramInfoLog(prog, sizeof log, NULL, log);
+                LOGGL("link failed (linker): %s", log);
+                glDeleteProgram(prog);
+                prog = 0;
+            }
+        }
+        if (vs) glDeleteShader(vs);
+        if (ps) glDeleteShader(ps);
+        glFinish();                         /* complete before another context uses the program */
+        atomic_fetch_add(&L.links, 1);
+        atomic_fetch_add(&L.link_ns, s2r_now_ns() - start);
+        atomic_store(&job->p->linked, prog);
+        pthread_mutex_lock(&L.lock);
+        atomic_store(&job->p->link_state, prog ? LINK_DONE : LINK_FAILED);
+        pthread_cond_broadcast(&L.done);
+        pthread_mutex_unlock(&L.lock);
+        free(job);
+    }
+    eglMakeCurrent(G.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    return NULL;
+}
+
+/* The linkers, made the first time a program misses the cache: 0 when there are none. */
+static int linkers_ready(void)
+{
+    if (L.state) return L.state > 0;
+    L.state = -1;
+    char v[92] = "";
+    __system_property_get("debug.s2.asynclink", v);
+    if (v[0] == '0') { LOGGL("programs link on the render thread (debug.s2.asynclink=0)"); return 0; }
+    pthread_condattr_t monotonic;                 /* program_wait's deadlines are CLOCK_MONOTONIC */
+    pthread_condattr_init(&monotonic);
+    pthread_condattr_setclock(&monotonic, CLOCK_MONOTONIC);
+    pthread_cond_destroy(&L.done);
+    pthread_cond_init(&L.done, &monotonic);
+    pthread_condattr_destroy(&monotonic);
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    int want = cpus >= 8 ? 3 : cpus >= 4 ? 2 : 1;
+    const EGLint ctx[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, G.gles_minor, EGL_NONE };
+    const EGLint pb[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+    for (int i = 0; i < want && i < LINKERS_MAX; ++i) {
+        EGLContext c = eglCreateContext(G.display, G.config, G.context, ctx);
+        EGLSurface s = c != EGL_NO_CONTEXT ? eglCreatePbufferSurface(G.display, G.config, pb) : EGL_NO_SURFACE;
+        if (c == EGL_NO_CONTEXT || s == EGL_NO_SURFACE) {
+            if (c != EGL_NO_CONTEXT) eglDestroyContext(G.display, c);
+            break;
+        }
+        L.context[i] = c;
+        L.surface[i] = s;
+        if (pthread_create(&L.thread[i], NULL, linker_main, (void *)(intptr_t)i)) {
+            eglDestroySurface(G.display, s);
+            eglDestroyContext(G.display, c);
+            break;
+        }
+        ++L.threads;
+    }
+    if (L.threads) L.state = 1;
+    LOGGL("%d background program linker%s%s", L.threads, L.threads == 1 ? "" : "s",
+        L.threads ? "" : " (shared contexts unavailable: programs link on the render thread)");
+    return L.state > 0;
+}
+
+static void linkers_stop(void)
+{
+    if (L.state <= 0) return;
+    pthread_mutex_lock(&L.lock);
+    L.stop = 1;
+    pthread_cond_broadcast(&L.wake);
+    pthread_mutex_unlock(&L.lock);
+    for (int i = 0; i < L.threads; ++i) {
+        pthread_join(L.thread[i], NULL);
+        eglDestroySurface(G.display, L.surface[i]);
+        eglDestroyContext(G.display, L.context[i]);
+    }
+    for (link_job *j = L.head, *next; j; j = next) { next = j->next; free(j); }
+    L.head = L.tail = NULL;
+    L.threads = 0;
+    L.stop = 0;
+    L.state = 0;
+}
+
+/* A program the linkers are working on: once done it is the program (or NULL, failed). `wait`: until it
+ * is done (draws into targets other than the scene), else for what is left of this frame's budget. */
+static gl_program *program_wait(gl_program *p, int wait)
+{
+    if (atomic_load(&p->link_state) == LINK_PENDING) {
+        uint64_t start = s2r_now_ns();
+        if (!wait && L.frame_wait_ns >= LINK_WAIT_NS) return NULL;
+        uint64_t until = wait ? UINT64_MAX : start + (LINK_WAIT_NS - L.frame_wait_ns);
+        d3d_rt_wait_begin();
+        pthread_mutex_lock(&L.lock);
+        while (atomic_load(&p->link_state) == LINK_PENDING) {
+            if (until == UINT64_MAX) { pthread_cond_wait(&L.done, &L.lock); continue; }
+            uint64_t now = s2r_now_ns();
+            if (now >= until) break;
+            uint64_t at = now + (until - now);
+            struct timespec ts = { (time_t)(at / 1000000000ull), (long)(at % 1000000000ull) };
+            pthread_cond_timedwait(&L.done, &L.lock, &ts);
+        }
+        pthread_mutex_unlock(&L.lock);
+        d3d_rt_wait_end();
+        L.frame_wait_ns += s2r_now_ns() - start;
+        if (atomic_load(&p->link_state) == LINK_PENDING) return NULL;
+    }
+    if (atomic_load(&p->link_state) == LINK_DONE) {
+        p->name = atomic_load(&p->linked);
+        atomic_store(&p->link_state, LINK_NONE);
+    } else if (atomic_load(&p->link_state) == LINK_FAILED) {
+        atomic_store(&p->link_state, LINK_NONE);
+    }
+    return p->name ? p : NULL;
+}
+
+static gl_program *program_get(s2r_device *d, const s2r_draw *draw, int wait)
 {
     uint8_t modes[16];
     uint64_t decode = s2r_decode_modes(d, draw->vs, 0, modes) | (uint64_t)draw->fog_depth << 48;
@@ -1033,7 +1261,13 @@ static gl_program *program_get(s2r_device *d, const s2r_draw *draw)
     if (!vs || !ps) return NULL;
     unsigned slot = (vs->uid * 31u + ps->uid) & 255u;
     for (gl_program *p = G.programs[slot]; p; p = p->next)
-        if (p->vs_uid == vs->uid && p->ps_uid == ps->uid) return p->name ? p : NULL;
+        if (p->vs_uid == vs->uid && p->ps_uid == ps->uid) {
+            if (p->name) return p;
+            if (atomic_load(&p->link_state) == LINK_NONE) return NULL;     /* failed */
+            gl_program *ready = program_wait(p, wait);
+            if (!ready) ++d->frame_skipped;
+            return ready;
+        }
     gl_program *p = (gl_program *)calloc(1, sizeof *p);
     p->vs_uid = vs->uid; p->ps_uid = ps->uid;
     /* The Direct3D 9 layer's program binaries (<cache>/glprog, d3d9_shader.c): a program linked in
@@ -1047,6 +1281,24 @@ static gl_program *program_get(s2r_device *d, const s2r_draw *draw)
         G.programs[slot] = p;
         return p;
     }
+    if (linkers_ready()) {
+        link_job *job = (link_job *)calloc(1, sizeof *job);
+        if (job) {
+            job->p = p; job->vs = vs->src; job->ps = ps->src; job->key = key;
+            atomic_store(&p->link_state, LINK_PENDING);
+            p->next = G.programs[slot];
+            G.programs[slot] = p;
+            pthread_mutex_lock(&L.lock);
+            if (L.tail) L.tail->next = job; else L.head = job;
+            L.tail = job;
+            pthread_cond_signal(&L.wake);
+            pthread_mutex_unlock(&L.lock);
+            gl_program *ready = program_wait(p, wait);
+            if (!ready) ++d->frame_skipped;
+            return ready;
+        }
+    }
+    uint64_t link_start = s2r_now_ns();
     if (!stage_compile(vs) || !stage_compile(ps)) { p->next = G.programs[slot]; G.programs[slot] = p; return NULL; }
     prog = glCreateProgram();
     glAttachShader(prog, vs->name);
@@ -1057,7 +1309,13 @@ static gl_program *program_get(s2r_device *d, const s2r_draw *draw)
     GLint ok = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
     d3d_rt_wait_end();
-    if (ok) d3d_program_cache_store(key, prog);
+    ++d->program_links;
+    d->program_link_ns += s2r_now_ns() - link_start;
+    if (ok) {
+        pthread_mutex_lock(&program_store_lock);
+        d3d_program_cache_store(key, prog);
+        pthread_mutex_unlock(&program_store_lock);
+    }
     if (!ok) {
         char log[2048];
         glGetProgramInfoLog(prog, sizeof log, NULL, log);
@@ -1133,10 +1391,12 @@ static void setup_vertices(s2r_device *d, const s2r_draw *draw, int32_t base_shi
             if (!g) continue;
             buffer = g->name;
             stride = d->dev->st.stream_stride[e->stream];
-            offset = d->dev->st.stream_offset[e->stream] + e->offset + (uintptr_t)((int64_t)base_shift * stride);
+            offset = d->dev->st.stream_offset[e->stream] + e->offset;
         }
         wanted |= 1u << loc;
         GLuint divisor = draw->instances && e->stream < 16 && (d->dev->st.stream_freq[e->stream] & 0x80000000u) ? 1u : 0u;
+        /* a base vertex moves the per-vertex data only (an instance stream is read by instance) */
+        if (!draw->up_vertices && !divisor) offset += (uintptr_t)((int64_t)base_shift * stride);
         if (G.attr[loc].divisor != divisor) { glVertexAttribDivisor(loc, divisor); G.attr[loc].divisor = divisor; }
         if (G.attr[loc].buf != buffer || G.attr[loc].size != size || G.attr[loc].type != type ||
             G.attr[loc].norm != norm || G.attr[loc].stride != (GLsizei)stride || G.attr[loc].offset != offset) {
@@ -1417,13 +1677,78 @@ static GLenum gl_prim(uint32_t type)
     }
 }
 
+/* debug.s2.gpusync=1 (development, read at every present): every draw waits for the GPU (glFinish);
+ * a draw that keeps it busy over 50 ms is logged, and a watchdog thread names the draw the GPU has
+ * been stuck on for 2 s, before the window's buffers stop coming back (a hung GPU job never signals
+ * the frame's fence; on Huawei SurfaceFlinger's watchdog then kills it). This is how the Midgard
+ * glDrawElementsBaseVertex hang (gl_init) was found. */
+static int gpusync;
+static uint32_t gpusync_draws;
+static _Atomic uint64_t gpusync_since;
+static char gpusync_what[256];
+
+static void *gpusync_watch(void *unused)
+{
+    (void)unused;
+    uint64_t reported = 0;
+    for (;;) {
+        struct timespec nap = { 0, 250000000 };
+        nanosleep(&nap, NULL);
+        uint64_t since = atomic_load(&gpusync_since);
+        if (!since || since == reported || s2r_now_ns() - since < 2000000000ull) continue;
+        reported = since;
+        LOGGL("gpusync: the GPU has been busy %.1f s on %s", (double)(s2r_now_ns() - since) / 1e9, gpusync_what);
+        void_log_flush();
+    }
+    return NULL;
+}
+
+static void gpusync_wait(void)
+{
+    static int watching;
+    if (!watching) {
+        pthread_t thread;
+        watching = pthread_create(&thread, NULL, gpusync_watch, NULL) ? -1 : 1;
+        if (watching > 0) pthread_detach(thread);
+    }
+    uint64_t start = s2r_now_ns();
+    atomic_store(&gpusync_since, start);
+    glFinish();
+    atomic_store(&gpusync_since, 0);
+    uint64_t ns = s2r_now_ns() - start;
+    if (ns > 50000000ull) LOGGL("gpusync: %.1f ms for %s", (double)ns / 1e6, gpusync_what);
+}
+
+static void gpusync_draw(s2r_device *d, const s2r_draw *draw, const s2r_target *color)
+{
+    s2r_image *tex = s2r_stage_image(d, 0);
+    snprintf(gpusync_what, sizeof gpusync_what,
+        "frame %u draw %u: vs %016llx ps %016llx prim %u start %u count %u base %d inst %u%s tex0 %ux%u f%u rt %ux%u",
+        d->frame, ++gpusync_draws, (unsigned long long)(draw->vs ? draw->vs->hash : draw->ff.vs_hash),
+        (unsigned long long)(draw->ps ? draw->ps->hash : draw->ff.ps_hash), draw->primitive, draw->start, draw->count,
+        draw->base_vertex, draw->instances, draw->indexed ? " indexed" : "", tex ? tex->width : 0, tex ? tex->height : 0,
+        tex ? tex->d3dfmt : 0, color[0].img ? color[0].img->width : 0, color[0].img ? color[0].img->height : 0);
+    gpusync_wait();
+}
+
+static void gpusync_follow(void)
+{
+    char v[92] = "";
+    __system_property_get("debug.s2.gpusync", v);
+    int on = v[0] == '1';
+    if (on != gpusync) LOGGL("gpusync %s", on ? "on: every draw waits for the GPU (development)" : "off");
+    gpusync = on;
+    gpusync_draws = 0;
+}
+
 static void gl_draw(s2r_device *d, const s2r_draw *draw)
 {
     own_thread();
     bind_targets(d);
     s2r_target c[4], zt;
     s2r_targets(d, c, &zt);
-    gl_program *p = program_get(d, draw);
+    /* the screen-sized scene may go without a program for a frame or two; other targets may not */
+    gl_program *p = program_get(d, draw, !(c[0].img && c[0].img->screen_sized));
     if (!p) return;
     if (G.cur_program != p->name) { glUseProgram(p->name); G.cur_program = p->name; }
     uint32_t up = 0, up_index = 0;
@@ -1435,7 +1760,9 @@ static void gl_draw(s2r_device *d, const s2r_draw *draw)
             if (up_index == UINT32_MAX) return;
         }
     }
-    setup_vertices(d, draw, 0, up);
+    /* Move per-vertex attributes before drawing on affected Mali drivers. */
+    int32_t shift = G.base_vertex_attrib && draw->indexed && !draw->up_indices && draw->base_vertex > 0 ? draw->base_vertex : 0;
+    setup_vertices(d, draw, shift, up);
     static uint8_t constants[256 * 16 + 64 * 16];
     extern int s2r_trace_frame;
     for (int stage = 0; stage < 2; ++stage) {
@@ -1473,7 +1800,7 @@ static void gl_draw(s2r_device *d, const s2r_draw *draw)
         GLuint ebo;
         GLenum type;
         uintptr_t offset;
-        int32_t base = draw->base_vertex;
+        int32_t base = draw->base_vertex - shift;
         if (draw->up_indices) {
             ebo = G.stream.name;
             type = draw->up_index32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT;
@@ -1488,14 +1815,17 @@ static void gl_draw(s2r_device *d, const s2r_draw *draw)
             offset = (uintptr_t)draw->start * (ib->format == 102 ? 4u : 2u);
         }
         if (G.cur_ebo != ebo) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo); G.cur_ebo = ebo; }
-        if (draw->instances)
+        if (draw->instances && base)
             glDrawElementsInstancedBaseVertex(prim, (GLsizei)draw->count, type, (const void *)offset, (GLsizei)draw->instances, base);
+        else if (draw->instances)
+            glDrawElementsInstanced(prim, (GLsizei)draw->count, type, (const void *)offset, (GLsizei)draw->instances);
         else if (base) glDrawElementsBaseVertex(prim, (GLsizei)draw->count, type, (const void *)offset, base);
         else glDrawElements(prim, (GLsizei)draw->count, type, (const void *)offset);
     } else if (draw->instances)
         glDrawArraysInstanced(prim, draw->up_vertices ? 0 : (GLint)draw->start, (GLsizei)draw->count, (GLsizei)draw->instances);
     else glDrawArrays(prim, draw->up_vertices ? 0 : (GLint)draw->start, (GLsizei)draw->count);
     gl_check("draw");
+    if (gpusync) gpusync_draw(d, draw, c);
 }
 
 /* ------------------------------------------------------------- copies */
@@ -1600,7 +1930,7 @@ static void gpu_timer_begin(s2r_device *d)
         G.gpu_u64 = (s2r_query_u64_fn)eglGetProcAddress("glGetQueryObjectui64vEXT");
         G.gpu_state = (!env || *env != '0') && has_ext("GL_EXT_disjoint_timer_query") && G.gpu_u64 ? 1 : -1;
         const char *renderer = (const char *)glGetString(GL_RENDERER), *version = (const char *)glGetString(GL_VERSION);
-        if (renderer && version && strstr(renderer, "Mali-G51") && strstr(version, "v1.r18p0")) G.gpu_state = -1;
+        if (mali_g51_r18(renderer, version)) G.gpu_state = -1;
         if (G.gpu_state > 0) glGenQueries(6, G.gpu_query);
         LOGGL("GPU frame timer %s", G.gpu_state > 0 ? "on" : "unavailable");
     }
@@ -1767,6 +2097,14 @@ static GLuint run_filters(GLuint input, const int *passes, int count, uint32_t w
 static void gl_present(s2r_device *d)
 {
     own_thread();
+    if (gpusync) {
+        snprintf(gpusync_what, sizeof gpusync_what, "frame %u: the work before the present", d->frame);
+        gpusync_wait();
+    }
+    gpusync_follow();
+    L.frame_wait_ns = 0;
+    d->async_links = atomic_load(&L.links);
+    d->async_link_ns = atomic_load(&L.link_ns);
     follow_window();
     s2r_image *shown = s2r_backbuffer_image(d);
     if (G.surface == EGL_NO_SURFACE || !shown || !shown->backend) {

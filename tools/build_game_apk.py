@@ -1,7 +1,10 @@
-"""Package the ARM64 game library into an APK (no Gradle) and optionally install it.
+"""Package the game library into an APK (no Gradle) and optionally install it.
 
-    python tools/build_game_apk.py [--install] [--serial SERIAL] [--skip-native]
-                                   [--java-only] [--push-lib] [--library PATH]
+    python tools/build_game_apk.py [--abi both|arm64|arm32] [--install] [--serial SERIAL]
+                                   [--skip-native] [--java-only] [--push-lib] [--library PATH]
+
+The default APK supports arm64-v8a and armeabi-v7a. Select one ABI for
+development builds; --library and --push-lib default to arm64.
 
 The library comes from tools/build_android.py --shared (or --library PATH,
 which skips the native build). Port resources and the two pinned PE images
@@ -10,8 +13,14 @@ live under /sdcard/Sims2 on the device.
 --java-only packs no library: the activity then loads the one pushed into its
 own files by --push-lib (run-as, debuggable APK), which keeps iterations on
 the touch layer to a small install. (The Void port's tool, adapted.)
+
+The library travels as xz in assets/native (LZMA2 behind the ARM64 branch
+filter, one stream per 128 MiB chunk): 36 MB instead of 69 MB deflated in lib/.
+The first start of a build unpacks it into the app's files with libs2xz.so
+(android/unpack/unpack.c, XZ Embedded; NativeLibrary.java).
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
 from pathlib import Path
@@ -31,7 +40,7 @@ PACKAGE = "org.sims2.port"
 
 
 def launcher_root():
-    for folder in (Path(os.environ.get("PORT_LAUNCHER", ROOT / "android/launcher")), ROOT.parent / "launcher"):
+    for folder in (Path(os.environ.get("PORT_LAUNCHER", ROOT.parent / "launcher")), ROOT / "android/launcher"):
         if (folder / "tools/launcher.py").is_file():
             return folder
     raise SystemExit("Launcher sources not found: set PORT_LAUNCHER or supply android/launcher")
@@ -43,6 +52,78 @@ def run(*args, **kwargs):
         print(result.stdout[-3000:], result.stderr[-3000:])
         raise SystemExit(f"{Path(str(args[0])).name} failed ({result.returncode})")
     return result
+
+
+XZ_EMBEDDED = ROOT / "reference/xz-embedded"   # dependencies.json (0BSD)
+NATIVE_XZ = ROOT / "build/native-xz"
+CHUNK = 128 << 20   # NativeLibrary.java / android/unpack/unpack.c take it from assets/native/index.txt
+NDK = Path(os.environ.get("ANDROID_NDK", str(SDK / "ndk/27.2.12479018")))
+
+
+def xz_tool():
+    """XZ Utils 5.4+ (the ARM64 branch filter; Python's lzma module lacks it):
+    $XZ, the PATH, else Git for Windows' copy."""
+    for candidate in (os.environ.get("XZ"), shutil.which("xz"), r"C:\Program Files\Git\mingw64\bin\xz.exe"):
+        if candidate and Path(candidate).is_file():
+            version = run(candidate, "--robot", "--version").stdout
+            number = int(next(line for line in version.splitlines() if line.startswith("XZ_VERSION=")).split("=")[1])
+            if number >= 50040002:
+                return candidate
+    raise SystemExit("xz 5.4 or newer is needed (XZ Utils; Git for Windows has one in mingw64/bin)")
+
+
+def compress_library(library, bcj="arm64"):
+    """XZ with an ARM branch filter and word-aligned LZMA literals (lc=0, lp=2), a CHUNK-sized
+    dictionary and one independent stream per CHUNK, which the device unpacks in
+    parallel straight into the mapped library file. Cached by content.
+    bcj is the xz filter name: arm64, or armthumb for armeabi-v7a.
+    Returns (path, sha256, unpacked size, comma-separated stream sizes)."""
+    data = library.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    cache = NATIVE_XZ if bcj == "arm64" else NATIVE_XZ / bcj
+    out = cache / f"{library.name}.{digest[:16]}.{CHUNK >> 20}m-lp2.xz"
+    table = out.with_suffix(".sizes")
+    if not (out.is_file() and table.is_file()):
+        cache.mkdir(parents=True, exist_ok=True)
+        for old in cache.glob(f"{library.name}.*"):
+            old.unlink()
+        tool = xz_tool()
+
+        def pack(at):
+            return subprocess.run([tool, "--stdout", "--" + bcj, f"--lzma2=preset=9e,dict={CHUNK},lc=0,lp=2,pb=2",
+                                   "--check=crc32", "--threads=1"],
+                                  input=data[at:at + CHUNK], capture_output=True, check=True).stdout
+
+        with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 4) - 2)) as pool:
+            streams = list(pool.map(pack, range(0, len(data), CHUNK)))
+        part = out.with_suffix(".part")
+        part.write_bytes(b"".join(streams))
+        table.write_text(",".join(str(len(s)) for s in streams))
+        part.replace(out)
+    return out, digest, len(data), table.read_text()
+
+
+def build_unpacker(abi="arm64"):
+    """libs2xz.so: XZ Embedded and its JNI entry (android/unpack/unpack.c), which
+    unpacks the engine from assets/native on the first start of a build.
+    On arm32 its constructor also holds the PE image addresses."""
+    if not (XZ_EMBEDDED / "linux/include/linux/xz.h").is_file():
+        raise SystemExit("reference/xz-embedded is missing: git submodule update --init reference/xz-embedded")
+    out = OUT / abi / "libs2xz.so"
+    out.parent.mkdir(exist_ok=True)
+    xz = XZ_EMBEDDED / "linux/lib/xz"
+    if abi == "arm32":
+        target, define, page = "armv7a-linux-androideabi29", "XZ_DEC_ARMTHUMB", "4096"
+    else:
+        target, define, page = "aarch64-linux-android29", "XZ_DEC_ARM64", "16384"
+    run(NDK / "toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe", "--target=" + target, "-O2",
+        "-std=gnu11", "-fPIC", "-shared", "-Wall", "-Wextra", "-D" + define, "-DXZ_USE_CRC64", "-DXZ_DEC_SINGLE",
+        "-I" + str(XZ_EMBEDDED / "linux/include/linux"), "-I" + str(XZ_EMBEDDED / "userspace"),
+        "-ffile-prefix-map=" + str(ROOT) + "=.",
+        ROOT / "android/unpack/unpack.c", *(xz / name for name in ("xz_crc32.c", "xz_crc64.c", "xz_dec_stream.c",
+                                                                  "xz_dec_lzma2.c", "xz_dec_bcj.c")),
+        f"-Wl,-z,max-page-size={page}", "-Wl,--build-id=sha1", "-Wl,-s", "-pthread", "-landroid", "-llog", "-o", out)
+    return out
 
 
 def glslang_notice():
@@ -102,6 +183,7 @@ def vulkan_drivers():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--abi", choices=("both", "arm64", "arm32"))
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--serial", default=os.environ.get("S2_SERIAL"))
     parser.add_argument("--skip-native", action="store_true")
@@ -111,6 +193,10 @@ def main():
     parser.add_argument("--library", type=Path,
                         help="package/push this existing library instead of building the default one")
     args = parser.parse_args()
+    abi = args.abi or ("arm64" if args.library or args.push_lib else "both")
+    if abi == "both" and (args.library or args.push_lib):
+        parser.error("--library and --push-lib require a single ABI")
+    abis = ("arm64", "arm32") if abi == "both" else (abi,)
     if (args.install or args.push_lib) and not args.serial:
         parser.error("--install/--push-lib requires --serial or S2_SERIAL")
     keystore = ROOT / "build/android/debug.keystore"
@@ -118,11 +204,16 @@ def main():
         parser.error("Signing key missing: restore build/android/debug.keystore; a replacement cannot update installed APKs")
     if args.java_only or args.library:
         args.skip_native = True
+    libraries = {target: args.library.resolve() if args.library else ROOT / "build" / target / "libsims2.so"
+                 for target in abis}
     if not args.skip_native:
-        subprocess.run([sys.executable, str(ROOT / "tools/build_android.py"), "--shared", "--jobs", "12"], check=True)
-    library = args.library.resolve() if args.library else ROOT / "build/arm64/libsims2.so"
-    if (not args.java_only or args.push_lib) and not library.is_file():
-        parser.error(f"library does not exist: {library}")
+        for target in abis:
+            subprocess.run([sys.executable, str(ROOT / "tools/build_android.py"), "--shared", "--jobs", "12",
+                            "--abi", target], check=True)
+    if not args.java_only or args.push_lib:
+        for library in libraries.values():
+            if not library.is_file():
+                parser.error(f"library does not exist: {library}")
     if OUT.exists():
         shutil.rmtree(OUT)
     (OUT / "classes").mkdir(parents=True)
@@ -153,15 +244,21 @@ def main():
     # which carry no LICENSE file: the license headers of the files the build compiles, each once.
     (assets / "licenses/glslang.txt").write_text(glslang_notice(), encoding="utf-8", newline="\n")
     shutil.copyfile(ROOT / "android/host/fsr1.h", assets / "licenses/fidelityfx-fsr1.txt")
-    # The launcher's texture converter (port.json "textures": TextureCache) and its encoders' licenses.
-    subprocess.run([sys.executable, str(ROOT / "tools/build_texconv.py")], check=True)
-    texconv = ROOT / "build/arm64-texconv/libs2texconv.so"
+    # The launcher's texture converter (port.json "textures": TextureCache). arm32 is ETC2 only.
+    probes = {}
+    ndk = os.environ.get("ANDROID_NDK", str(NDK))
+    for target in abis:
+        subprocess.run([sys.executable, str(ROOT / "tools/build_texconv.py"), "--abi", target], check=True)
+        probes[target] = port_launcher.build_probe(OUT / "probe" / target, prepared["package"], ndk=ndk, api=29, abi=target)
     shutil.copyfile(ROOT / "reference/astcenc/LICENSE.txt", assets / "licenses/astcenc.txt")
     shutil.copyfile(ROOT / "reference/etcpak/LICENSE.txt", assets / "licenses/etcpak.txt")
-    drivers, driver_licenses = vulkan_drivers()
-    for path, name in driver_licenses:
-        shutil.copyfile(path, assets / "licenses" / name)
-    probe = port_launcher.build_probe(OUT / "probe", prepared["package"], ndk=os.environ.get("ANDROID_NDK", str(SDK / "ndk/27.2.12479018")), api=29)
+    shutil.copyfile(XZ_EMBEDDED / "COPYING", assets / "licenses/xz-embedded.txt")
+    if "arm64" in abis:
+        drivers, driver_licenses = vulkan_drivers()
+        for path, name in driver_licenses:
+            shutil.copyfile(path, assets / "licenses" / name)
+    else:
+        drivers = []
     run(TOOLS / "aapt2.exe", "compile", "--dir", ROOT / "android/app/res", "-o", OUT / "resources.zip")
     run(TOOLS / "aapt2.exe", "link", "-I", ANDROID_JAR, "--manifest", prepared["manifest"],
         "--java", OUT / "generated", "-A", assets, "-o", OUT / "base.apk", OUT / "resources.zip")
@@ -177,12 +274,22 @@ def main():
     shutil.copy(OUT / "base.apk", unsigned)
     with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as apk:
         apk.write(OUT / "dex/classes.dex", "classes.dex")
-        apk.write(probe, "lib/arm64-v8a/" + probe.name)
-        apk.write(texconv, "lib/arm64-v8a/" + texconv.name)
         for path, name in drivers:
             apk.write(path, "lib/arm64-v8a/" + name)
-        if not args.java_only:
-            apk.write(library, "lib/arm64-v8a/libsims2.so")
+        for target, library in libraries.items():
+            arm32 = target == "arm32"
+            libdir = "lib/armeabi-v7a" if arm32 else "lib/arm64-v8a"
+            native = "assets/native/armeabi-v7a" if arm32 else "assets/native"
+            probe = probes[target]
+            texconv = ROOT / "build" / f"{target}-texconv" / "libs2texconv.so"
+            apk.write(probe, libdir + "/" + probe.name)
+            apk.write(texconv, libdir + "/" + texconv.name)
+            apk.write(build_unpacker(target), libdir + "/libs2xz.so")
+            if not args.java_only:
+                # libs2xz.so maps this stored asset directly and unpacks it in parallel.
+                packed, digest, size, sizes = compress_library(library, "armthumb" if arm32 else "arm64")
+                apk.write(packed, native + "/libsims2.so.xz", compress_type=zipfile.ZIP_STORED)
+                apk.writestr(native + "/index.txt", f"libsims2.so {size} {digest} {CHUNK} {sizes}\n")
     aligned = OUT / "aligned.apk"
     run(TOOLS / "zipalign.exe", "-f", "-P", "16", "4", unsigned, aligned)
     apk = OUT / "sims2.apk"
@@ -198,6 +305,7 @@ def main():
             subprocess.run([str(ADB), "-s", args.serial, "shell", f"run-as {PACKAGE} sh -c 'rm -f files/lib*.so'"],
                            capture_output=True)
     if args.push_lib:
+        library = libraries[abi]
         run(ADB, "-s", args.serial, "push", library, "/data/local/tmp/sims2/libsims2.so")
         run(ADB, "-s", args.serial, "shell", f"run-as {PACKAGE} sh -c 'mkdir -p files && "
             "rm -f files/libsims2.so.new && cp /data/local/tmp/sims2/libsims2.so files/libsims2.so.new && chmod 444 files/libsims2.so.new && mv files/libsims2.so.new files/libsims2.so'")

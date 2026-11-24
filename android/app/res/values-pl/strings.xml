@@ -101,4 +101,8 @@
     <string name="target_area_label">Rozmiar dotknięcia</string>
     <string name="target_area_hint">Suwak zmienia obszar wyszukiwania przedmiotów wokół punktu dotknięcia. Okrąg pokazuje jego rozmiar.</string>
   <string name="floor_swipe_hint">Przesuń trzema palcami w górę lub w dół, aby zmienić piętro.</string>
+  <string name="cheat_menu_hint">Przytrzymaj przycisk z trzema kropkami, aby otworzyć menu kodów.</string>
+  <string name="mods_ui_title">Mody interfejsu</string>
+  <string name="mods_ui_hint">Mody zmieniające interfejs gry mogą nie działać: przy tej skali interfejsu gra używa kompaktowych układów 800×600, a większość modów interfejsu zmienia tylko zwykłe układy (od 1024×768). Włącz „Standardowe układy dla modów interfejsu” w ustawieniach portu i uruchom grę ponownie.</string>
+  <string name="unpacking_engine">Rozpakowywanie kodu gry…</string>
 </resources>

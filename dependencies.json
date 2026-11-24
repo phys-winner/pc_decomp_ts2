@@ -122,5 +122,13 @@
   "licenses": {
    "NOTICE": "f96f763beb66a7ba7a667647fc64c0226ace875e590c831fdd9579ec1c1d91e1"
   }
+ },
+ "xz-embedded": {
+  "url": "https://github.com/tukaani-project/xz-embedded.git",
+  "revision": "ae63ae3a36ed01724674e8f3d750dc47bf125410",
+  "directory": "reference/xz-embedded",
+  "license": "0BSD",
+  "note": "v2024-12-30 (ARM64 BCJ): the APK's xz-packed engine library is unpacked by android/unpack/unpack.c (libs2xz.so); used unmodified, as in The Void.",
+  "submodule": true
  }
 }

@@ -12,6 +12,10 @@ import org.sims2.port.launcher.TextureBackend;
  *  undoing the conversion deletes that folder. The base runs these on its background work and
  *  polls progress(); one operation at a time. */
 public final class TextureCache implements TextureBackend {
+    @Override public boolean canEncode(int format) {
+        return format == ETC2 || (format == ASTC && android.os.Process.is64Bit());
+    }
+
     private static native long[] nativeScan(String game, String cache, String index, int archiveFd);
     private static native int nativeConvert(String game, String cache, int format, int threads, String index, int archiveFd);
     private static native int nativeRemove(String cache);

@@ -44,4 +44,7 @@
   <string name="target_object">Tárgy %1$d</string>
   <string name="target_changed">A célpont elmozdult. Koppints újra.</string>
   <string name="floor_swipe_hint">A szintváltáshoz húzd három ujjadat felfelé vagy lefelé.</string>
+  <string name="mods_ui_title">Felületmodok</string>
+  <string name="mods_ui_hint">A játék felületét módosító modok lehet, hogy nem működnek: ennél a felületméretnél a játék a tömör 800×600-as elrendezéseket használja, a legtöbb felületmod viszont csak a normál elrendezéseket (1024×768 és nagyobb) módosítja. Használatukhoz válassz kisebb felületméretet a játék grafikai beállításaiban, és indítsd újra a játékot.</string>
+  <string name="unpacking_engine">A játék kódjának kicsomagolása…</string>
 </resources>

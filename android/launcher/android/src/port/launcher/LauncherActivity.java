@@ -81,6 +81,13 @@ public final class LauncherActivity extends Activity {
     private int turnipIndex;
     private String turnipRepo;
     private android.app.AlertDialog turnipDialog;
+    /** The one-time start question is already on screen (a second Play must not stack another). */
+    private boolean startOfferShowing;
+    /** Set while an accepted ETC2 offer is converting; the game starts when that job succeeds. */
+    private Spec.Distribution playAfterTextures;
+    private Work.Job offerTextureJob;
+    /** Survives a rotation while that conversion runs. Cleared when no texture job is left. */
+    private static final String OFFER_ETC2_LAUNCH = "offer.etc2.launch";
 
     /* An archive read and waiting for the player's decision (or a target folder). */
     private Thread archiveReader;
@@ -292,6 +299,8 @@ public final class LauncherActivity extends Activity {
             initialize(true);
         else refresh();
         resumeFolderPicker();
+        if (Work.current == null && !State.get(this, State.CHOICES, OFFER_ETC2_LAUNCH, "").isEmpty())
+            State.put(this, State.CHOICES, OFFER_ETC2_LAUNCH, null);
         if (Work.current != null) { handler.removeCallbacks(watcher); handler.post(watcher); }
     }
 
@@ -823,11 +832,106 @@ public final class LauncherActivity extends Activity {
             return;
         }
         try {
+            if (offerBeforeStart(d)) return;
             Launch.start(this, d, effectiveRenderer(d), hooks);
             finishAfterLaunch = true;
         } catch (ActivityNotFoundException e) {
             note(Texts.PLAY, Texts.t(this, Texts.NOT_IN_BUILD), true);
         }
+    }
+
+    /** The game's one-time question, after every other gate and before the activity starts.
+     *  True: a dialog is up, or the answer could not be saved. */
+    private boolean offerBeforeStart(Spec.Distribution d) {
+        String[] text;
+        try {
+            text = hooks.startOffer(this);
+        } catch (RuntimeException e) {
+            android.util.Log.w("Launcher", "start offer: " + e);
+            return false;
+        }
+        if (text == null || text.length != 4) return false;
+        if (startOfferShowing) return true;
+        String[] extra = null;
+        if (etc2OfferAvailable()) {
+            try {
+                extra = hooks.startOfferEtc2(this);
+            } catch (RuntimeException e) {
+                android.util.Log.w("Launcher", "start offer: " + e);
+            }
+        }
+        startOfferShowing = true;
+        if (extra != null && extra.length == 5) showEtc2Offer(d, extra, text[3]);
+        else ui.show(ui.dialog().setTitle(text[0]).setMessage(text[1])
+            .setPositiveButton(text[2], (dlg, w) -> answerStartOffer(d, true, false))
+            .setNegativeButton(text[3], (dlg, w) -> answerStartOffer(d, false, false))
+            .setOnCancelListener(dlg -> startOfferShowing = false));
+        return true;
+    }
+
+    /** Both choices default to on. Not now declines both and starts the game. Back asks again. */
+    private void showEtc2Offer(Spec.Distribution d, String[] extra, String decline) {
+        boolean[] graphics = {true}, textures = {true};
+        LinearLayout box = column();
+        box.setPadding(ui.dp(20), ui.dp(8), ui.dp(20), ui.dp(8));
+        box.addView(ui.toggle(extra[3], null, true, on -> graphics[0] = on));
+        box.addView(ui.toggle(extra[4], null, true, on -> textures[0] = on));
+        ui.show(ui.dialog().setTitle(extra[0]).setMessage(extra[1]).setView(box)
+            .setPositiveButton(extra[2], (dlg, w) -> answerStartOffer(d, graphics[0], textures[0]))
+            .setNegativeButton(decline, (dlg, w) -> answerStartOffer(d, false, false))
+            .setOnCancelListener(dlg -> startOfferShowing = false));
+    }
+
+    /** Probed GLES3 with ETC2, DXT/BC known missing, converter in the APK, and no cache yet. */
+    private boolean etc2OfferAvailable() {
+        if (gpu == null || !ensureTextures()) return false;
+        boolean scanFinished = textureScan != null;
+        boolean already = scanFinished && textureScan.converted != 0;
+        Boolean dxt = dxtSupport();
+        boolean converter = false;
+        try {
+            converter = new File(getApplicationInfo().nativeLibraryDir, "libs2texconv.so").isFile();
+        } catch (RuntimeException e) {
+            android.util.Log.w("Launcher", "etc2 offer: " + e);
+        }
+        try {
+            return hooks.offerEtc2(this, gpu.probed, gpu.etc2, dxt != null && !dxt, already, converter);
+        } catch (RuntimeException e) {
+            android.util.Log.w("Launcher", "etc2 offer: " + e);
+            return false;
+        }
+    }
+
+    private void clearOfferTexture() {
+        playAfterTextures = null;
+        offerTextureJob = null;
+        if (!State.get(this, State.CHOICES, OFFER_ETC2_LAUNCH, "").isEmpty())
+            State.put(this, State.CHOICES, OFFER_ETC2_LAUNCH, null);
+    }
+
+    private void answerStartOffer(Spec.Distribution d, boolean accept, boolean convertEtc2) {
+        startOfferShowing = false;
+        boolean saved;
+        try {
+            saved = hooks.startOfferAnswer(this, accept);
+        } catch (RuntimeException e) {
+            android.util.Log.w("Launcher", "start offer: " + e);
+            saved = false;
+        }
+        if (!saved) {
+            note(Texts.PLAY, Texts.t(this, Texts.E_SAVE_OPTION), true);
+            return;
+        }
+        if (convertEtc2 && ensureTextures()) {
+            Work.Job job = newTextureJob(TextureBackend.ETC2);
+            playAfterTextures = d;
+            offerTextureJob = job;
+            if (!State.put(this, State.CHOICES, OFFER_ETC2_LAUNCH, d.id))
+                android.util.Log.w("Launcher", "etc2 offer: could not remember the launch");
+            confirmJob(job, this::clearOfferTexture);
+            return;
+        }
+        play(d);
     }
 
     /** Whether the renderer this start would use waits for the driver check. */
@@ -963,6 +1067,7 @@ public final class LauncherActivity extends Activity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (hooks.optionResult(this, request, result, data)) return;
         boolean driver = request == ASK_DRIVER || request == ASK_PANVK_DRIVER;
         Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
         String path = result == RESULT_OK && data != null ? data.getStringExtra(FileBrowserActivity.RESULT) : null;
@@ -1354,15 +1459,22 @@ public final class LauncherActivity extends Activity {
     }
 
     /** Work without a confirmation of its own explains the notification request first. */
-    private void confirmJob(Work.Job job) {
+    private void confirmJob(Work.Job job) { confirmJob(job, null); }
+
+    /** abandoned runs when the notification explanation is dismissed and the job does not start. */
+    private void confirmJob(Work.Job job, Runnable abandoned) {
         if (!notificationsUnasked()) { startJob(job); return; }
         ui.show(ui.dialog().setTitle(Texts.t(this, Texts.NOTIFY_TITLE)).setMessage(Texts.t(this, Texts.PERM_NOTIFY))
             .setPositiveButton(Texts.t(this, Texts.CONTINUE), (dlg, w) -> startJob(job))
-            .setNegativeButton(Texts.t(this, Texts.CANCEL), null));
+            .setNegativeButton(Texts.t(this, Texts.CANCEL), (dlg, w) -> { if (abandoned != null) abandoned.run(); })
+            .setOnCancelListener(dlg -> { if (abandoned != null) abandoned.run(); }));
     }
 
     private void runJob(Work.Job job) {
-        if (!Work.start(this, job)) return;
+        if (!Work.start(this, job)) {
+            if (job == offerTextureJob) clearOfferTexture();
+            return;
+        }
         ++textureEpoch;
         textureScanning = false;
         textureScan = null;
@@ -1394,6 +1506,7 @@ public final class LauncherActivity extends Activity {
 
     private void finished(Work.Job job) {
         Work.current = null;
+        Spec.Distribution launch = takeTextureLaunch(job);
         String from = State.get(this, State.CHOICES, "importingFrom", ""), fromFile = State.get(this, State.CHOICES, "importingFile", "");
         State.update(this, State.CHOICES, values -> {
             values.remove("importing");
@@ -1423,6 +1536,21 @@ public final class LauncherActivity extends Activity {
         textureScan = null;
         refresh(Texts.PERM_FILES, Texts.PLAY, Texts.GAME_FILES, Texts.RENDERER, Texts.TEXTURES, Texts.SPACE);
         if (job instanceof TurnipDownload) refresh(Texts.ABOUT);
+        if (launch != null) play(launch);
+    }
+
+    /** The distribution to start after this texture job, or null. A failed or cancelled job stays put. */
+    private Spec.Distribution takeTextureLaunch(Work.Job job) {
+        String pending = State.get(this, State.CHOICES, OFFER_ETC2_LAUNCH, "");
+        boolean ours = job == offerTextureJob || (job.section == Texts.TEXTURES && offerTextureJob == null && !pending.isEmpty());
+        if (!ours) return null;
+        Spec.Distribution remembered = playAfterTextures;
+        playAfterTextures = null;
+        offerTextureJob = null;
+        if (!pending.isEmpty()) State.put(this, State.CHOICES, OFFER_ETC2_LAUNCH, null);
+        if (job.failure != null) return null;
+        if (remembered != null) return remembered;
+        return pending.isEmpty() ? null : spec.distribution(pending);
     }
 
     private void askStop() {
@@ -1465,7 +1593,9 @@ public final class LauncherActivity extends Activity {
         boolean drivers = turnip != null && selected.renderers.contains(turnip.id) && gpu.qualcomm();
         Spec.Mode panvk = Probe.panvkMode(spec);
         boolean panvkDrivers = panvk != null && selected.renderers.contains(panvk.id) && Probe.mali(this, Probe.report(this));
-        if (selected.renderers.size() < 2 && !drivers && !panvkDrivers) return;
+        List<Spec.Option> advanced = new ArrayList<>(spec.options(selected.id));
+        advanced.removeIf(o -> !o.rendererSetting || (o.arm64Only && !android.os.Process.is64Bit()));
+        if (selected.renderers.size() < 2 && !drivers && !panvkDrivers && advanced.isEmpty()) return;
         LinearLayout card = section(renderer, Texts.RENDERER);
         List<Renderers.Status> statuses = Renderers.evaluate(this, spec, selected, gpu, convertedTextures());
         String explicit = Renderers.explicitChoice(this, spec, selected, hooks);
@@ -1495,8 +1625,31 @@ public final class LauncherActivity extends Activity {
             card.addView(ui.buttons(download));
         }
         if (panvkDrivers) driverControls(card, VulkanDriver.PANVK, ASK_PANVK_DRIVER);
+        if (!advanced.isEmpty()) rendererSettings(card, advanced);
         card.addView(ui.label(Texts.fmt(this, Texts.GPU, gpu.renderer.isEmpty() ? "?" : gpu.renderer, Gpu.version(gpu.vulkan)), 12, ui.muted));
         card.addView(ui.label(Texts.t(this, Texts.N_APPLIES), 12, ui.muted));
+    }
+
+    private void rendererSettings(LinearLayout card, List<Spec.Option> advanced) {
+        String title = Texts.t(this, Texts.RENDERER_SETTINGS);
+        TextView button = ui.button(title, Ui.SECONDARY, () -> {
+            LinearLayout values = column();
+            values.setPadding(ui.dp(20), ui.dp(8), ui.dp(20), ui.dp(8));
+            android.app.AlertDialog dialog = ui.show(ui.dialog().setTitle(title).setView(values)
+                .setPositiveButton(Texts.t(this, Texts.OK), null));
+            for (Spec.Option option : advanced) {
+                String value = Launch.option(this, option);
+                values.addView(ui.toggle(Texts.of(this, option.title), Texts.of(this, option.hint),
+                    "1".equals(value) || "true".equals(value), on -> {
+                        if (State.put(this, State.CHOICES, "option." + option.key, on ? "1" : "0")) return;
+                        dialog.dismiss();
+                        ui.show(ui.dialog().setMessage(Texts.t(this, Texts.E_SAVE_OPTION))
+                            .setPositiveButton(Texts.t(this, Texts.OK), null));
+                    }));
+            }
+        });
+        Ui.enable(button, idle());
+        card.addView(ui.buttons(button));
     }
 
     private void driverControls(LinearLayout card, VulkanDriver driver, int request) {
@@ -1633,7 +1786,8 @@ public final class LauncherActivity extends Activity {
 
     private void refreshOptions() {
         options.removeAllViews();
-        List<Spec.Option> list = spec.options(selected.id);
+        List<Spec.Option> list = new ArrayList<>(spec.options(selected.id));
+        list.removeIf(o -> o.rendererSetting);
         if (!selected.intro && list.isEmpty()) return;
         LinearLayout card = section(options, Texts.OPTIONS);
         if (selected.intro) {
@@ -1648,6 +1802,8 @@ public final class LauncherActivity extends Activity {
             if ("bool".equals(o.type)) {
                 card.addView(ui.toggle(Texts.of(this, o.title), Texts.of(this, o.hint), "1".equals(value) || "true".equals(value),
                     on -> State.put(this, State.CHOICES, key, on ? "1" : "0")));
+                android.view.View editor = hooks.optionEditor(this, o.key);
+                if (editor != null) card.addView(editor);
             } else if ("choice".equals(o.type)) {
                 if (o.choices.size() > 4) {
                     String[] titles = new String[o.choices.size()];
@@ -1778,14 +1934,7 @@ public final class LauncherActivity extends Activity {
         LinearLayout card = section(texturesBox, Texts.TEXTURES);
         if (initializing) return;
         if (!Install.ready(this, spec, selected)) return;
-        if (textures == null) {
-            try {
-                textures = (TextureBackend) Class.forName(spec.textureBackend).getDeclaredConstructor().newInstance();
-            } catch (ReflectiveOperationException | ClassCastException | LinkageError e) {
-                android.util.Log.w("Launcher", "textures: " + e);
-                return;
-            }
-        }
+        if (!ensureTextures()) return;
         String source = textureSourceKey();
         if (!source.equals(textureSource)) {
             textureSource = source;
@@ -1834,19 +1983,36 @@ public final class LauncherActivity extends Activity {
         card.addView(ui.label(s.sampled ? Texts.t(this, Texts.TEX_SAMPLE)
             : Texts.fmt(this, Texts.TEX_FOUND, s.textures, Texts.size(this, s.bytes)), 14, ui.text));
         List<TextView> buttons = new ArrayList<>();
-        if (gpu.astc) buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ASTC"), Ui.SECONDARY, () -> startTextures(TextureBackend.ASTC)));
+        if (gpu.astc && textures.canEncode(TextureBackend.ASTC))
+            buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ASTC"), Ui.SECONDARY, () -> startTextures(TextureBackend.ASTC)));
         buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ETC2"), Ui.SECONDARY, () -> startTextures(TextureBackend.ETC2)));
         for (TextView b : buttons) Ui.enable(b, idle);
         card.addView(ui.buttons(buttons.toArray(new TextView[0])));
     }
 
+    private boolean ensureTextures() {
+        if (textures != null) return true;
+        if (spec.textureBackend.isEmpty()) return false;
+        try {
+            textures = (TextureBackend) Class.forName(spec.textureBackend).getDeclaredConstructor().newInstance();
+            return true;
+        } catch (ReflectiveOperationException | ClassCastException | LinkageError e) {
+            android.util.Log.w("Launcher", "textures: " + e);
+            return false;
+        }
+    }
+
     /** format 0 removes the conversion, TEX_REMOVE_ORIGINALS the originals it replaced. */
     private void startTextures(int format) {
+        confirmJob(newTextureJob(format));
+    }
+
+    private Work.Job newTextureJob(int format) {
         File root = textureRoot();
         TextureBackend backend = textures;
         Spec.Distribution distribution = selected;
         File cache = Install.textureCacheRoot(this, spec, distribution, root);
-        confirmJob(new Work.Job(Texts.TEXTURES, Texts.t(this, Texts.JOB_TEXTURES), format > 0 ? cache : root) {
+        return new Work.Job(Texts.TEXTURES, Texts.t(this, Texts.JOB_TEXTURES), format > 0 ? cache : root) {
             @Override void work() throws Exception {
                 if (format == TextureBackend.ASTC || format == TextureBackend.ETC2) {
                     if (!cache.equals(root) && !cache.isDirectory() && !cache.mkdirs() && !cache.isDirectory())
@@ -1871,7 +2037,7 @@ public final class LauncherActivity extends Activity {
                 check();
                 if (result != 0) throw new Failure(Failure.IO, backend.message());
             }
-        });
+        };
     }
 
     /* ------------------------------------------------------------ space */
