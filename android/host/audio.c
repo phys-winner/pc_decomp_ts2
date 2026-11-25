@@ -45,6 +45,40 @@
 #include <unistd.h>
 #ifdef VOID_ANDROID_APP
 #include <aaudio/AAudio.h>
+#include <dlfcn.h>
+
+/* Android 8.0-8.1 (API 26-27, the APK's minimum) lack three calls this file used directly. */
+static void stream_usage(AAudioStreamBuilder *builder)
+{
+    void (*usage)(AAudioStreamBuilder *, aaudio_usage_t) =
+        (void (*)(AAudioStreamBuilder *, aaudio_usage_t))dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setUsage");
+    void (*content)(AAudioStreamBuilder *, aaudio_content_type_t) =
+        (void (*)(AAudioStreamBuilder *, aaudio_content_type_t))dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setContentType");
+    if (usage) usage(builder, AAUDIO_USAGE_GAME);
+    if (content) content(builder, AAUDIO_CONTENT_TYPE_MUSIC);
+}
+
+/* sem_timedwait against CLOCK_MONOTONIC (bionic's sem_timedwait_monotonic_np, API 28); before it,
+   the remaining time on the wall clock (a clock step there only shortens or lengthens one wait of
+   at most 50 ms). */
+static int sem_wait_monotonic(sem_t *sem, const struct timespec *deadline)
+{
+    static int (*native)(sem_t *, const struct timespec *);
+    static atomic_int looked;
+    if (!atomic_load_explicit(&looked, memory_order_acquire)) {
+        native = (int (*)(sem_t *, const struct timespec *))dlsym(RTLD_DEFAULT, "sem_timedwait_monotonic_np");
+        atomic_store_explicit(&looked, 1, memory_order_release);
+    }
+    if (native) return native(sem, deadline);
+    struct timespec mono, wall;
+    clock_gettime(CLOCK_MONOTONIC, &mono);
+    clock_gettime(CLOCK_REALTIME, &wall);
+    int64_t left = ((int64_t)deadline->tv_sec - mono.tv_sec) * 1000000000LL + (deadline->tv_nsec - mono.tv_nsec);
+    if (left < 0) left = 0;
+    int64_t until = (int64_t)wall.tv_sec * 1000000000LL + wall.tv_nsec + left;
+    struct timespec absolute = { (time_t)(until / 1000000000LL), (long)(until % 1000000000LL) };
+    return sem_timedwait(sem, &absolute);
+}
 #endif
 
 #define FIFO_FRAMES 16384u                   /* a power of two: 341 ms at 48 kHz */
@@ -478,8 +512,7 @@ static aaudio_result_t device_create(AAudioStream **out, int32_t rate, int low)
     if (rate > 0) AAudioStreamBuilder_setSampleRate(builder, rate);
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setPerformanceMode(builder, low ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY : AAUDIO_PERFORMANCE_MODE_NONE);
-    AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
-    AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
+    stream_usage(builder);
     AAudioStreamBuilder_setDataCallback(builder, data_callback, NULL);
     AAudioStreamBuilder_setErrorCallback(builder, error_callback, NULL);
     result = AAudioStreamBuilder_openStream(builder, out);
@@ -839,7 +872,7 @@ int void_audio_wait(uint32_t timeout_ms)
         int64_t step = (pause & 1u) ? 50000000LL : running ? 20000000LL : 5000000LL, until = now + step;
         if (until > end) until = end;
         struct timespec deadline = { (time_t)(until / 1000000000LL), (long)(until % 1000000000LL) };
-        while (sem_timedwait_monotonic_np(&demand, &deadline) && errno == EINTR) {}
+        while (sem_wait_monotonic(&demand, &deadline) && errno == EINTR) {}
         now = (int64_t)void_monotonic_ns();
     }
     woke_ns = now;

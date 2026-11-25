@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 import check_touch as T
 
 EXTRA = r'''
- int cheatSerial,cheatMenuContext;boolean cheatCatalogRequest;long cheatMenuSize,cheatMenuEpoch;
+ int cheatMenuContext;boolean cheatCatalogRequest;long cheatMenuSize,cheatMenuEpoch;
  java.util.List<CheatCommands.Command> cheats;
  static long cheatReply=(9L<<32)|1;static int nativeCheatRequests,nativeCheatCancels;static String lastCommand;
  static boolean mutateRows;static String[] rows={"motherLode\tAdd money","aging\ton|off","help\tAll commands"};
@@ -18,6 +18,7 @@ EXTRA = r'''
  static void nativeCheatsCancel(){nativeCheatCancels++;}
  boolean cheatRussian(){return true;}
  void showTouchSettings(){}
+ void showToolMenu(){}
 '''
 
 CHECK = r'''package org.sims2.port;
@@ -54,8 +55,13 @@ public class CheatsActivityCheck {
 def main():
     activity=(T.ROOT/'android/app/src/org/sims2/port/GameActivity.java').read_text(encoding='utf-8')
     native=T.NATIVE.replace('static int cheatRequests;static void touchCheatsRequested(){cheatRequests++;}static void nativeCheatsCancel(){}','')
-    native=native.replace('boolean cheatUi(){return false;}','')+EXTRA
-    signatures=['private boolean cheatUi(','private String cheatText(','private boolean cheatMenuValid(',
+    native=native.replace('boolean cheatUi(){return toolMenu!=null;}','')+EXTRA
+    signatures=['static final class WorldTarget','private void closeTargetMenu(','private boolean inputOverlayOpen(',
+        'private android.graphics.drawable.GradientDrawable objectControlBackground(',
+        'private TextView targetRadiusText(','private void positionTargetRadiusControls(',
+        'private void closeToolMenu(',
+        'private boolean canUsePhotoControls(','private void photoKey(',
+        'private boolean cheatUi(','private String cheatText(','private boolean cheatMenuValid(',
         'private void showCheats(','private void showCheatDialog(','private AlertDialog.Builder cheatBuilder(',
         'private void showCheatGroups(','private void showCheatGroup(','private void showCheatConsole(',
         'private void handleCheatReceipt(','static void touchObjectControlsChanged(','static void touchCheatsRequested(',
@@ -65,6 +71,7 @@ def main():
         'protected void onResume(','protected void onDestroy(']
     native+='\n'.join(T.method(activity,s) for s in signatures)+'\n}'
     stubs=dict(T.STUBS)
+    stubs['org/sims2/port/WorldTargetMenu.java']='package org.sims2.port;class WorldTargetMenu extends android.widget.FrameLayout{WorldTargetMenu(){super(new android.content.Context());}}'
     stubs['org/sims2/port/GamepadLayer.java']='package org.sims2.port;class GamepadLayer{boolean enabled=true;void release(){}void setEnabledInput(boolean v){enabled=v;}}'
     stubs['android/hardware/input/InputManager.java']='package android.hardware.input;public class InputManager{public void unregisterInputDeviceListener(Object o){}}'
     dialog=stubs['android/app/AlertDialog.java']

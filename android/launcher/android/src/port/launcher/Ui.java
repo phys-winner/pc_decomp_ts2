@@ -44,7 +44,7 @@ final class Ui {
 
     final Activity activity;
     final int[] background;
-    final int card, cardStroke, cell, accent, accentDark, primaryFill, playGlow, playParticles, text, muted, error, good;
+    final int card, cardStroke, cell, accent, accentDark, primaryFill, playGlow, playParticles, playFill, text, muted, error, good;
     final String playParticleStyle;
     final Typeface titleFont, bold, regular;
 
@@ -67,6 +67,7 @@ final class Ui {
         text = colour(t, "text", 0xFFF2F4F7);
         playGlow = colour(t, "playGlow", accent);
         playParticles = colour(t, "playParticles", text);
+        playFill = colour(t, "playFill", Color.BLACK);
         playParticleStyle = t.optString("playParticleStyle", "magic");
         muted = colour(t, "muted", 0xFFA7AFBC);
         error = colour(t, "error", 0xFFFF8C7A);
@@ -93,7 +94,10 @@ final class Ui {
 
     int dp(float v) { return Math.round(v * activity.getResources().getDisplayMetrics().density); }
 
-    boolean wide() { return activity.getResources().getConfiguration().screenWidthDp >= 720; }
+    boolean wide() {
+        android.content.res.Configuration c = activity.getResources().getConfiguration();
+        return c.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && c.screenWidthDp >= 720;
+    }
 
     Drawable backdrop() {
         return background.length == 1 ? new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {background[0], background[0]})
@@ -144,7 +148,7 @@ final class Ui {
         return c;
     }
 
-    TextView label(String value, float sp, int colour) {
+    TextView label(CharSequence value, float sp, int colour) {
         TextView t = new TextView(activity);
         t.setText(value);
         t.setTextSize(sp);
@@ -192,7 +196,17 @@ final class Ui {
 
     void attention(TextView button, boolean sparkle) {
         ((ActionButton) button).effect = sparkle ? 2 : 1;
-        if (sparkle) button.setTextColor(text);
+        if (sparkle) {
+            ActionButton play = (ActionButton) button;
+            button.setTextColor(text);
+            if (play.particleStyle == 5) {
+                GradientDrawable space = new GradientDrawable();
+                space.setCornerRadius(dp(14));
+                space.setColor(play.starFill);
+                space.setStroke(dp(1), accentDark);
+                button.setBackground(space);
+            }
+        }
         button.invalidate();
     }
 
@@ -200,7 +214,7 @@ final class Ui {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path clip = new Path();
         private final Matrix shift = new Matrix();
-        private final int glow, particles, particleStyle;
+        private final int glow, particles, particleStyle, starFill;
         private final LinearGradient sheen;
         private final float[] particleX = new float[6], particlePhase = new float[6];
         private final Path water = new Path();
@@ -215,8 +229,9 @@ final class Ui {
             glow = colour(theme, "playGlow", playGlow);
             particles = colour(theme, "playParticles", playParticles);
             String style = theme == null ? playParticleStyle : theme.optString("playParticleStyle", playParticleStyle);
-            if (!"magic".equals(style) && !"snow".equals(style) && !"embers".equals(style) && !"water".equals(style) && !"plumbob".equals(style)) style = playParticleStyle;
-            particleStyle = "plumbob".equals(style) ? 4 : "water".equals(style) ? 3 : "snow".equals(style) ? 1 : "embers".equals(style) ? 2 : 0;
+            if (!"magic".equals(style) && !"snow".equals(style) && !"embers".equals(style) && !"water".equals(style) && !"plumbob".equals(style) && !"stars".equals(style)) style = playParticleStyle;
+            particleStyle = "stars".equals(style) ? 5 : "plumbob".equals(style) ? 4 : "water".equals(style) ? 3 : "snow".equals(style) ? 1 : "embers".equals(style) ? 2 : 0;
+            starFill = colour(theme, "playFill", playFill);
             java.util.concurrent.ThreadLocalRandom random = java.util.concurrent.ThreadLocalRandom.current();
             for (int i = 0; i < particleX.length; ++i) {
                 particleX[i] = particleStyle == 4 ? (i + .5f) / particleX.length : 0.1f + 0.8f * random.nextFloat();
@@ -346,10 +361,39 @@ final class Ui {
             canvas.drawPath(plumbob, paint);
         }
 
+        private void drawStars(Canvas canvas, boolean motion) {
+            float w = getWidth(), h = getHeight();
+            float margin = dp(4);
+            float span = w + margin * 2;
+            double seconds = motion ? SystemClock.uptimeMillis() / 1000.0 : 0;
+            int saved = canvas.save();
+            canvas.clipPath(clip);
+            for (int i = 0; i < 32; ++i) {
+                float x = (float)(((i * .618033989 % 1) * span + seconds * dp(1 + i % 3)) % span) - margin;
+                float y = (float)(.08 + .84 * (i * .754877666 % 1)) * h;
+                paint.setColor(particles);
+                paint.setAlpha(90 + (i * 47) % 132);
+                float r = Math.max(.7f, dp(i % 7 == 0 ? 1.25f : .65f));
+                canvas.drawCircle(x, y, r, paint);
+                if (i % 7 == 0) {
+                    paint.setStrokeWidth(Math.max(1, dp(.5f)));
+                    canvas.drawLine(x - 2*r, y, x + 2*r, y, paint);
+                    canvas.drawLine(x, y - 2*r, x, y + 2*r, paint);
+                }
+            }
+            canvas.restoreToCount(saved);
+            if (motion && hasWindowFocus() && getWindowVisibility() == View.VISIBLE && isShown()) postInvalidateDelayed(50);
+        }
+
         @Override protected void onDraw(Canvas canvas) {
             if (effect != 0 && isEnabled()) {
                 boolean motion = Build.VERSION.SDK_INT >= 26 ? ValueAnimator.areAnimatorsEnabled()
                     : Settings.Global.getFloat(activity.getContentResolver(), Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0;
+                if (effect == 2 && particleStyle == 5) {
+                    drawStars(canvas, motion);
+                    super.onDraw(canvas);
+                    return;
+                }
                 float phase = motion ? (SystemClock.uptimeMillis() % 3600) / 3600f : 0.25f;
                 float pulse = (float) (0.5 - 0.5 * Math.cos(phase * Math.PI * 2));
                 float inset = dp(1);
@@ -515,10 +559,13 @@ final class Ui {
     }
 
     /** A tappable choice: title, hint, a stroke when chosen, faded when unavailable. */
-    View choice(String title, String hint, boolean chosen, boolean available, Runnable action) {
+    /** A selectable row; the hint may carry spans (the renderer row's green texture line). */
+    View choice(String title, CharSequence hint, boolean chosen, boolean available, Runnable action) {
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setTag(title);
+        row.setSelected(chosen);
+        row.setEnabled(available);
         row.setPadding(dp(12), dp(8), dp(12), dp(8));
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(12));
@@ -526,7 +573,7 @@ final class Ui {
         if (chosen) bg.setStroke(dp(2), accent);
         row.setBackground(bg);
         row.addView(label(title, 15, available ? text : muted));
-        if (hint != null && !hint.isEmpty()) row.addView(label(hint, 12, muted));
+        if (hint != null && hint.length() > 0) row.addView(label(hint, 12, muted));
         row.setAlpha(available ? 1f : 0.55f);
         if (action != null) {
             row.setFocusable(true);

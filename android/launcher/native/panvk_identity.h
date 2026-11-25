@@ -14,7 +14,7 @@ static inline const char *port_panvk_page_size_error(int bundled)
         ? "Bundled PanVK requires 4 KiB kernel pages. Import a driver for this page size." : NULL;
 }
 
-static inline int port_panvk_mapped(const char *path)
+static inline int port_vulkan_driver_mapped(const char *path)
 {
     struct stat driver;
     if (stat(path, &driver)) return 0;
@@ -36,5 +36,10 @@ static inline int port_panvk_mapped(const char *path)
     }
     fclose(maps);
     return found;
+}
+
+static inline int port_panvk_mapped(const char *path)
+{
+    return port_vulkan_driver_mapped(path);
 }
 #endif

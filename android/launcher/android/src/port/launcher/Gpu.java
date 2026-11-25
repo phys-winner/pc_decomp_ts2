@@ -19,9 +19,11 @@ import java.util.regex.Pattern;
  *  platform declares it (PackageManager features, no driver loaded). */
 final class Gpu {
     boolean probed, s3tc, rgtc, bptc, astc, etc2;
-    String renderer = "", vendor = "";
+    String renderer = "", vendor = "", glesDriver = "";
     int vulkan;              /* VK_MAKE_API_VERSION of the system driver; 0 without Vulkan */
     int adreno;              /* the Adreno model number; 0 on other GPUs */
+    Long formats;
+    int gles;
 
     private static Gpu cached;
 
@@ -70,10 +72,23 @@ final class Gpu {
             if (context == EGL14.EGL_NO_CONTEXT || surface == EGL14.EGL_NO_SURFACE || !EGL14.eglMakeCurrent(display, surface, surface, context)) return;
             String extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS);
             String name = GLES20.glGetString(GLES20.GL_RENDERER), maker = GLES20.glGetString(GLES20.GL_VENDOR);
+            String driver = GLES20.glGetString(GLES20.GL_VERSION);
             if (name != null) renderer = name;
             if (maker != null) vendor = maker;
+            if (driver != null) glesDriver = driver;
             if (extensions != null) {
                 probed = true;
+                int[] value = new int[1];
+                GLES20.glGetIntegerv(android.opengl.GLES30.GL_MAJOR_VERSION, value, 0);
+                gles = value[0] << 16;
+                GLES20.glGetIntegerv(android.opengl.GLES30.GL_MINOR_VERSION, value, 0);
+                gles |= value[0];
+                GLES20.glGetIntegerv(GLES20.GL_NUM_COMPRESSED_TEXTURE_FORMATS, value, 0);
+                if (value[0] >= 0 && value[0] <= 4096) {
+                    int[] compressed = new int[value[0]];
+                    if (compressed.length > 0) GLES20.glGetIntegerv(GLES20.GL_COMPRESSED_TEXTURE_FORMATS, compressed, 0);
+                    if (GLES20.glGetError() == GLES20.GL_NO_ERROR) formats = TextureFormats.gles(compressed);
+                }
                 s3tc = extensions.contains("GL_EXT_texture_compression_s3tc")
                     || (extensions.contains("GL_EXT_texture_compression_dxt1") && extensions.contains("GL_ANGLE_texture_compression_dxt3")
                         && extensions.contains("GL_ANGLE_texture_compression_dxt5"));

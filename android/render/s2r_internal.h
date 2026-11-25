@@ -106,9 +106,12 @@ uint32_t s2r_gpu_rows(const s2r_image *img, uint32_t h);
 int s2r_gpu_block(uint8_t gpu, uint32_t *bw, uint32_t *bh, uint32_t *bytes);   /* compressed formats */
 uint32_t s2r_gpu_texel_bytes(uint8_t gpu);
 const char *s2r_gpu_name(uint8_t gpu);
-/* What the running backend samples natively: BC1-3 (DXT), ETC2, ASTC LDR. */
-void s2r_set_native_support(int bc, int etc2, int astc);
-int s2r_bc_supported(void);
+/* What the running backend samples natively: BC1-3 (DXT) per format (S2R_DXT* bits: the launcher's
+   converted cache then serves only the formats missing here), ETC2, ASTC LDR. */
+enum { S2R_DXT1 = 1, S2R_DXT3 = 2, S2R_DXT5 = 4, S2R_DXT_ALL = 7 };
+void s2r_set_native_support(int dxt, int etc2, int astc);
+int s2r_bc_supported(void);        /* the S2R_DXT* mask */
+const char *s2r_dxt_names(int mask);   /* "yes" (all three), "no", else "DXT1+DXT5 only" and the like */
 int s2r_etc2_supported(void);
 int s2r_astc_supported(void);
 
@@ -219,7 +222,21 @@ extern const s2r_backend s2r_vulkan_backend;
 enum { S2R_VK_SYSTEM = 0, S2R_VK_TURNIP = 1, S2R_VK_PANVK = 2 };
 void s2r_set_vk_driver(int kind, const char *native_dir);
 void s2r_set_vk_kind(int kind);
-int s2r_vk_active_driver(void);
+int s2r_vk_driver(void);           /* the chosen one */
+int s2r_vk_active_driver(void);    /* the one running (the chosen one once the device exists; never another) */
+
+/* The launcher's renderer failure policy (launcher/native/replacements/renderer_failure.h, owner's decision
+   of 24 November 2026): a renderer that cannot start, or loses its GPU device, stops the game; no other
+   renderer or driver takes over. s2r_fail_note keeps the first cause seen while a backend starts (printf
+   format), which s2r_init reports when init fails. s2r_renderer_lost reports VK_ERROR_DEVICE_LOST /
+   EGL_CONTEXT_LOST, s2r_renderer_failed any failure; both record it for the launcher, hand it to
+   GameActivity (Launch.rendererFailed) and end the process. s2r_renderer_presented: a frame reached the
+   display (the first one starts the launcher's failure window). */
+void s2r_fail_note(const char *format, ...) __attribute__((format(printf, 1, 2)));
+void s2r_renderer_failed(const char *reason, int device_lost) __attribute__((noreturn));
+void s2r_renderer_lost(const char *what);
+void s2r_renderer_presented(void);
+int s2r_renderer_has_presented(void);
 
 /* ------------------------------------------------------------ device */
 /* The render thread's native renderer: one for the session; `dev` follows the

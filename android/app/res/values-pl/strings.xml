@@ -105,4 +105,7 @@
   <string name="mods_ui_title">Mody interfejsu</string>
   <string name="mods_ui_hint">Mody zmieniające interfejs gry mogą nie działać: przy tej skali interfejsu gra używa kompaktowych układów 800×600, a większość modów interfejsu zmienia tylko zwykłe układy (od 1024×768). Włącz „Standardowe układy dla modów interfejsu” w ustawieniach portu i uruchom grę ponownie.</string>
   <string name="unpacking_engine">Rozpakowywanie kodu gry…</string>
+  <string name="testing_cheats_hint">Zaznacz testingcheats, aby dotknięcie Sima lub przedmiotu działało jak kliknięcie z klawiszem Shift.</string>
+  <string name="profile_write_denied">Android zablokował zapis w folderze profilu gry %1$s. Zezwól na dostęp do plików i spróbuj ponownie.</string>
+  <string name="profile_open_failed">Nie udało się przygotować folderu profilu gry %1$s (%2$s).</string>
 </resources>

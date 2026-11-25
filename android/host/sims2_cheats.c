@@ -4,6 +4,7 @@
 #include "sims2_settings.h"
 #include "sims2_cheats.h"
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -17,6 +18,21 @@ static struct timespec cheat_expiry;
 static char cheat_command[513];
 static char **cheat_rows;
 static unsigned cheat_count;
+static atomic_int testing_cheats;
+
+void s2_cheats_sample_testing(void)
+{
+    static uint32_t last;
+    uint32_t now = void_tick_ms();
+    if (now - last < 250) return;
+    last = now;
+    void_regs saved;
+    void_regs_save(&saved);
+    /* The guest reads the real boolProp, including changes from userStartup.cheat. */
+    int enabled = (void_call_guest(0xA0C2CBA3u, 0, NULL, 0) & 255u) != 0;
+    void_regs_load(&saved);
+    atomic_store(&testing_cheats, enabled);
+}
 
 static int cheat_expired(void)
 {
@@ -205,6 +221,10 @@ void s2_cheats_owner(unsigned serial, uint32_t manager)
 
 #ifdef __ANDROID__
 #include <jni.h>
+JNIEXPORT jboolean JNICALL Java_org_sims2_port_GameActivity_nativeTestingCheats(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls; return atomic_load(&testing_cheats) != 0;
+}
 JNIEXPORT jlong JNICALL Java_org_sims2_port_GameActivity_nativeCheatsRequest(JNIEnv *env, jclass cls, jstring command)
 {
     (void)cls;

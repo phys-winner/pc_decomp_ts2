@@ -318,8 +318,11 @@ final class TouchLayer extends View {
         if(!canCancelObject())return;
         releaseAll();controllerKey(ESC);GameActivity.nativeTouchClearCatalog();
     }
+    private boolean testingCheats;
+    void testingCheats(boolean enabled){testingCheats=enabled;}
     private final class Click{
         final float x,y;final int kind,mode;final long expected;boolean down;int button;
+        boolean shifted;
         final long size=originSize,epoch=originEpoch;
         final int width=getWidth(),height=getHeight();
         final Preview placement;
@@ -336,6 +339,11 @@ final class TouchLayer extends View {
             GameActivity.nativeMouseMove((target.x*scale+(width-(int)size*scale)*.5f)/width,
                     (target.y*scale+(height-(int)(size>>>32)*scale)*.5f)/height,false);
         }
+        void mouseDown(boolean worldTap){
+            shifted=worldTap&&testingCheats&&GameActivity.nativeTestingCheats();
+            if(shifted)key(0xA0,true);
+            GameActivity.nativeMouseButton(button,true);down=true;handler.postDelayed(release,90);
+        }
         Click(float x,float y,int kind,int mode,long expected){
             this(x,y,kind,mode,expected,null);
         }
@@ -345,7 +353,9 @@ final class TouchLayer extends View {
             release=()->{
                 if(pending!=this)return;
                 if(placement!=null&&!placement.environmentMatches()){releaseAll();return;}
-                GameActivity.nativeMouseButton(button,false);down=false;pending=null;
+                GameActivity.nativeMouseButton(button,false);
+                if(shifted)key(0xA0,false);
+                down=false;pending=null;
                 if(button==0&&(kind&MORE_BUTTON)!=0)GameActivity.touchCheatMenuHint();
                 if((kind&16)!=0&&!blocked&&!retired)GameActivity.touchTextRequested(x/getWidth(),y/getHeight());
             };
@@ -368,15 +378,15 @@ final class TouchLayer extends View {
                         GameActivity.chooseWorldTarget(targets,size,this::worldMatches,target->{
                             if(worldMatches()&&GameActivity.nativeTouchConfirmTarget(target.x,target.y,target.key)&&worldMatches()){
                                 pointTarget(target);
-                                GameActivity.nativeMouseButton(0,true);
-                                GameActivity.nativeMouseButton(0,false);
+                                pending=this;mouseDown(true);
+                                if(!shifted){handler.removeCallbacks(release);release.run();}
                             }else GameActivity.touchNotice(GameActivity.text(R.string.target_changed));
                         });
                         return;
                     }
                     pointTarget(targets[0]);
                 }else point(x,y);
-                GameActivity.nativeMouseButton(button,true);down=true;handler.postDelayed(release,90);
+                mouseDown(worldTap);
             };
         }
         void finishUi(){
@@ -806,7 +816,7 @@ final class TouchLayer extends View {
     }
     @Override protected void onSizeChanged(int w,int h,int oldw,int oldh){
         super.onSizeChanged(w,h,oldw,oldh);swipeNotice=null;releaseAll();
-        setSystemGestureExclusionRects(java.util.Collections.singletonList(new android.graphics.Rect(0,0,w,h)));
+        if(android.os.Build.VERSION.SDK_INT>=29)setSystemGestureExclusionRects(java.util.Collections.singletonList(new android.graphics.Rect(0,0,w,h)));
     }
     @Override protected void onDetachedFromWindow(){swipeNotice=null;releaseAll();super.onDetachedFromWindow();}
 }

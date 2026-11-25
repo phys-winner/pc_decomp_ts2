@@ -7,12 +7,14 @@
  * game's package): the source does not depend on it. After the Heroes V port's probe.cpp, in C. */
 #include <dlfcn.h>
 #include <jni.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <vulkan/vulkan_core.h>
 #include "vulkan_requirements.h"
 #include "panvk_identity.h"
+#include "replacements/vulkan_driver.h"
 
 #ifndef PORT_PROBE_CLASS
 #define PORT_PROBE_CLASS "port/launcher/Probe"
@@ -48,7 +50,7 @@ static int port_has(const VkExtensionProperties *list, uint32_t count, const cha
     return 0;
 }
 
-static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int turnip, const char *panvk, port_report *r)
+static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int turnip, const char *driver_path, port_report *r)
 {
     PFN_vkEnumerateInstanceVersion instance_version =
         (PFN_vkEnumerateInstanceVersion)gipa(NULL, "vkEnumerateInstanceVersion");
@@ -77,7 +79,7 @@ static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int t
     memset(&app, 0, sizeof app);
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "Port launcher driver check";
-    app.apiVersion = loader >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_3 : VK_API_VERSION_1_0;
+    app.apiVersion = loader < VK_API_VERSION_1_3 ? loader : VK_API_VERSION_1_3;
     VkInstanceCreateInfo info;
     memset(&info, 0, sizeof info);
     info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -103,32 +105,26 @@ static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int t
         PORT_GET(PFN_vkEnumerateDeviceExtensionProperties, "vkEnumerateDeviceExtensionProperties");
     PFN_vkGetPhysicalDeviceFormatProperties formats =
         PORT_GET(PFN_vkGetPhysicalDeviceFormatProperties, "vkGetPhysicalDeviceFormatProperties");
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties queues =
+        PORT_GET(PFN_vkGetPhysicalDeviceQueueFamilyProperties, "vkGetPhysicalDeviceQueueFamilyProperties");
 #undef PORT_GET
     if (app.apiVersion < VK_API_VERSION_1_1) { properties2 = NULL; features2 = NULL; }
-    VkPhysicalDevice devices[8], chosen = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties p;
-    memset(&p, 0, sizeof p);
-    count = 8;
-    if (enumerate && properties && enumerate(instance, &count, devices) >= VK_SUCCESS)
-        for (uint32_t i = 0; i < count && i < 8; ++i) {
-            properties(devices[i], &p);
-            /* DXVK skips CPU adapters when a GPU exists; a phone has one GPU. */
-            if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU || !chosen) chosen = devices[i];
-            if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) break;
-        }
+    VkPhysicalDevice chosen = port_vulkan_physical_device(instance, enumerate, properties, &p);
     if (!chosen || !features || !device_extensions || !formats) {
         port_line(r, prefix, "status", "error");
         port_line(r, prefix, "error", "no Vulkan GPU");
         if (destroy) destroy(instance, NULL);
         return;
     }
-    properties(chosen, &p);
     caps.api_version = p.apiVersion;
     count = 0;
     device_extensions(chosen, NULL, &count, NULL);
     VkExtensionProperties *extensions = calloc(count ? count : 1, sizeof *extensions);
     if (extensions && count) device_extensions(chosen, NULL, &count, extensions);
     caps.swapchain = extensions && port_has(extensions, count, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    port_line(r, prefix, "maintenance1", (app.apiVersion >= VK_API_VERSION_1_1 && p.apiVersion >= VK_API_VERSION_1_1) ||
+              (extensions && port_has(extensions, count, VK_KHR_MAINTENANCE_1_EXTENSION_NAME)) ? "1" : "0");
     caps.robustness2 = extensions && port_has(extensions, count, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
     free(extensions);
     char driver[600] = "";
@@ -165,6 +161,10 @@ static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int t
     if (features2 && p.apiVersion >= VK_API_VERSION_1_1) features2(chosen, &f2);
     else features(chosen, &f2.features);
     caps.core = f2.features;
+    port_line(r, prefix, "androidSurface", caps.android_surface ? "1" : "0");
+    port_line(r, prefix, "swapchain", caps.swapchain ? "1" : "0");
+    port_line(r, prefix, "graphicsQueue", port_vulkan_graphics_queue(chosen, queues, NULL) != UINT32_MAX ? "1" : "0");
+    port_line(r, prefix, "robustBufferAccess", caps.core.robustBufferAccess ? "1" : "0");
     caps.sampler_mirror_clamp_to_edge = v12.samplerMirrorClampToEdge;
     caps.vulkan_memory_model = v12.vulkanMemoryModel;
     caps.host_query_reset = v12.hostQueryReset;
@@ -187,11 +187,11 @@ static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int t
     int gaps = port_vk_missing(&caps, 1, missing, sizeof missing);
     /* Mesa Turnip, not the system's Qualcomm driver: builds of it rename the device ("PurpleVK..."),
      * never the driver id. */
-    if (turnip && !(p.vendorID == 0x5143 && (driver_id == VK_DRIVER_ID_MESA_TURNIP || strstr(p.deviceName, "Turnip")))) {
+    if (turnip && (!port_vulkan_is_turnip(&p, driver_id) || !port_vulkan_driver_mapped(driver_path))) {
         size_t used = strlen(missing);
         snprintf(missing + used, sizeof missing - used, "%snotTurnip", gaps++ ? "," : "");
     }
-    if (panvk && (p.vendorID != 0x13b5 || driver_id != VK_DRIVER_ID_MESA_PANVK || !port_panvk_mapped(panvk))) {
+    if (driver_path && !turnip && (p.vendorID != 0x13b5 || driver_id != VK_DRIVER_ID_MESA_PANVK || !port_panvk_mapped(driver_path))) {
         port_line(r, prefix, "status", "error");
         port_line(r, prefix, "error", "PanVK driver not active");
     } else {
@@ -213,35 +213,17 @@ static void port_probe(PFN_vkGetInstanceProcAddr gipa, const char *prefix, int t
     }
     snprintf(text, sizeof text, "%d%d%d", caps.bc1, caps.bc2, caps.bc3);
     port_line(r, prefix, "bc", text);
+    uint64_t sampled = 0;
+    for (int format = VK_FORMAT_BC1_RGB_UNORM_BLOCK; format <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK; ++format) {
+        VkFormatProperties fp = {0};
+        formats(chosen, (VkFormat)format, &fp);
+        if (port_vulkan_samples(fp))
+            sampled |= UINT64_C(1) << (format - VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+    }
+    snprintf(text, sizeof text, "%" PRIx64, sampled);
+    port_line(r, prefix, "formats", text);
     port_line(r, prefix, "missing", missing);
     if (destroy) destroy(instance, NULL);
-}
-
-typedef void *(*port_adrenotools_open)(int, int, const char *, const char *, const char *, const char *, const char *, void **);
-
-/* The port's Turnip through adrenotools from a real folder (adrenotools requires one): the native
- * library directory (extractNativeLibs), or the folder where a game that packs its Turnip set
- * unpacked it (PortHooks.checkLibraries). Its hooks load the driver in a linker namespace of its own, so the
- * system driver stays untouched. 1 = ADRENOTOOLS_DRIVER_CUSTOM; no temporary directory (API 29+
- * uses memfd), no file redirection, no GPU mapping import. A driver given as a full path (the
- * player's own, TurnipDriver.java) is loaded from its folder with the same hooks. */
-static PFN_vkGetInstanceProcAddr port_open_turnip(const char *directory, const char *driver, char *error, size_t size)
-{
-    char path[1024], hooks[1024], folder[1024];
-    snprintf(path, sizeof path, "%s/libadrenotools.so", directory ? directory : "");
-    snprintf(hooks, sizeof hooks, "%s/", directory ? directory : "");
-    const char *slash = strrchr(driver, '/');
-    snprintf(folder, sizeof folder, "%.*s", slash ? (int)(slash - driver + 1) : 0, driver);
-    void *helper = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    port_adrenotools_open open = helper ? (port_adrenotools_open)dlsym(helper, "adrenotools_open_libvulkan") : NULL;
-    void *loader = open ? open(RTLD_NOW | RTLD_LOCAL, 1, NULL, hooks, slash ? folder : hooks, slash ? slash + 1 : driver, NULL, NULL) : NULL;
-    PFN_vkGetInstanceProcAddr get = loader ? (PFN_vkGetInstanceProcAddr)dlsym(loader, "vkGetInstanceProcAddr") : NULL;
-    if (!get) {
-        const char *detail = dlerror();
-        snprintf(error, size, "adrenotools returned no driver (%s)",
-                 detail ? detail : helper ? "no custom driver" : "libadrenotools.so missing");
-    }
-    return get;
 }
 
 /* driver null: the system driver (libvulkan.so); else the Turnip library of that name, or at that full path;
@@ -254,8 +236,7 @@ static jstring JNICALL port_native_probe(JNIEnv *env, jclass cls, jstring direct
     const char *dir = directory ? (*env)->GetStringUTFChars(env, directory, NULL) : NULL;
     const char *name = driver ? (*env)->GetStringUTFChars(env, driver, NULL) : NULL;
     if (!name) {
-        void *vulkan = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
-        PFN_vkGetInstanceProcAddr gipa = vulkan ? (PFN_vkGetInstanceProcAddr)dlsym(vulkan, "vkGetInstanceProcAddr") : NULL;
+        PFN_vkGetInstanceProcAddr gipa = port_open_system_vulkan();
         if (gipa) port_probe(gipa, "stock", 0, NULL, &report);
         else {
             port_line(&report, "stock", "status", "error");
@@ -265,10 +246,11 @@ static jstring JNICALL port_native_probe(JNIEnv *env, jclass cls, jstring direct
         char error[512] = "";
         const char *prefix = panvk ? "panvk" : "turnip";
         char bundled[1024];
-        snprintf(bundled, sizeof bundled, "%s/%s", dir ? dir : "", name);
         const char *page_error = panvk ? port_panvk_page_size_error(name[0] != '/') : NULL;
-        PFN_vkGetInstanceProcAddr gipa = page_error ? NULL : port_open_turnip(dir, name, error, sizeof error);
-        if (gipa) port_probe(gipa, prefix, !panvk, panvk ? (name[0] == '/' ? name : bundled) : NULL, &report);
+        if (!page_error && name[0] != '/' && snprintf(bundled, sizeof bundled, "%s/%s", dir ? dir : "", name) >= (int)sizeof bundled)
+            page_error = "Vulkan driver path too long";
+        PFN_vkGetInstanceProcAddr gipa = page_error ? NULL : port_open_vulkan_driver(dir, name, error, sizeof error);
+        if (gipa) port_probe(gipa, prefix, !panvk, name[0] == '/' ? name : bundled, &report);
         else {
             port_line(&report, prefix, "status", "error");
             port_line(&report, prefix, "error", page_error ? page_error : error);

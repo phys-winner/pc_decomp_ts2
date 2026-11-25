@@ -15,7 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_android import API, CLANG, TARGET  # noqa: E402
+from build_android import MIN_API as API, CLANG  # noqa: E402
+TARGET = f"aarch64-linux-android{API}"   # the APK's minSdkVersion; thread_local is emulated below API 29
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/arm64-texconv"
@@ -80,7 +81,8 @@ def main():
     from prepare_dependencies import prepare
     prepare(*(() if NO_ASTC else ("astcenc",)), "etcpak")
     (OUT / "obj").mkdir(parents=True, exist_ok=True)
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    # S2_JOBS caps the compile jobs (a shared build machine); 12 by default.
+    with ThreadPoolExecutor(max_workers=max(1, int(__import__("os").environ.get("S2_JOBS", "12")))) as pool:
         objects = list(pool.map(compile_unit, units()))
         jni, cli = pool.map(compile_unit, [(ROOT / "android/texconv/s2texconv_jni.cpp", STRICT),
                                            (ROOT / "android/texconv/s2texconv_cli.cpp", STRICT)])

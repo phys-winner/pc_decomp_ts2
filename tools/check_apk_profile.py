@@ -69,7 +69,7 @@ def check_package(base):
 
     def probe(out, package, ndk, api, abi="arm64"):
         assert Path(ndk).is_dir()
-        assert api == 29
+        assert api == 26   # the APK minSdkVersion (Android 8.0)
         out.mkdir(parents=True)
         library = out / 'libportprobe.so'
         library.write_bytes(b'probe')
@@ -187,6 +187,50 @@ def check_package(base):
         native.assert_not_called()
 
 
+def check_panvk_reference(base):
+    """PanVK comes from the shared folder (S2_PANVK_DIR, else ../launcher/drivers/panvk) when it has a
+    MANIFEST.json: library and NOTICE.txt from there, both pinned, and the manifest must name the pin."""
+    import hashlib, json
+    runtime, shared = base / 'pv-runtime', base / 'pv-shared'
+    (runtime / 'licenses').mkdir(parents=True)
+    shared.mkdir()
+    pins = {}
+    for component in apk.VULKAN_PINS:
+        pins[component] = {'runtime': {}, 'licenses': {}}
+    real = json.loads((ROOT / 'dependencies.json').read_text(encoding='utf-8'))
+    for component in apk.VULKAN_PINS:
+        for name in real[component]['runtime']:
+            data = f'{component} {name}'.encode()
+            (shared if component == 'panvk' else runtime).joinpath(name).write_bytes(data)
+            pins[component]['runtime'][name] = hashlib.sha256(data).hexdigest()
+    for name, (component, pinned) in apk.VULKAN_LICENSES.items():
+        data = f'{component} notice {name}'.encode()
+        (shared / pinned if component == 'panvk' else runtime / 'licenses' / name).write_bytes(data)
+        pins[component]['licenses'][pinned] = hashlib.sha256(data).hexdigest()
+    (base / 'dependencies.json').write_text(json.dumps(pins), encoding='utf-8')
+    panvk_name, panvk_hash = next(iter(pins['panvk']['runtime'].items()))
+    manifest = shared / 'MANIFEST.json'
+    manifest.write_text(json.dumps({'library': {'file': panvk_name, 'sha256': panvk_hash}}), encoding='utf-8')
+    with patch.object(apk, 'ROOT', base), patch.object(apk, 'VULKAN_RUNTIME', runtime), \
+            patch.dict(apk.os.environ, {'S2_PANVK_DIR': str(shared)}):
+        libraries, licenses = apk.vulkan_drivers()
+        assert (shared / panvk_name, panvk_name) in libraries, libraries
+        assert (shared / 'NOTICE.txt', 'PanVK-NOTICE.txt') in licenses, licenses
+        assert all(path.parent == runtime for path, name in libraries if name != panvk_name), libraries
+        manifest.write_text(json.dumps({'library': {'file': panvk_name, 'sha256': '0' * 64}}), encoding='utf-8')
+        try:
+            apk.vulkan_drivers()
+        except SystemExit as error:
+            assert 'MANIFEST.json' in str(error), error
+        else:
+            raise AssertionError('a manifest naming another PanVK build was accepted')
+    real_pin = real['panvk']['runtime']['libvulkan_panfrost.so']
+    shared_manifest = ROOT.parent / 'launcher/drivers/panvk/MANIFEST.json'
+    if shared_manifest.is_file():
+        assert json.loads(shared_manifest.read_text(encoding='utf-8'))['library']['sha256'] == real_pin, \
+            'dependencies.json pins another PanVK than launcher/drivers/panvk'
+
+
 def check_startup(base):
     source = (ROOT / 'android/host/android_main.c').read_text()
     assert 'extern void __llvm_profile_set_filename(const char *) __attribute__((weak));' in source
@@ -269,8 +313,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='sims2-apk-profile-') as directory:
         base = Path(directory)
         check_package(base)
+        (base / 'pv').mkdir()
+        check_panvk_reference(base / 'pv')
         check_startup(base)
-    print('APK profile: explicit/default packaging, canonical push name, missing-file guard and actual C startup PASS')
+    print('APK profile: explicit/default packaging, canonical push name, missing-file guard, shared PanVK reference '
+          'and actual C startup PASS')
 
 
 if __name__ == '__main__':

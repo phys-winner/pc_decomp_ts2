@@ -149,6 +149,40 @@ final class Install {
         return State.get(context, State.CHOICES, key(d, p) + ".mount", "");
     }
 
+    static File archiveIndex(Context context, Spec.Distribution d, Spec.Part p) {
+        return new File(State.folder(context), "mount-" + d.id + "-" + p.id + ".zmi");
+    }
+
+    static android.os.ParcelFileDescriptor openArchive(Context context, String source) throws IOException {
+        android.os.ParcelFileDescriptor fd = source.startsWith("content:")
+            ? context.getContentResolver().openFileDescriptor(android.net.Uri.parse(source), "r")
+            : android.os.ParcelFileDescriptor.open(new File(source), android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+        if (fd == null) throw new java.io.FileNotFoundException(source);
+        return fd;
+    }
+
+    static boolean archiveAvailable(Context context, Spec.Distribution d, Spec.Part p, String source) {
+        if (!archiveIndex(context, d, p).isFile()) return false;
+        try (android.os.ParcelFileDescriptor fd = openArchive(context, source)) {
+            return Storage.seekable(fd);
+        } catch (IOException | SecurityException e) {
+            android.util.Log.w("Launcher", "archive " + source + ": " + e);
+            return false;
+        }
+    }
+
+    static List<File> downloadArchives(File downloads, String prefix) {
+        if (prefix.isEmpty()) return java.util.Collections.emptyList();
+        String lowerPrefix = prefix.toLowerCase(Locale.ROOT);
+        File[] found = downloads.listFiles(file -> {
+            String name = file.getName().toLowerCase(Locale.ROOT);
+            return name.startsWith(lowerPrefix) && name.endsWith(".zip") && file.isFile() && file.canRead();
+        });
+        if (found == null) return java.util.Collections.emptyList();
+        java.util.Arrays.sort(found, java.util.Comparator.comparing(File::getName, String.CASE_INSENSITIVE_ORDER));
+        return java.util.Arrays.asList(found);
+    }
+
     static File textureCacheRoot(Context context, Spec spec, Spec.Distribution d, File game) {
         if (!spec.separateTextureCache) return game;
         File source = game;
@@ -173,7 +207,11 @@ final class Install {
     static boolean ready(Context context, Spec spec, Spec.Distribution d) {
         for (Spec.Part p : d.parts) {
             if (ambiguous(context, spec, d, p)) return false;
-            if (!mount(context, d, p).isEmpty() && new File(State.folder(context), "mount-" + d.id + "-" + p.id + ".zmi").isFile()) continue;
+            String source = mount(context, d, p);
+            if (!source.isEmpty()) {
+                if (!archiveAvailable(context, d, p, source)) return false;
+                continue;
+            }
             if (!present(p, folder(context, spec, d, p))) return false;
         }
         return true;
@@ -212,6 +250,39 @@ final class Install {
         List<Found> result = new ArrayList<>();
         for (Found found : discover(group, source)) result.add(new Found(choosing, original, found.folder));
         return result;
+    }
+
+    /** The other distributions' parts in a folder picked for one, as the games' own launchers took
+     *  them (Heroes V: one pick of the folder that holds the shared original + add-on folder and
+     *  Tribes of the East beside it): each folder group once, no fixed part (that needs an import),
+     *  and never a folder found for the chosen distribution or one that holds it too (The Void's
+     *  original needs a subset of its add-on's files), so one installation is never taken for
+     *  another distribution. The launcher takes only those whose distribution is not ready yet. */
+    static List<Found> others(List<Spec.Distribution> distributions, Spec.Distribution choosing, File source, List<Found> chosen) {
+        List<Found> result = new ArrayList<>();
+        HashSet<String> keys = new HashSet<>();
+        for (Spec.Part p : choosing.parts) keys.add(key(choosing, p));
+        for (Spec.Distribution d : distributions) {
+            if (d.id.equals(choosing.id)) continue;
+            boolean open = false;
+            for (Spec.Part p : d.parts) open |= !p.fixed && !keys.contains(key(d, p));
+            if (!open) continue;
+            for (Found f : discover(distributions, d, source))
+                if (!f.part.fixed && keys.add(key(f.distribution, f.part)) && !holds(choosing, chosen, f.folder)) result.add(f);
+        }
+        return result;
+    }
+
+    private static boolean holds(Spec.Distribution choosing, List<Found> chosen, File folder) {
+        for (Spec.Part p : choosing.parts) if (present(p, folder)) return true;
+        for (Found f : chosen) {
+            try {
+                if (f.folder.getCanonicalFile().equals(folder.getCanonicalFile())) return true;
+            } catch (IOException unreadable) {
+                if (f.folder.equals(folder)) return true;
+            }
+        }
+        return false;
     }
 
     static List<Found> discover(List<Spec.Distribution> distributions, File source) {

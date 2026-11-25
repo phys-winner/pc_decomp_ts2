@@ -517,11 +517,24 @@ void void_lift_trap(uint32_t address, const char *instruction)
         instruction, g_cur_func);
 }
 
+#include "../launcher/native/replacements/crash_marker.h"
+
 static struct sigaction previous_actions[SIGSYS + 1];
+/* The launcher's crash journal (PORT_CRASH_JOURNAL, set by Launch.attach): the signal number and the
+   first presented frame, which the launcher reads at its next start. Android before 11 has no
+   exit reasons, so this file is the only record of a native crash there. */
+static int crash_marker = -1;
+
+void void_crash_marker_present(void)
+{
+    static atomic_int marked;
+    if (!atomic_exchange(&marked, 1)) port_crash_marker_present(crash_marker);
+}
 
 static void on_signal(int signo, siginfo_t *info, void *context)
 {
     (void)context;
+    port_crash_marker_signal(crash_marker, signo);   /* one pwrite, before anything that can fault again */
     atomic_store_explicit(&log_in_signal, 1, memory_order_relaxed);
     uintptr_t fault = (uintptr_t)info->si_addr;
     char where[96] = "";
@@ -545,6 +558,7 @@ static void on_signal(int signo, siginfo_t *info, void *context)
 void void_install_fault_handlers(void)
 {
     static char alt[256 * 1024];
+    if (crash_marker < 0) crash_marker = port_crash_marker_open();
     stack_t ss = { .ss_sp = alt, .ss_size = sizeof alt, .ss_flags = 0 };
     sigaltstack(&ss, NULL);
     struct sigaction sa;

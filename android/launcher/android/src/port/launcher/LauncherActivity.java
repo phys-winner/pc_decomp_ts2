@@ -67,10 +67,27 @@ public final class LauncherActivity extends Activity {
     private boolean checking, touching;
     private int touchSequence;
     private final Set<Integer> refreshPending = new LinkedHashSet<>();
+    private static final class FileStatus {
+        final java.util.Set<Spec.Distribution> ready = new java.util.HashSet<>();
+        final java.util.Map<Spec.Part, List<String>> missing = new java.util.HashMap<>();
+        final Set<Spec.Part> unavailableArchives = new java.util.HashSet<>();
+        List<File> downloads = java.util.Collections.emptyList();
+        String conflict;
+    }
+    private FileStatus installed = new FileStatus();
+    private boolean scanningFiles, scanAgain;
+    private int pendingPickerRequest;
+    private Intent pendingPickerData;
+
     private boolean initializing = true, autoLaunchPending, playRequestedPending, finishAfterLaunch;
+    /** The HyperOS tip (hyperOsTip) is still to be offered by this window. */
+    private boolean hyperosPending;
+    /** The renderer failure offer (rendererFailureOffer) is on screen. */
+    private boolean rendererFailureShowing;
     private TextureBackend textures;
     private TextureBackend.Scan textureScan;
     private boolean textureScanning;
+    private Spec.Distribution texturePlay;
     private long textureEpoch;
     private String textureSource;
     private volatile String lastError = "";
@@ -91,18 +108,18 @@ public final class LauncherActivity extends Activity {
 
     /* An archive read and waiting for the player's decision (or a target folder). */
     private Thread archiveReader;
+    private ArchiveCheckDialog archiveCheck;
     private Zip pendingZip;
     private Uri pendingUri;
     private File pendingFile;
     private List<Install.ArchivePart> pendingPlan;
 
+    private LinearLayout gameActions;
     private LinearLayout main, side, permissions, distributions, files, renderer, options, texturesBox, space, update, about, work;
-    /** port.json "folders": the player's own folders (The Sims 2: mods), a card each. */
-    private LinearLayout foldersBox;
     private final Map<Integer, TextView> notes = new HashMap<>();
     private final Map<Integer, LinearLayout> notices = new HashMap<>();
     private TextView workTitle, workText, workStop;
-    private ProgressBar workBar, archiveProgress;
+    private ProgressBar workBar;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -115,8 +132,15 @@ public final class LauncherActivity extends Activity {
         if (selected == null) selected = spec.distributions.get(0);
         autoLaunchPending = state == null && Work.current == null;
         playRequestedPending = state == null && getIntent().getBooleanExtra(Launch.EXTRA_PLAY, false);
+        /* From the icon only: the game's own menu (Launch.openLauncher, also with play) shows the launcher. */
+        hyperosPending = state != null ? state.getBoolean("hyperosPending")
+            : !getIntent().getBooleanExtra(EXTRA_SHOW, false) && !getIntent().getBooleanExtra(Launch.EXTRA_PLAY, false)
+                && HyperOs.due(this, spec);
         ui = new Ui(this);
+        if (state == null) { filesExpanded = true; promptedFiles = selected.id; }
         if (state != null) {
+            pendingPickerRequest = state.getInt("pendingPickerRequest");
+            pendingPickerData = state.getParcelable("pendingPickerData");
             filesExpanded = state.getBoolean("filesExpanded");
             promptedFiles = state.getString("promptedFiles");
             texturesExpanded = state.getBoolean("texturesExpanded");
@@ -143,32 +167,45 @@ public final class LauncherActivity extends Activity {
 
     private void initialize(boolean useMigratedSelection) {
         initializing = true;
+        if (scanningFiles) scanAgain = true;
         note(Texts.GAME_FILES, Texts.t(this, Texts.CHECKING), false);
+        refresh(ALL_SECTIONS);
         Spec.Distribution initial = selected;
+        FileStatus files = new FileStatus();
         background(() -> {
             Launch.migrate(this, hooks);
             boolean interrupted = !Work.busy() && recover();
             if (!Work.busy()) Install.ensureUserFolders(this, spec);
+            for (Spec.Folder f : spec.folders) {
+                File folder = spec.resolve(this, f.path);
+                if (!folder.isDirectory() && !folder.mkdirs()) android.util.Log.i("Launcher", "folder not made yet: " + folder);
+            }
+            inspectFiles(files);
             return interrupted;
         }, interrupted -> {
+            installed = files;
             initializing = false;
             if (selected == initial && useMigratedSelection && !playRequestedPending) {
                 Spec.Distribution migrated = spec.distribution(State.get(this, State.CHOICES, "last", ""));
                 if (migrated != null) selected = migrated;
             }
             note(Texts.GAME_FILES, interrupted ? Texts.t(this, Texts.INTERRUPTED) : null, false);
-            if (!launchWhenReady()) refresh();
+            if (hasWindowFocus() && ready(selected)) checkRenderer();
+            if (resumePickedFile() || !launchWhenReady()) refresh(ALL_SECTIONS);
         }, failure -> {
             initializing = false;
+            installed = new FileStatus();
             autoLaunchPending = playRequestedPending = false;
             note(Texts.GAME_FILES, Texts.failure(this, Failure.of(failure)), true);
-            refresh();
+            resumePickedFile();
+            refresh(ALL_SECTIONS);
         });
     }
 
     @Override public void onUserInteraction() {
         super.onUserInteraction();
         autoLaunchPending = playRequestedPending = false;
+        texturePlay = null;
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
@@ -178,7 +215,10 @@ public final class LauncherActivity extends Activity {
             return super.dispatchTouchEvent(event);
         } finally {
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                // ACTION_UP posts the click. Keep its view attached until that click runs.
+                /* A view posts its click after ACTION_UP, and a view leaving the window cancels that
+                   post.  Refreshing here rebuilt the Play button under the finger: the tap and its
+                   animation were lost whenever a refresh (the GPU check, a finished task) had waited
+                   for the touch.  The touch ends after the click has run; a newer DOWN keeps it. */
                 final int sequence = touchSequence;
                 handler.post(() -> {
                     if (sequence != touchSequence) return;
@@ -192,7 +232,9 @@ public final class LauncherActivity extends Activity {
     }
 
     private boolean launchWhenReady() {
-        if (initializing || (gpu == null && needsGpu(selected))) return false;
+        if (initializing || scanningFiles || (gpu == null && needsGpu(selected))) return false;
+        if (rendererFailureOffer()) return false;
+        if (hyperOsTip()) return false;
         boolean automatic = autoLaunchPending;
         autoLaunchPending = false;
         if (automatic && autoLaunch()) return true;
@@ -205,14 +247,17 @@ public final class LauncherActivity extends Activity {
 
     private boolean idle() { return !finishAfterLaunch && !initializing && busy == null && !Work.busy(); }
 
+    private boolean playReady() { return !finishAfterLaunch && !initializing && !scanningFiles && busy == null && !Work.blocksPlay(); }
+
     private boolean needsGpu(Spec.Distribution d) {
-        return d.renderers.size() > 1 || (d.renderers.size() == 1 && spec.mode(d.renderers.get(0)).vulkanKind());
+        return d.renderers.size() > 1 || !spec.textureBackend.isEmpty()
+            || (d.renderers.size() == 1 && (spec.mode(d.renderers.get(0)).vulkanKind() || spec.mode(d.renderers.get(0)).gles > 0));
     }
 
     /** The game asked for this distribution (Launch.openLauncher with play: its own "switch game"
      *  menu): it starts as its Play button would start it, or the launcher shows what it lacks. */
     private void playRequested() {
-        if (isFinishing() || isDestroyed() || busy != null || Work.busy()) return;
+        if (isFinishing() || isDestroyed() || !playReady()) return;
         if (Launch.running(this, selected)) {
             Launch.resume(this, selected);
             finish();
@@ -226,14 +271,18 @@ public final class LauncherActivity extends Activity {
         @Override public void run() {
             boolean running = Probe.running(LauncherActivity.this);
             if (running) handler.postDelayed(this, PROBE_POLL_MS);
-            else refresh(Texts.RENDERER, Texts.TEXTURES, Texts.PLAY);
+            else {
+                refresh(Texts.RENDERER, Texts.TEXTURES, Texts.PLAY);
+                /* The renderer failure offer waits for the check: it names the next available renderer. */
+                if (!initializing && !finishAfterLaunch) rendererFailureOffer();
+            }
         }
     };
 
     /** The icon goes straight into the last game when this build's last start of it reached its
      *  first frame (port.json "autoLaunch"); a start that crashed opens the launcher instead. */
     private boolean autoLaunch() {
-        if (!spec.autoLaunch || getIntent().getBooleanExtra(EXTRA_SHOW, false) || Work.busy()) return false;
+        if (!spec.autoLaunch || getIntent().getBooleanExtra(EXTRA_SHOW, false) || Work.blocksPlay()) return false;
         if (installationConflict() != null) return false;
         if (Launch.running(this, selected)) {
             /* The game runs (in a task of its own): back to it, no new start record, which would
@@ -243,22 +292,19 @@ public final class LauncherActivity extends Activity {
             return true;
         }
         java.util.Properties launch = State.read(this, State.launch(selected.id));
-        if (!"1".equals(launch.getProperty("reached")) || !Launch.build(this).equals(launch.getProperty("build"))) return false;
+        if (!Launch.reachedFrame(this, selected, launch) || !Launch.build(this).equals(launch.getProperty("build"))) return false;
         if (!ready(selected) || (needsAllFiles() && !Storage.allFiles(this))) return false;
-        try {
-            Launch.start(this, selected, effectiveRenderer(selected), hooks);
-        } catch (ActivityNotFoundException e) {
-            return false;
-        }
-        finishAfterLaunch = true;
-        return true;
+        if (Launch.lastExit(this, selected) != null) return false;
+        if (Probe.running(this) && probeDecides(selected)) { play(selected); return true; }
+        if (offerTextures(selected) || offerModTextures(selected)) { refresh(); return true; }
+        return startEdition(selected);
     }
 
     private String effectiveRenderer(Spec.Distribution d) {
         if (d.renderers.isEmpty()) return null;
         if (!needsGpu(d)) return d.renderers.get(0);
         if (gpu == null) return null;
-        List<Renderers.Status> statuses = Renderers.evaluate(this, spec, d, gpu, convertedTextures());
+        List<Renderers.Status> statuses = rendererStatuses(d);
         String explicit = Renderers.explicitChoice(this, spec, d, hooks);
         return Renderers.effective(spec.defaultMode, statuses, explicit != null ? explicit : spec.defaultMode, explicit != null);
     }
@@ -275,19 +321,65 @@ public final class LauncherActivity extends Activity {
         }
     }
 
-    /** Everything the distribution's game checks before it starts is in place. */
-    private boolean ready(Spec.Distribution d) {
-        if (!Install.ready(this, spec, d)) return false;
-        for (Spec.Part p : d.parts) if (!extraMissing(d, p).isEmpty()) return false;
-        return true;
+    private boolean ready(Spec.Distribution d) { return installed.ready.contains(d); }
+
+    private List<String> missing(Spec.Distribution d, Spec.Part p) {
+        return installed.missing.getOrDefault(p, java.util.Collections.emptyList());
     }
 
-    /** What the part lacks: port.json's required paths, then the game's own (PortHooks.missing). */
-    private List<String> missing(Spec.Distribution d, Spec.Part p) {
-        List<String> missing = new ArrayList<>(Install.missing(p, Install.folder(this, spec, d, p)));
-        if (Install.ambiguous(this, spec, d, p)) missing.add(0, Texts.t(this, Texts.GROUP_PICK) + " " + Install.legacyFolders(this, spec, p));
-        if (missing.isEmpty()) missing.addAll(extraMissing(d, p));
-        return missing;
+    /** Folder walks, mounted archive indices and game-specific language checks belong on the worker. */
+    private void inspectFiles(FileStatus result) {
+        for (Spec.Distribution d : spec.distributions) {
+            boolean complete = true;
+            for (Spec.Part p : d.parts) {
+                File folder = Install.folder(this, spec, d, p);
+                String archive = Install.mount(this, d, p);
+                boolean mounted = !archive.isEmpty();
+                if (mounted && !Install.archiveAvailable(this, d, p, archive)) {
+                    result.unavailableArchives.add(p);
+                    complete = false;
+                }
+                List<String> absent = mounted ? new ArrayList<>() : new ArrayList<>(Install.missing(p, folder));
+                if (Install.ambiguous(this, spec, d, p))
+                    absent.add(0, Texts.t(this, Texts.GROUP_PICK) + " " + Install.legacyFolders(this, spec, p));
+                boolean directory = folder.isDirectory();
+                if (!mounted && absent.isEmpty() && directory) absent.addAll(extraMissing(d, p));
+                result.missing.put(p, absent);
+                complete &= absent.isEmpty() && (mounted || directory);
+                if (result.conflict == null && directory)
+                    result.conflict = hooks.installationProblem(this, d.id, p.id, folder);
+            }
+            if (complete) result.ready.add(d);
+        }
+        if (result.ready.size() < spec.distributions.size())
+            result.downloads = Install.downloadArchives(downloadsFolder(), spec.downloadArchivePrefix);
+    }
+
+    private void rescanFiles() {
+        if (initializing) return;
+        if (scanningFiles) { scanAgain = true; return; }
+        scanningFiles = true;
+        FileStatus next = new FileStatus();
+        background(() -> { inspectFiles(next); return next; }, result -> {
+            scanningFiles = false;
+            if (initializing) { scanAgain = false; return; }
+            if (scanAgain) { scanAgain = false; rescanFiles(); return; }
+            boolean unchanged = result.ready.equals(installed.ready) && result.missing.equals(installed.missing)
+                && result.unavailableArchives.equals(installed.unavailableArchives) && result.downloads.equals(installed.downloads)
+                && java.util.Objects.equals(result.conflict, installed.conflict);
+            boolean found = !ready(selected) && result.ready.contains(selected);
+            installed = result;
+            if (found && hasWindowFocus()) checkRenderer();
+            if (!launchWhenReady()) refresh(unchanged ? new int[] {Texts.PLAY} : ALL_SECTIONS);
+        }, error -> {
+            scanningFiles = false;
+            if (initializing) { scanAgain = false; return; }
+            if (scanAgain) { scanAgain = false; rescanFiles(); return; }
+            installed = new FileStatus();
+            autoLaunchPending = playRequestedPending = false;
+            note(Texts.GAME_FILES, Texts.failure(this, Failure.of(error)), true);
+            refresh(ALL_SECTIONS);
+        });
     }
 
     @Override protected void onResume() {
@@ -295,6 +387,7 @@ public final class LauncherActivity extends Activity {
         finishAfterLaunch = false;
         if (ui == null) return;
         visible = true;
+        if (layoutWide != ui.wide()) build();
         if (!initializing && Launch.migrationPending() && (!spec.allFilesAccess || Storage.allFiles(this)))
             initialize(true);
         else refresh();
@@ -304,9 +397,20 @@ public final class LauncherActivity extends Activity {
         if (Work.current != null) { handler.removeCallbacks(watcher); handler.post(watcher); }
     }
 
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        if (ui != null && layoutWide != ui.wide()) {
+            build();
+            refresh();
+        }
+    }
+
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
         if (focused && ui != null) checkRenderer();
+        /* The HyperOS tip and the renderer failure offer wait for this window to have the screen to itself. */
+        if (focused && ui != null && hyperosPending && !finishAfterLaunch) launchWhenReady();
+        else if (focused && ui != null && !finishAfterLaunch && !initializing && !scanningFiles) rendererFailureOffer();
     }
 
     @Override protected void onPause() {
@@ -324,6 +428,8 @@ public final class LauncherActivity extends Activity {
 
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
+        state.putInt("pendingPickerRequest", pendingPickerRequest);
+        state.putParcelable("pendingPickerData", pendingPickerData);
         state.putBoolean("filesExpanded", filesExpanded);
         state.putString("promptedFiles", promptedFiles);
         state.putBoolean("texturesExpanded", texturesExpanded);
@@ -332,9 +438,11 @@ public final class LauncherActivity extends Activity {
         state.putBoolean("folderPermissionPending", folderPermissionPending);
         state.putString("gogSetup", gogSetup);
         state.putString("gogDistribution", gogDistribution);
+        state.putBoolean("hyperosPending", hyperosPending);
     }
 
     @Override protected void onDestroy() {
+        if (archiveCheck != null) archiveCheck.close();
         if (archiveReader != null) archiveReader.interrupt();
         handler.removeCallbacks(watcher);
         handler.removeCallbacks(probeWatch);
@@ -347,7 +455,10 @@ public final class LauncherActivity extends Activity {
 
     /* ---------------------------------------------------------------- UI */
 
+    private boolean layoutWide;
+
     private void build() {
+        layoutWide = ui.wide();
         FrameLayout root = new FrameLayout(this);
         root.setBackground(ui.backdrop());
         ScrollView scroll = new ScrollView(this);
@@ -363,10 +474,10 @@ public final class LauncherActivity extends Activity {
         page.setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(24));
         page.addView(header());
         LinearLayout columns = new LinearLayout(this);
-        columns.setOrientation(ui.wide() ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        columns.setOrientation(layoutWide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         main = column();
-        side = ui.wide() ? column() : main;
-        if (ui.wide()) {
+        side = layoutWide ? column() : main;
+        if (layoutWide) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
             columns.addView(main, lp);
             lp = new LinearLayout.LayoutParams(0, -2, 1);
@@ -389,16 +500,14 @@ public final class LauncherActivity extends Activity {
         work.addView(ui.buttons(workStop));
         work.setVisibility(View.GONE);
         distributions = holder(main);
-        files = holder(main);
-        foldersBox = holder(main);
-        archiveProgress = ui.progress();
-        archiveProgress.setLayoutParams(new LinearLayout.LayoutParams(-1, ui.dp(8)));
-        archiveProgress.setMax(100);
-        archiveProgress.setVisibility(View.GONE);
+        gameActions = holder(main);
+        hooks.addLauncherActions(this, gameActions);
+        gameActions.setVisibility(View.GONE);
         renderer = holder(side);
-        options = holder(side);
         texturesBox = holder(side);
+        options = holder(side);
         space = holder(side);
+        files = holder(side);
         about = holder(side);
         scroll.addView(page, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL));
         root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
@@ -445,6 +554,7 @@ public final class LauncherActivity extends Activity {
     }
 
     private String textureState() {
+        if (spec.textureBackend.isEmpty()) return "";
         if (textureScan == null || textureScanning || !textureSourceKey().equals(textureSource)) return Texts.t(this, Texts.CHECKING);
         if (textureScan.failure != null) return Texts.t(this, Texts.TEX_CHECK_FAILED);
         return textureScan.converted == 0 ? Texts.t(this, Texts.TEX_ORIGINALS)
@@ -457,24 +567,30 @@ public final class LauncherActivity extends Activity {
         boolean expanded = title == Texts.GAME_FILES ? filesExpanded : texturesExpanded;
         boolean folded = title == Texts.GAME_FILES || title == Texts.TEXTURES;
         if (folded) {
-            Boolean dxt = title == Texts.TEXTURES ? dxtSupport() : null;
-            String support = title != Texts.TEXTURES ? null : Texts.t(this,
-                dxt == null ? Texts.TEX_DXT_UNKNOWN : dxt ? Texts.TEX_DXT_YES : Texts.TEX_DXT_NO);
+            List<String> required = originalFormats();
+            Long caps = title == Texts.TEXTURES ? Launch.textureCaps(this, textureMode(), gpu) : null;
+            Boolean supported = TextureFormats.supports(caps, required);
+            /* Every format the game needs is supported: one short line in green instead of the list. */
+            String support = title != Texts.TEXTURES ? null : required.isEmpty() ? Texts.t(this, Texts.TEX_UNKNOWN_SOURCE)
+                : Boolean.TRUE.equals(supported) ? Texts.t(this, Texts.TEX_ALL_SUPPORTED)
+                : Texts.fmt(this, supported == null ? Texts.TEX_UNCHECKED : Texts.TEX_MISSING,
+                    String.join(", ", Boolean.FALSE.equals(supported) ? TextureFormats.missing(caps, required) : required));
+            Spec.Mode mode = title == Texts.TEXTURES ? textureMode() : null;
+            if (mode != null) support = Texts.t(this, Texts.SELECTED_RENDERER) + ": " + rendererTitle(mode) + "\n" + support;
             card.addView(ui.foldHeading(Texts.t(this, title), support,
-                dxt == null ? ui.muted : dxt ? ui.good : ui.error, expanded, on -> {
+                supported == null ? ui.muted : supported ? ui.good : ui.error, expanded, on -> {
                     if (title == Texts.GAME_FILES) filesExpanded = on;
                     else texturesExpanded = on;
                     refresh(title);
                 }));
         } else card.addView(ui.heading(Texts.t(this, title)));
-        if (title == Texts.TEXTURES) card.addView(ui.label(textureState(), 13, ui.muted));
+        if (title == Texts.TEXTURES && !spec.textureBackend.isEmpty()) card.addView(ui.label(textureState(), 13, ui.muted));
         LinearLayout body = column();
         Work.Job job = Work.current;
         boolean working = job != null && !job.finished && job.section == title;
         body.setVisibility((!folded || expanded) && !working && !(busy != null && busySection == title) ? View.VISIBLE : View.GONE);
         card.addView(body);
         attach(card, notice(title));
-        if (title == Texts.GAME_FILES) attach(card, archiveProgress);
         if (working) {
             attach(card, work);
             work.setVisibility(View.VISIBLE);
@@ -482,15 +598,13 @@ public final class LauncherActivity extends Activity {
         return body;
     }
 
-    private Boolean dxtSupport() {
-        if (gpu == null) return null;
-        Spec.Mode mode = spec.mode(effectiveRenderer(selected));
-        if (mode != null && mode.vulkanKind()) {
-            Map<String, String> report = Probe.report(this);
-            String bc = report == null ? null : report.get(("turnip".equals(mode.kind) || "panvk".equals(mode.kind) ? mode.kind : "stock") + ".bc");
-            return bc == null ? null : "111".equals(bc);
-        }
-        return gpu.probed ? gpu.s3tc : null;
+    private Spec.Mode textureMode() {
+        return spec.mode(effectiveRenderer(selected));
+    }
+
+    private List<String> originalFormats() {
+        return textureScan != null && textureScan.formats != null && textureSourceKey().equals(textureSource)
+            ? textureScan.formats : spec.formats(selected);
     }
 
     private View header() {
@@ -520,9 +634,13 @@ public final class LauncherActivity extends Activity {
         return line.toString();
     }
 
+    private static final int[] ALL_SECTIONS = {Texts.PERM_FILES, Texts.PLAY, Texts.GAME_FILES, Texts.RENDERER,
+        Texts.TEXTURES, Texts.OPTIONS, Texts.SPACE, Texts.UPDATE_AVAILABLE, Texts.ABOUT};
+    private boolean gameSettingsVisible;
+
     private void refresh() {
-        refresh(Texts.PERM_FILES, Texts.PLAY, Texts.GAME_FILES, Texts.RENDERER, Texts.OPTIONS,
-            Texts.TEXTURES, Texts.SPACE, Texts.UPDATE_AVAILABLE, Texts.ABOUT);
+        rescanFiles();
+        refresh(ALL_SECTIONS);
     }
 
     private LinearLayout group(int section) {
@@ -545,12 +663,23 @@ public final class LauncherActivity extends Activity {
             for (int section : sections) refreshPending.add(section);
             return;
         }
+        for (int section : sections) if (section == Texts.GAME_FILES) {
+            boolean found = !initializing && ready(selected);
+            gameActions.setVisibility(found ? View.VISIBLE : View.GONE);
+            if (found != gameSettingsVisible) { gameSettingsVisible = found; sections = ALL_SECTIONS; }
+            break;
+        }
         boolean idle = idle();
         for (int section : sections) {
+            if (!gameSettingsVisible && (section == Texts.RENDERER || section == Texts.TEXTURES
+                    || section == Texts.OPTIONS || section == Texts.SPACE)) {
+                group(section).removeAllViews();
+                continue;
+            }
             View focused = group(section).findFocus();
             Object tag = focused != null ? focused.getTag() : null;
             switch (section) {
-            case Texts.PERM_FILES: refreshPermissions(); refreshFolders(); break;
+            case Texts.PERM_FILES: refreshPermissions(); break;
             case Texts.PLAY: refreshDistributions(idle); break;
             case Texts.GAME_FILES: {
                 refreshFiles(idle);
@@ -559,7 +688,7 @@ public final class LauncherActivity extends Activity {
                 break;
             }
             case Texts.RENDERER: refreshRenderer(); break;
-            case Texts.OPTIONS: refreshOptions(); refreshFolders(); break;
+            case Texts.OPTIONS: refreshOptions(); break;
             case Texts.TEXTURES: refreshTextures(idle); break;
             case Texts.SPACE: refreshSpace(idle); break;
             case Texts.UPDATE_AVAILABLE: refreshUpdate(); break;
@@ -573,15 +702,7 @@ public final class LauncherActivity extends Activity {
     }
 
     /** Check every configured distribution before an automatic start can hide a conflict. */
-    private String installationConflict() {
-        for (Spec.Distribution d : spec.distributions) for (Spec.Part p : d.parts) {
-            File folder = Install.folder(this, spec, d, p);
-            if (!folder.isDirectory()) continue;
-            String problem = hooks.installationProblem(this, d.id, p.id, folder);
-            if (problem != null) return problem;
-        }
-        return null;
-    }
+    private String installationConflict() { return installed.conflict; }
 
     private void note(String text, boolean error) {
         note(Texts.GAME_FILES, text, error);
@@ -605,9 +726,11 @@ public final class LauncherActivity extends Activity {
         List<TextView> actions = new ArrayList<>();
         if (section == Texts.GAME_FILES) {
             actions.add(recoveryButton(Texts.FOLDER, () -> pickFolder(selected)));
-            actions.add(recoveryButton(Texts.OTHER_ARCHIVE, () -> pick(Pickers.ZIP, ASK_ZIP, null)));
+            actions.add(recoveryButton(Texts.OTHER_ARCHIVE, this::pickArchive));
         } else if (section == Texts.TEXTURES) {
             actions.add(recoveryButton(Texts.RETRY_CHECK, this::rescanTextures));
+            if (text.startsWith(Texts.t(this, Texts.ARCHIVE_UNAVAILABLE)))
+                actions.add(recoveryButton(Texts.OTHER_ARCHIVE, this::pickArchive));
         } else if (section == Texts.SPACE) {
             actions.add(recoveryButton(Texts.RETRY_CHECK, this::scanCleanup));
         } else if (section == Texts.ABOUT) {
@@ -640,8 +763,8 @@ public final class LauncherActivity extends Activity {
     private void setBusy(int section, String what) {
         busySection = section;
         busy = what;
-        if (section == Texts.GAME_FILES) archiveProgress.setVisibility(View.GONE);
         note(section, what, false);
+        if (what == null && section == Texts.GAME_FILES) rescanFiles();
         refresh(Texts.PLAY, Texts.GAME_FILES, Texts.TEXTURES, Texts.SPACE);
         if (section == Texts.RENDERER) refresh(Texts.RENDERER);
         if (section == Texts.ABOUT) refresh(Texts.ABOUT);
@@ -675,24 +798,21 @@ public final class LauncherActivity extends Activity {
 
     /* ------------------------------------------------------- permissions */
 
-    private boolean needsAllFiles() {
+    private boolean needsAllFiles() { return needsAllFiles(selected); }
+
+    private boolean needsAllFiles(Spec.Distribution distribution) {
         if (!spec.allFilesAccess) return false;
-        for (Spec.Distribution d : spec.distributions)
-            for (Spec.Part p : d.parts) if (!Storage.own(this, Install.folder(this, spec, d, p))) return true;
+        for (Spec.Part p : distribution.parts) {
+            String archive = Install.mount(this, distribution, p);
+            if (archive.startsWith("content:")) continue;
+            File source = archive.isEmpty() ? Install.folder(this, spec, distribution, p) : new File(archive);
+            if (!Storage.own(this, source)) return true;
+        }
         return false;
     }
 
     private void refreshPermissions() {
         permissions.removeAllViews();
-        if (!spec.storage.isEmpty() && Storage.allFiles(this)) {
-            File root = spec.storageRoot();
-            try {
-                if (!root.isDirectory() && !root.mkdirs()) throw new IOException("Cannot create " + root);
-                new File(root, ".nomedia").createNewFile();
-            } catch (IOException | SecurityException e) {
-                android.util.Log.w(spec.logTag, "Cannot create .nomedia in " + root, e);
-            }
-        }
         if (needsAllFiles() && !Storage.allFiles(this)) {
             LinearLayout card = ui.card(permissions);
             card.addView(ui.label(Texts.t(this, Texts.PERM_FILES), 15, ui.text));
@@ -755,20 +875,38 @@ public final class LauncherActivity extends Activity {
             if (d == selected) attach(card, notice(Texts.PLAY));
             /* By the package manager: loading the game's class here would load its native library. */
             boolean present = Launch.present(this, d);
-            boolean access = !needsAllFiles() || Storage.allFiles(this);
+            boolean access = !needsAllFiles(d) || Storage.allFiles(this);
             boolean ready = !initializing && present && access && ready(d);
             boolean running = Launch.running(this, d);
+            boolean chooseFiles = d == selected && present && !ready(d) && !running && !initializing && !scanningFiles
+                && !spec.downloadArchivePrefix.isEmpty();
             String status;
             if (!present) status = Texts.t(this, Texts.NOT_IN_BUILD);
-            else if (initializing || (gpu == null && needsGpu(d))) status = Texts.t(this, Texts.CHECKING);
+            else if (initializing || scanningFiles || (gpu == null && needsGpu(d))) status = Texts.t(this, Texts.CHECKING);
             else if (ready) status = Texts.t(this, Texts.READY);
+            else if (d.parts.stream().anyMatch(installed.unavailableArchives::contains))
+                status = Texts.t(this, Texts.ARCHIVE_UNAVAILABLE);
+            else if (chooseFiles) status = Texts.t(this, Texts.CHOOSE_GAME_FILES);
             else if (!access) status = Texts.t(this, Texts.NEEDS_FILES_ACCESS);
             else status = Texts.fmt(this, Texts.MISSING, missingSummary(d)) + "\n" + Texts.t(this, Texts.CHOOSE_GAME_FILES);
             card.addView(ui.label(status, 13, ready ? ui.good : ui.muted));
+            if (chooseFiles) addGameDataActions(card, d);
             String refused = running ? null : Launch.refusal(this, d);
             String failed = running ? null : Renderers.failed(this, d);
+            /* The game said its renderer failed: within the rules the offer (rendererFailureOffer) replaces the
+               crash report; outside them (a device loss after the window) lastExit names it as a crash. */
+            RendererFailure rendererFailure = running ? null : RendererFailure.last(this, spec, d);
             if (refused != null) {
                 card.addView(ui.label(Texts.fmt(this, Texts.REFUSED, refused), 13, ui.error));
+                if ("1".equals(State.get(this, State.launch(d.id), "storageFailure", "")))
+                    card.addView(ui.buttons(recoveryButton(Texts.STORAGE_SETTINGS, () -> {
+                        if (Build.VERSION.SDK_INT >= 30) Storage.requestAllFiles(this, ASK_PERMISSION);
+                        else Storage.appSettings(this);
+                    })));
+            } else if (rendererFailure != null && rendererFailure.inRules) {
+                Spec.Mode mode = spec.mode(rendererFailure.renderer);
+                card.addView(ui.label(Texts.fmt(this, Texts.RF_NOTE, mode != null ? rendererTitle(mode) : rendererFailure.renderer,
+                    rendererFailure.reason.isEmpty() ? rendererFailure.kind : rendererFailure.reason), 13, ui.error));
             } else if (failed != null) {
                 String exit = Launch.lastExit(this, d);
                 String because = exit != null ? Texts.fmt(this, Texts.LAST_EXIT, exit) : "";
@@ -777,13 +915,18 @@ public final class LauncherActivity extends Activity {
                     ? Texts.fmt(this, Texts.N_FAILED_DEFAULT, because)
                     : Texts.fmt(this, Texts.N_FAILED, mode != null ? mode.title : failed, because,
                         fallback != null ? fallback.title : spec.defaultMode), 13, ui.error));
+            } else if (!running) {
+                String exit = Launch.lastExit(this, d);
+                if (exit != null) card.addView(ui.label(Texts.t(this, Texts.LAST_CRASH) + " · " + exit, 13, ui.error));
             }
-            TextView play = ui.button(Texts.t(this, running ? Texts.RETURN : Texts.PLAY), Ui.PRIMARY, d.theme,
-                () -> { if (running && !initializing) Launch.resume(this, d); else play(d); });
-            card.addView(ui.buttons(play));
-            Ui.enable(play, (initializing && present && access && !finishAfterLaunch && busy == null && !Work.busy()) ||
-                (idle && (ready || running)));
-            if (ready || running) ui.attention(play, true);
+            if (!chooseFiles) {
+                TextView play = ui.button(Texts.t(this, running ? Texts.RETURN : Texts.PLAY), Ui.PRIMARY, d.theme,
+                    () -> { if (running && !initializing) Launch.resume(this, d); else play(d); });
+                card.addView(ui.buttons(play));
+                Ui.enable(play, ((initializing || scanningFiles) && present && access && busy == null && !Work.blocksPlay()) ||
+                    (playReady() && (ready || running) && (running || gpu != null || !needsGpu(d))));
+                if (ready || running) ui.attention(play, true);
+            }
             if (idle && spec.distributions.size() > 1) card.setOnClickListener(v -> {
                 if (selected != d) {
                     note(Texts.PLAY, null, false);
@@ -791,6 +934,7 @@ public final class LauncherActivity extends Activity {
                     note(Texts.TEXTURES, null, false);
                 }
                 selected = d;
+                if (ready(d)) checkRenderer();
                 refresh(Texts.PLAY, Texts.GAME_FILES, Texts.RENDERER, Texts.OPTIONS, Texts.TEXTURES, Texts.SPACE);
             });
         }
@@ -809,14 +953,17 @@ public final class LauncherActivity extends Activity {
     }
 
     private void play(Spec.Distribution d) {
-        if ((initializing || (gpu == null && needsGpu(d))) && !finishAfterLaunch && busy == null && !Work.busy()) {
+        if ((initializing || scanningFiles) && busy == null && !Work.blocksPlay()) {
             selected = d;
             autoLaunchPending = false;
             playRequestedPending = true;
-            if (!initializing) note(Texts.PLAY, Texts.t(this, Texts.R_CHECKING), false);
             return;
         }
-        if (!idle()) return;
+        if (!playReady()) return;
+        if (gpu == null && needsGpu(d)) {
+            note(Texts.PLAY, Texts.t(this, Texts.R_CHECKING), false);
+            return;
+        }
         if (selected != d) {
             note(Texts.PLAY, null, false);
             selected = d;
@@ -824,23 +971,21 @@ public final class LauncherActivity extends Activity {
             refresh(Texts.PLAY, Texts.GAME_FILES, Texts.RENDERER, Texts.OPTIONS, Texts.TEXTURES, Texts.SPACE);
         }
         if (needsAllFiles() && !Storage.allFiles(this)) { Storage.requestAllFiles(this, ASK_PERMISSION); return; }
+        if (!ready(d)) return;
         if (spec.localNetwork && unasked(Storage.LOCAL_NETWORK, "asked.lan")) { explainLan(d); return; }
+        Spec.Option offer = offerDue(d);
+        if (offer != null) { offerOption(d, offer); return; }
         if (Probe.running(this) && probeDecides(d)) {
             /* A few seconds at most: the driver check decides whether the chosen DXVK mode runs. */
             setBusy(Texts.PLAY, Texts.t(this, Texts.R_CHECKING));
             handler.postDelayed(() -> { if (!isFinishing()) { setBusy(null); play(d); } }, PROBE_POLL_MS);
             return;
         }
-        try {
-            if (offerBeforeStart(d)) return;
-            Launch.start(this, d, effectiveRenderer(d), hooks);
-            finishAfterLaunch = true;
-        } catch (ActivityNotFoundException e) {
-            note(Texts.PLAY, Texts.t(this, Texts.NOT_IN_BUILD), true);
-        }
+        if (offerBeforeStart(d)) return;
+        if (!offerTextures(d) && !offerModTextures(d)) startEdition(d);
     }
 
-    /** The game's one-time question, after every other gate and before the activity starts.
+    /** The game's one-time question, after every other gate and before the texture offer.
      *  True: a dialog is up, or the answer could not be saved. */
     private boolean offerBeforeStart(Spec.Distribution d) {
         String[] text;
@@ -863,8 +1008,8 @@ public final class LauncherActivity extends Activity {
         startOfferShowing = true;
         if (extra != null && extra.length == 5) showEtc2Offer(d, extra, text[3]);
         else ui.show(ui.dialog().setTitle(text[0]).setMessage(text[1])
-            .setPositiveButton(text[2], (dlg, w) -> answerStartOffer(d, true, false))
-            .setNegativeButton(text[3], (dlg, w) -> answerStartOffer(d, false, false))
+            .setPositiveButton(text[2], (dlg, w) -> answerStartOffer(d, true, false, false))
+            .setNegativeButton(text[3], (dlg, w) -> answerStartOffer(d, false, false, false))
             .setOnCancelListener(dlg -> startOfferShowing = false));
         return true;
     }
@@ -877,17 +1022,21 @@ public final class LauncherActivity extends Activity {
         box.addView(ui.toggle(extra[3], null, true, on -> graphics[0] = on));
         box.addView(ui.toggle(extra[4], null, true, on -> textures[0] = on));
         ui.show(ui.dialog().setTitle(extra[0]).setMessage(extra[1]).setView(box)
-            .setPositiveButton(extra[2], (dlg, w) -> answerStartOffer(d, graphics[0], textures[0]))
-            .setNegativeButton(decline, (dlg, w) -> answerStartOffer(d, false, false))
+            .setPositiveButton(extra[2], (dlg, w) -> answerStartOffer(d, graphics[0], textures[0], true))
+            .setNegativeButton(decline, (dlg, w) -> answerStartOffer(d, false, false, true))
             .setOnCancelListener(dlg -> startOfferShowing = false));
     }
 
-    /** Probed GLES3 with ETC2, DXT/BC known missing, converter in the APK, and no cache yet. */
+    /** Probed formats, ETC2 supported, DXT/BC known missing, converter in the APK, and no cache yet.
+     *  A missing scan still offers. No caps report keeps the plain graphics question. */
     private boolean etc2OfferAvailable() {
-        if (gpu == null || !ensureTextures()) return false;
-        boolean scanFinished = textureScan != null;
-        boolean already = scanFinished && textureScan.converted != 0;
-        Boolean dxt = dxtSupport();
+        Spec.Mode mode = textureMode();
+        if (mode == null || textureBackend() == null) return false;
+        Long caps = Launch.textureCaps(this, mode, gpu);
+        if (caps == null) return false;
+        boolean etc2 = Boolean.TRUE.equals(TextureFormats.supports(caps, spec.etc2Formats));
+        boolean nativeBcUnsupported = Boolean.FALSE.equals(TextureFormats.supports(caps, originalFormats()));
+        boolean already = textureScan != null && textureScan.converted != 0;
         boolean converter = false;
         try {
             converter = new File(getApplicationInfo().nativeLibraryDir, "libs2texconv.so").isFile();
@@ -895,7 +1044,7 @@ public final class LauncherActivity extends Activity {
             android.util.Log.w("Launcher", "etc2 offer: " + e);
         }
         try {
-            return hooks.offerEtc2(this, gpu.probed, gpu.etc2, dxt != null && !dxt, already, converter);
+            return hooks.offerEtc2(this, true, etc2, nativeBcUnsupported, already, converter);
         } catch (RuntimeException e) {
             android.util.Log.w("Launcher", "etc2 offer: " + e);
             return false;
@@ -909,7 +1058,22 @@ public final class LauncherActivity extends Activity {
             State.put(this, State.CHOICES, OFFER_ETC2_LAUNCH, null);
     }
 
-    private void answerStartOffer(Spec.Distribution d, boolean accept, boolean convertEtc2) {
+    /** The generic texture question uses this key. Answering the combined dialog writes it, so Play
+     *  does not ask about ETC2 a second time. */
+    private void rememberTextureOffer() {
+        Spec.Mode mode = textureMode();
+        Long caps = mode == null ? null : Launch.textureCaps(this, mode, gpu);
+        if (mode == null || caps == null) return;
+        List<String> formats = originalFormats();
+        if (formats.isEmpty()) return;
+        List<String> missing = TextureFormats.missing(caps, formats);
+        if (missing.isEmpty()) return;
+        String key = "textureOffer." + textureSourceKey() + "." + mode.id + "." + String.join(",", missing);
+        if (!State.put(this, State.CHOICES, key, "1"))
+            android.util.Log.w("Launcher", "etc2 offer: could not remember the texture question");
+    }
+
+    private void answerStartOffer(Spec.Distribution d, boolean accept, boolean convertEtc2, boolean rememberTextures) {
         startOfferShowing = false;
         boolean saved;
         try {
@@ -922,8 +1086,9 @@ public final class LauncherActivity extends Activity {
             note(Texts.PLAY, Texts.t(this, Texts.E_SAVE_OPTION), true);
             return;
         }
-        if (convertEtc2 && ensureTextures()) {
-            Work.Job job = newTextureJob(TextureBackend.ETC2);
+        if (rememberTextures) rememberTextureOffer();
+        if (convertEtc2 && textureBackend() != null) {
+            Work.Job job = textureJob(textures, textureRoot(), null, TextureBackend.ETC2, textureSources());
             playAfterTextures = d;
             offerTextureJob = job;
             if (!State.put(this, State.CHOICES, OFFER_ETC2_LAUNCH, d.id))
@@ -934,10 +1099,66 @@ public final class LauncherActivity extends Activity {
         play(d);
     }
 
+    private boolean startEdition(Spec.Distribution d) {
+        String renderer = effectiveRenderer(d);
+        String problem = rendererProblem(d, renderer);
+        if (problem != null) {
+            note(Texts.PLAY, problem, true);
+            return false;
+        }
+        try {
+            Launch.start(this, d, renderer, hooks);
+            finishAfterLaunch = true;
+            return true;
+        } catch (ActivityNotFoundException e) {
+            note(Texts.PLAY, Texts.t(this, Texts.NOT_IN_BUILD), true);
+            return false;
+        }
+    }
+
+    private String rendererProblem(Spec.Distribution d, String id) {
+        if (!needsGpu(d) || d.renderers.isEmpty()) return null;
+        if (gpu == null) return Texts.t(this, Texts.CHECKING);
+        Renderers.Status status = Renderers.status(rendererStatuses(d), id);
+        if (status == null) return Texts.t(this, Texts.R_UNFIT);
+        return status.available && (status.verified || id.equals(Renderers.explicitChoice(this, spec, d, hooks)))
+            ? null : status.reason;
+    }
+
     /** Whether the renderer this start would use waits for the driver check. */
     private boolean probeDecides(Spec.Distribution d) {
         Spec.Mode mode = spec.mode(Renderers.chosen(this, spec, d, hooks));
         return mode != null && mode.vulkanKind() && d.renderers.contains(mode.id);
+    }
+
+    /** A bool option of port.json with an "offer" for this distribution that is off, was never set by
+     *  the player and was not offered before; null if none. */
+    private Spec.Option offerDue(Spec.Distribution d) {
+        for (Spec.Option o : spec.options(d.id)) {
+            if (o.offer == null || !"bool".equals(o.type) || (o.arm64Only && !android.os.Process.is64Bit())) continue;
+            if (State.get(this, State.CHOICES, "option." + o.key, null) != null) continue;
+            if ("1".equals(State.get(this, State.CHOICES, "offered." + o.key, ""))) continue;
+            if (Renderers.on(Launch.option(this, o))) continue;
+            return o;
+        }
+        return null;
+    }
+
+    /** port.json "offer": once, before a start, the option's question ("Turn on" saves it on, "Not now"
+     *  keeps it off); either answer goes on to the game, and the player's switch in the options
+     *  shows the choice. Back closes the question without a start; Play asks it again. */
+    private void offerOption(Spec.Distribution d, Spec.Option o) {
+        ui.show(ui.dialog().setTitle(Texts.of(this, o.title)).setMessage(Texts.of(this, o.offer))
+            .setPositiveButton(Texts.t(this, Texts.ENABLE), (dlg, w) -> {
+                State.put(this, State.CHOICES, "offered." + o.key, "1");
+                State.put(this, State.CHOICES, "option." + o.key, "1");
+                refresh(Texts.OPTIONS, Texts.RENDERER, Texts.TEXTURES, Texts.PLAY);
+                play(d);
+            })
+            .setNegativeButton(Texts.t(this, Texts.NOT_NOW), (dlg, w) -> {
+                State.put(this, State.CHOICES, "offered." + o.key, "1");
+                play(d);
+            }));
     }
 
     /** Before the system's "Nearby devices" request on Android 17: what the local network is for.
@@ -953,6 +1174,146 @@ public final class LauncherActivity extends Activity {
                 State.put(this, State.CHOICES, "asked.lan", "1");
                 play(d);
             }));
+    }
+
+    /** The selected renderer failed in the last start of the selected distribution (RendererFailure, within its
+     *  rules: Launch.rendererFailed or native/replacements/renderer_failure.h): the start stopped and no other
+     *  renderer was started. The launcher offers the next available renderer of its list once (owner's decision
+     *  of 24 November 2026). It waits for an idle launcher, the GPU and the driver check (the next renderer
+     *  depends on them) and this window's focus; true while it is up or waits, which holds an automatic start. */
+    private boolean rendererFailureOffer() {
+        if (rendererFailureShowing) return true;
+        RendererFailure failure = RendererFailure.pending(this, spec, selected);
+        if (failure == null) return false;
+        if (busy != null || Work.busy() || (gpu == null && needsGpu(selected)) || Probe.running(this) || !hasWindowFocus()) return true;
+        showRendererFailure(selected, failure);
+        return true;
+    }
+
+    /** The failed renderer's title (as its card row shows it) and what happened in plain words, the game's own
+     *  reason as a detail, and "Start with <next renderer>" / Cancel; OK alone when no other renderer is left. */
+    private void showRendererFailure(Spec.Distribution d, RendererFailure failure) {
+        Renderers.Status next = Renderers.next(rendererStatuses(d), failure.renderer);
+        Spec.Mode failedMode = spec.mode(failure.renderer);
+        String failedTitle = failedMode != null ? rendererTitle(failedMode) : failure.renderer.isEmpty() ? "?" : failure.renderer;
+        StringBuilder message = new StringBuilder(Texts.fmt(this,
+            RendererFailure.LOST.equals(failure.kind) ? Texts.RF_LOST : Texts.RF_START, failedTitle));
+        if (!failure.reason.isEmpty()) message.append("\n\n").append(Texts.fmt(this, Texts.RF_DETAIL, failure.reason));
+        String nextTitle = next == null ? null : rendererTitle(next.mode);
+        message.append("\n\n").append(next == null ? Texts.t(this, Texts.RF_NONE) : Texts.fmt(this, Texts.RF_OFFER, nextTitle));
+        rendererFailureShowing = true;
+        android.app.AlertDialog.Builder dialog = ui.dialog().setTitle(Texts.t(this, Texts.RF_TITLE)).setMessage(message.toString())
+            .setOnCancelListener(dlg -> answerRendererFailure(d, null));
+        if (next == null) {
+            dialog.setPositiveButton(Texts.t(this, Texts.OK), (dlg, w) -> answerRendererFailure(d, null));
+        } else {
+            String id = next.mode.id;
+            dialog.setPositiveButton(Texts.fmt(this, Texts.RF_START_WITH, nextTitle), (dlg, w) -> answerRendererFailure(d, id))
+                .setNegativeButton(Texts.t(this, Texts.CANCEL), (dlg, w) -> answerRendererFailure(d, null));
+        }
+        ui.show(dialog);
+    }
+
+    /** next: the renderer the player starts, saved as the distribution's choice exactly as the renderer card
+     *  saves it, then the normal Play path (its texture checks and offers for that renderer); null (Cancel, OK,
+     *  back): nothing changes. Either way the offer is not repeated for this start. */
+    private void answerRendererFailure(Spec.Distribution d, String next) {
+        rendererFailureShowing = false;
+        autoLaunchPending = playRequestedPending = false;
+        RendererFailure.answered(this, d);
+        if (next == null) {
+            refresh(Texts.PLAY);
+            return;
+        }
+        Renderers.choose(this, d, hooks, next);
+        refresh(Texts.RENDERER, Texts.TEXTURES, Texts.PLAY);
+        play(d);
+    }
+
+    /** The HyperOS tip (port.json "hyperosNotice", HyperOs): once per launcher process, for a start
+     *  from the icon on HyperOS, before the automatic start, so that a player whose game stutters
+     *  learns about Game Turbo first. It waits for an idle launcher with file access (an automatic
+     *  start needs both as well) and never covers another dialog or a system request: without
+     *  this window's focus it waits for the focus (onWindowFocusChanged) and holds the automatic
+     *  start back meanwhile. True while it holds the start back. */
+    private boolean hyperOsTip() {
+        if (!hyperosPending) return false;
+        if (!HyperOs.due(this, spec)) {
+            hyperosPending = false;
+            return false;
+        }
+        if (busy != null || Work.busy() || (needsAllFiles() && !Storage.allFiles(this))) return false;
+        if (!hasWindowFocus()) return true;
+        hyperosPending = false;
+        HyperOs.shown();
+        showHyperOs();
+        return true;
+    }
+
+    private void showHyperOs() {
+        String log = null;
+        try {
+            log = hooks.logFile(this, selected.id);
+        } catch (RuntimeException e) {
+            android.util.Log.w("Launcher", "hooks logFile: " + e);
+        }
+        int vendor = HyperOs.vendor(), column = Texts.column(this);
+        String system = HyperOs.system(vendor, Build.MANUFACTURER), tool = HyperOs.tool(vendor, column);
+        LinearLayout body = column();
+        body.setPadding(ui.dp(24), ui.dp(8), ui.dp(24), ui.dp(8));
+        body.addView(ui.label(Texts.fmt(this, Texts.HYPEROS_WHY, system, HyperOs.advice(vendor, column)), 15, ui.text));
+        if (log != null && !log.isEmpty()) {
+            /* Selectable: the player copies the path into a bug report. */
+            TextView path = ui.label(Texts.fmt(this, Texts.HYPEROS_LOG, log), 13, ui.muted);
+            path.setTextIsSelectable(true);
+            path.setPadding(0, ui.dp(12), 0, ui.dp(2));
+            body.addView(path);
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(body);
+        /* "Don't show again" is a check box under the text, not a third button: three buttons do
+           not fit in one row, and on a short landscape screen (2780x1264) the stacked button bar
+           had to be scrolled to reach it. The text takes what is left (weight) and scrolls. */
+        android.widget.CheckBox never = new android.widget.CheckBox(this);
+        never.setText(Texts.t(this, Texts.HYPEROS_NEVER));
+        never.setTextColor(ui.text);
+        never.setButtonTintList(android.content.res.ColorStateList.valueOf(ui.accent));
+        never.setMinHeight(ui.dp(48));
+        LinearLayout content = column();
+        content.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout.LayoutParams below = new LinearLayout.LayoutParams(-2, -2);
+        below.setMargins(ui.dp(20), ui.dp(4), ui.dp(24), 0);
+        content.addView(never, below);
+        android.app.AlertDialog.Builder dialog = ui.dialog().setTitle(Texts.fmt(this, Texts.HYPEROS_TITLE, system)).setView(content)
+            .setNegativeButton(Texts.t(this, Texts.HYPEROS_CLOSE), (dlg, w) -> hyperOsClosed(never.isChecked()))
+            .setOnCancelListener(dlg -> hyperOsClosed(never.isChecked()));
+        /* Only a tool with a known way in gets the button (HyperOs.tool). */
+        if (tool != null) dialog.setPositiveButton(Texts.fmt(this, Texts.HYPEROS_OPEN, tool), (dlg, w) -> hyperOsOpen(never.isChecked()));
+        ui.show(dialog);
+    }
+
+    /** "Close" or "back", with "Don't show again" checked or not: the start goes on as it would
+     *  have without the tip. */
+    private void hyperOsClosed(boolean never) {
+        if (never) HyperOs.never(this, true);
+        if (isFinishing() || isDestroyed()) return;
+        if (!launchWhenReady() && never) refresh(Texts.ABOUT);
+    }
+
+    /** "Open Game Turbo" (or the device's tool): no automatic start, so that the player comes back
+     *  to the launcher, whose About switch then shows a checked "Don't show again". */
+    private void hyperOsOpen(boolean never) {
+        if (never) HyperOs.never(this, true);
+        autoLaunchPending = playRequestedPending = false;
+        if (!HyperOs.open(this)) hyperOsFailed();
+        if (never && !isFinishing() && !isDestroyed()) refresh(Texts.ABOUT);
+    }
+
+    private void hyperOsFailed() {
+        int vendor = HyperOs.vendor();
+        ui.show(ui.dialog().setTitle(Texts.fmt(this, Texts.HYPEROS_TITLE, HyperOs.system(vendor, Build.MANUFACTURER)))
+            .setMessage(Texts.fmt(this, Texts.HYPEROS_FAILED, HyperOs.tool(vendor, Texts.column(this))))
+            .setPositiveButton(Texts.t(this, Texts.OK), null));
     }
 
     /* -------------------------------------------------------- game files */
@@ -977,9 +1338,9 @@ public final class LauncherActivity extends Activity {
             promptedFiles = needsFiles ? selected.id : null;
         }
         LinearLayout card = section(files, Texts.GAME_FILES);
-        if (!filesExpanded || initializing) return;
+        if (!filesExpanded) return;
         java.util.Set<String> shown = new java.util.HashSet<>();
-        for (Spec.Distribution d : spec.distributions) for (Spec.Part p : d.parts) {
+        if (!initializing) for (Spec.Distribution d : spec.distributions) for (Spec.Part p : d.parts) {
             if (!shown.add(Install.key(d, p))) continue;
             File folder = Install.folder(this, spec, d, p);
             String mount = Install.mount(this, d, p);
@@ -989,6 +1350,8 @@ public final class LauncherActivity extends Activity {
                     + (d.parts.size() > 1 ? " — " + Texts.of(this, p.title) : ""), 15, ui.text));
             /* The folder once; a fixed part says so without repeating it. */
             card.addView(ui.label(mount.isEmpty() ? folder.getPath() : Uri.decode(mount), 12, ui.muted));
+            if (installed.unavailableArchives.contains(p))
+                card.addView(ui.label(Texts.t(this, Texts.ARCHIVE_UNAVAILABLE), 12, ui.error));
             if (!missing.isEmpty()) {
                 String list = missing.size() > 4 ? String.join(", ", missing.subList(0, 4)) + "…" : String.join(", ", missing);
                 card.addView(ui.label(folder.isDirectory() ? Texts.fmt(this, Texts.MISSING, list) : Texts.t(this, Texts.NOT_FOUND_YET), 12, ui.error));
@@ -1007,16 +1370,17 @@ public final class LauncherActivity extends Activity {
         TextView folder = ui.button(Texts.t(this, fixed ? Texts.IMPORT_FOLDER : Texts.FOLDER), Ui.SECONDARY,
             () -> pickFolder(selected));
         TextView archive = ui.button(Texts.t(this, fixed ? Texts.IMPORT_ARCHIVE : Texts.ARCHIVE), Ui.SECONDARY,
-            () -> pick(Pickers.ZIP, ASK_ZIP, null));
+            this::pickArchive);
         card.addView(ui.buttons(folder, archive));
-        Ui.enable(folder, idle);
-        Ui.enable(archive, idle);
+        boolean canPick = busy == null && !Work.busy() && !finishAfterLaunch;
+        Ui.enable(folder, canPick);
+        Ui.enable(archive, canPick);
         if (needsFiles) {
             ui.attention(folder, false);
             ui.attention(archive, false);
         }
         TextView retry = recoveryButton(Texts.RETRY_CHECK,
-            () -> refresh(Texts.PERM_FILES, Texts.PLAY, Texts.GAME_FILES, Texts.TEXTURES, Texts.SPACE));
+            this::refresh);
         card.addView(ui.buttons(retry));
         Ui.enable(retry, idle);
         if (!spec.gogInstaller.isEmpty()) {
@@ -1024,7 +1388,7 @@ public final class LauncherActivity extends Activity {
                 () -> pick(Pickers.GOG, ASK_GOG, android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)));
             card.addView(ui.buttons(gog));
             card.addView(ui.label(Texts.t(this, Texts.GOG_HINT), 12, ui.muted));
-            Ui.enable(gog, idle);
+            Ui.enable(gog, canPick);
             if (needsFiles) ui.attention(gog, false);
         }
         int picker = Pickers.state(this);
@@ -1034,6 +1398,39 @@ public final class LauncherActivity extends Activity {
             String name = Pickers.disabledPackage();
             if (picker == Pickers.DISABLED && name != null)
                 card.addView(ui.buttons(ui.button(Texts.t(this, Texts.ENABLE), Ui.QUIET, () -> Pickers.openSettings(this, name))));
+        }
+    }
+
+    private File downloadsFolder() {
+        return android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+    }
+
+    private void pickArchive() {
+        pick(Pickers.ZIP, ASK_ZIP, spec.downloadArchivePrefix.isEmpty() ? null : downloadsFolder());
+    }
+
+    private void addGameDataActions(LinearLayout card, Spec.Distribution d) {
+        List<File> archives = installed.downloads;
+        if (archives.size() == 1)
+            card.addView(ui.label(Texts.fmt(this, Texts.FOUND_DOWNLOAD_ARCHIVE, archives.get(0).getName()), 13, ui.text));
+        int action = archives.isEmpty() ? Texts.CHOOSE_ZIP : archives.size() == 1 ? Texts.USE_DOWNLOAD_ARCHIVE : Texts.CHOOSE_DOWNLOAD_ARCHIVE;
+        TextView archive = ui.button(Texts.t(this, action), Ui.PRIMARY, d.theme, this::chooseGameArchive);
+        card.addView(ui.buttons(archive));
+        Ui.enable(archive, idle());
+        if (!archives.isEmpty()) card.addView(ui.buttons(recoveryButton(Texts.OTHER_ARCHIVE, this::pickArchive)));
+    }
+
+    private void chooseGameArchive() {
+        if (!idle()) return;
+        List<File> archives = installed.downloads;
+        if (archives.isEmpty()) pickArchive();
+        else if (archives.size() == 1) readArchive(null, archives.get(0));
+        else {
+            String[] names = archives.stream().map(File::getName).toArray(String[]::new);
+            ui.show(ui.dialog().setTitle(Texts.t(this, Texts.CHOOSE_DOWNLOAD_ARCHIVE))
+                .setItems(names, (dlg, which) -> readArchive(null, archives.get(which)))
+                .setNeutralButton(Texts.t(this, Texts.OTHER_ARCHIVE), (dlg, which) -> pickArchive())
+                .setNegativeButton(Texts.t(this, Texts.CANCEL), null));
         }
     }
 
@@ -1068,6 +1465,24 @@ public final class LauncherActivity extends Activity {
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (hooks.optionResult(this, request, result, data)) return;
+        if (initializing && result == RESULT_OK && data != null && (request == ASK_FOLDER || request == ASK_ZIP || request == ASK_GOG)) {
+            pendingPickerRequest = request;
+            pendingPickerData = data;
+            autoLaunchPending = playRequestedPending = false;
+            return;
+        }
+        handlePickedFile(request, result, data);
+    }
+
+    private boolean resumePickedFile() {
+        if (pendingPickerData == null) return false;
+        Intent data = pendingPickerData;
+        pendingPickerData = null;
+        handlePickedFile(pendingPickerRequest, RESULT_OK, data);
+        return true;
+    }
+
+    private void handlePickedFile(int request, int result, Intent data) {
         boolean driver = request == ASK_DRIVER || request == ASK_PANVK_DRIVER;
         Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
         String path = result == RESULT_OK && data != null ? data.getStringExtra(FileBrowserActivity.RESULT) : null;
@@ -1112,11 +1527,15 @@ public final class LauncherActivity extends Activity {
         background(() -> {
             List<Install.Found> found = Install.discover(spec.distributions, choosing, dir);
             for (Install.Found f : found) hooks.verifyInstallation(this, f.distribution.id, f.part.id, f.folder);
-            return found;
-        }, found -> {
+            List<List<Install.Found>> result = new ArrayList<>();
+            result.add(found);
+            result.add(alsoFound(choosing, dir, found));
+            return result;
+        }, result -> {
             setBusy(null);
+            List<Install.Found> found = result.get(0), others = result.get(1);
             selected = choosing;
-            if (found.isEmpty()) {
+            if (found.isEmpty() && others.isEmpty()) {
                 StringBuilder problem = new StringBuilder(Texts.fmt(this, Texts.NO_EDITION, Texts.of(this, choosing.title), dir.getPath()));
                 for (Spec.Part part : choosing.parts) {
                     String conflict = hooks.installationProblem(this, choosing.id, part.id, dir);
@@ -1146,6 +1565,12 @@ public final class LauncherActivity extends Activity {
                 needed.add(f.part.needed);
                 body.append(Texts.of(this, f.part.title)).append(": ").append(f.folder.getPath()).append(" → ").append(target.getPath()).append('\n');
             }
+            /* After the chosen edition's folder is saved, so the conflict check sees it. */
+            for (Install.Found f : others) {
+                if (hooks.installationProblem(this, f.distribution.id, f.part.id, f.folder) != null) continue;
+                Install.choose(this, f.distribution, f.part, f.folder);
+                if (found.isEmpty() && selected == choosing) selected = f.distribution;
+            }
             refresh();
             if (sources.isEmpty()) { note(Texts.t(this, Texts.READY), false); return; }
             for (File t : targets) if (t.exists()) { body.append('\n').append(Texts.t(this, Texts.REPLACE)); break; }
@@ -1154,6 +1579,26 @@ public final class LauncherActivity extends Activity {
                 .setNeutralButton(Texts.t(this, Texts.MOVE), (dlg, w) -> startJob(new Install.MoveJob(this, sources, targets)))
                 .setNegativeButton(Texts.t(this, Texts.CANCEL), null));
         }, e -> { setBusy(null); error(Texts.failure(this, Failure.of(e))); });
+    }
+
+    /** Off the UI thread: the other distributions' installations in a folder picked for one (one
+     *  pick of the folder that holds them all, as the games' own launchers took it), only for those
+     *  without a ready folder: a working choice is never replaced. Each gets the checks of a pick
+     *  of its own; one that fails them is left out, and the chosen distribution's pick goes on. */
+    private List<Install.Found> alsoFound(Spec.Distribution choosing, File dir, List<Install.Found> found) {
+        List<Install.Found> result = new ArrayList<>();
+        for (Install.Found f : Install.others(spec.distributions, choosing, dir, found)) {
+            boolean installed = Install.ready(this, spec, f.distribution)
+                && f.distribution.parts.stream().allMatch(p -> extraMissing(f.distribution, p).isEmpty());
+            if (installed || hooks.installationProblem(this, f.distribution.id, f.part.id, f.folder) != null) continue;
+            try {
+                hooks.verifyInstallation(this, f.distribution.id, f.part.id, f.folder);
+                result.add(f);
+            } catch (IOException | RuntimeException e) {
+                Work.warn("folder for " + f.distribution.id + " left out: " + f.folder + ": " + e, e);
+            }
+        }
+        return result;
     }
 
     private static boolean sameFile(File a, File b) {
@@ -1202,6 +1647,9 @@ public final class LauncherActivity extends Activity {
         if (archiveReader != null) return;
         dropPending();
         setBusy(Texts.t(this, Texts.READING));
+        ArchiveCheckDialog check = new ArchiveCheckDialog(this, ui,
+            () -> { if (archiveReader != null) archiveReader.interrupt(); });
+        archiveCheck = check;
         archiveReader = background(() -> {
             ParcelFileDescriptor fd = file != null ? ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
                 : getContentResolver().openFileDescriptor(uri, "r");
@@ -1210,20 +1658,13 @@ public final class LauncherActivity extends Activity {
             try {
                 if (!Storage.seekable(fd)) throw new Failure(Failure.REMOTE, null);
                 File path = file != null ? file : Storage.fileOf(uri, fd);
-                String expected = Zip.expectedMd5(file != null ? file.getName() : Storage.displayName(this, uri, path));
+                String name = file != null ? file.getName() : Storage.displayName(this, uri, path);
+                String expected = ArchiveMd5.expected(name);
                 if (expected != null) {
-                    Zip.verifyMd5(channel, expected, percent -> handler.post(() -> {
-                        if (isFinishing() || isDestroyed()) return;
-                        note(Texts.t(this, Texts.VERIFY_MD5) + " · " + percent + "%", false);
-                        archiveProgress.setProgress(percent);
-                        archiveProgress.setVisibility(View.VISIBLE);
-                    }));
-                    handler.post(() -> {
-                        if (!isFinishing() && !isDestroyed()) {
-                            archiveProgress.setVisibility(View.GONE);
-                            note(Texts.t(this, Texts.READING), false);
-                        }
-                    });
+                    check.start(name);
+                    try {
+                        if (!ArchiveMd5.matches(channel, expected, check)) throw new Failure(Failure.MD5_MISMATCH, expected);
+                    } catch (java.io.EOFException changed) { throw new Failure(Failure.CHANGED, null); }
                 }
                 Zip zip = new Zip(channel);
                 List<Install.ArchivePart> plan = Install.plan(zip, spec);
@@ -1234,8 +1675,11 @@ public final class LauncherActivity extends Activity {
                 throw e;
             }
         }, read -> {
+            check.close();
+            archiveCheck = null;
             archiveReader = null;
             setBusy(null);
+            if (check.cancelled()) { closeQuietly((Zip) read[0]); return; }
             pendingZip = (Zip) read[0];
             @SuppressWarnings("unchecked") List<Install.ArchivePart> plan = (List<Install.ArchivePart>) read[1];
             pendingPlan = plan;
@@ -1243,9 +1687,11 @@ public final class LauncherActivity extends Activity {
             pendingFile = (File) read[2];
             askImport();
         }, e -> {
+            check.close();
+            archiveCheck = null;
             archiveReader = null;
             setBusy(null);
-            error(Texts.failure(this, Failure.of(e)));
+            if (!check.cancelled()) error(Texts.failure(this, Failure.of(e)));
         }, read -> closeQuietly((Zip) read[0]));
     }
 
@@ -1354,21 +1800,26 @@ public final class LauncherActivity extends Activity {
         File file = pendingFile;
         pendingZip = null;
         pendingPlan = null;
-        if (uri != null && file == null) {
+        String source;
+        if (uri != null) {
             try {
                 getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                source = uri.toString();
             } catch (SecurityException e) {
-                closeQuietly(zip);
-                error(Texts.t(this, Texts.E_REMOTE));
-                return;
+                if (file == null || !file.canRead()) {
+                    closeQuietly(zip);
+                    error(Texts.t(this, Texts.E_REMOTE));
+                    return;
+                }
+                source = file.getAbsolutePath();
             }
-        }
-        String source = file != null ? file.getAbsolutePath() : uri.toString();
-        File index = new File(State.folder(this), "mount-" + part.distribution.id + "-" + part.part.id + ".zmi");
+        } else source = file.getAbsolutePath();
+        String mountedSource = source;
+        File index = Install.archiveIndex(this, part.distribution, part.part);
         File sidecar = new File(State.folder(this), "mount-" + part.distribution.id + "-" + part.part.id);
         startJob(new MountJob(zip, part, index, sidecar, () -> State.update(this, State.CHOICES, values -> {
             values.setProperty(Install.key(part.distribution, part.part), sidecar.getAbsolutePath());
-            values.setProperty(Install.key(part.distribution, part.part) + ".mount", source);
+            values.setProperty(Install.key(part.distribution, part.part) + ".mount", mountedSource);
         })));
     }
 
@@ -1393,7 +1844,6 @@ public final class LauncherActivity extends Activity {
             try {
                 StoredArchive.Plan plan = StoredArchive.plan(zip, part.root, part.part.needed);
                 if (sidecar.exists()) Install.delete(sidecar);
-                if (!sidecar.mkdirs()) throw new Failure(Failure.READ_ONLY, sidecar.getPath());
                 byte[] buffer = new byte[1 << 20];
                 for (StoredArchive.Item item : plan.items) {
                     if (item.stored()) continue;
@@ -1534,7 +1984,9 @@ public final class LauncherActivity extends Activity {
             }
         }
         textureScan = null;
+        if (job.section == Texts.GAME_FILES || job instanceof Cleanup.Job) rescanFiles();
         refresh(Texts.PERM_FILES, Texts.PLAY, Texts.GAME_FILES, Texts.RENDERER, Texts.TEXTURES, Texts.SPACE);
+        if (job instanceof Install.UnpackJob && job.failure == null) refresh(Texts.OPTIONS);
         if (job instanceof TurnipDownload) refresh(Texts.ABOUT);
         if (launch != null) play(launch);
     }
@@ -1559,7 +2011,6 @@ public final class LauncherActivity extends Activity {
         ui.show(ui.dialog().setMessage(Texts.t(this, Texts.STOP_ASK))
             .setPositiveButton(Texts.t(this, Texts.STOP), (d, w) -> {
                 job.cancel();
-                if (textures != null && job.section == Texts.TEXTURES) textures.cancel();
             })
             .setNegativeButton(Texts.t(this, Texts.CONTINUE), null));
     }
@@ -1586,26 +2037,62 @@ public final class LauncherActivity extends Activity {
         return textureScan != null && textureScan.converted != 0 && textureSourceKey().equals(textureSource);
     }
 
+    private List<Renderers.Status> rendererStatuses(Spec.Distribution d) {
+        boolean converted = selected == d && convertedTextures();
+        return Renderers.evaluate(this, spec, d, gpu, converted, converted && textureScan.originalsRemoved);
+    }
+
     private void refreshRenderer() {
         renderer.removeAllViews();
         if (gpu == null) return;
         Spec.Mode turnip = Probe.turnipMode(spec);
-        boolean drivers = turnip != null && selected.renderers.contains(turnip.id) && gpu.qualcomm();
+        boolean drivers = turnip != null && selected.renderers.contains(turnip.id) && Build.VERSION.SDK_INT >= turnip.minSdk && gpu.qualcomm();
         Spec.Mode panvk = Probe.panvkMode(spec);
-        boolean panvkDrivers = panvk != null && selected.renderers.contains(panvk.id) && Probe.mali(this, Probe.report(this));
-        List<Spec.Option> advanced = new ArrayList<>(spec.options(selected.id));
-        advanced.removeIf(o -> !o.rendererSetting || (o.arm64Only && !android.os.Process.is64Bit()));
-        if (selected.renderers.size() < 2 && !drivers && !panvkDrivers && advanced.isEmpty()) return;
+        boolean panvkDrivers = panvk != null && selected.renderers.contains(panvk.id) && Build.VERSION.SDK_INT >= panvk.minSdk
+            && Probe.mali(this, Probe.report(this));
+        if (selected.renderers.isEmpty()) return;
         LinearLayout card = section(renderer, Texts.RENDERER);
-        List<Renderers.Status> statuses = Renderers.evaluate(this, spec, selected, gpu, convertedTextures());
+        List<Renderers.Status> statuses = rendererStatuses(selected);
         String explicit = Renderers.explicitChoice(this, spec, selected, hooks);
+        java.util.Map<String, String> probe = Probe.report(this);
+        /* A saved choice that can no longer run here is switched to a working renderer, once, with a toast
+           (Renderers.replacement; only on a final verdict of the driver check). */
+        if (explicit != null) {
+            Renderers.Status switched = Renderers.replacement(statuses, explicit, spec.defaultMode,
+                !Probe.running(this) && (!Probe.needed(spec) || probe != null));
+            if (switched != null) {
+                Renderers.Status lost = Renderers.status(statuses, explicit);
+                Renderers.choose(this, selected, hooks, switched.mode.id);
+                android.widget.Toast.makeText(this, Texts.fmt(this, Texts.R_SWITCHED, rendererTitle(lost.mode, probe),
+                    lost.reason, rendererTitle(switched.mode, probe)), android.widget.Toast.LENGTH_LONG).show();
+                explicit = switched.mode.id;
+            }
+        }
         String chosen = explicit != null ? explicit : spec.defaultMode;
         for (Renderers.Status s : statuses) {
-            String description = Texts.of(this, s.mode.description);
-            /* A mode the driver check has not confirmed says so, and is never picked by itself. */
-            String hint = !s.available ? Texts.t(this, Texts.UNAVAILABLE) + ": " + s.reason
-                : s.verified ? description : (description.isEmpty() ? "" : description + "\n") + s.reason;
-            card.addView(ui.choice(s.mode.title, hint, s.mode.id.equals(chosen), s.available, !s.available ? null : () -> {
+            CharSequence hint = s.reason;
+            if (s.available) {
+                java.util.List<String> originals = originalFormats(), formats = new java.util.ArrayList<>(originals);
+                if (!spec.textureBackend.isEmpty() && selected.readsCache(s.mode)) {
+                    for (String format : spec.etc2Formats) if (!formats.contains(format)) formats.add(format);
+                    for (String format : spec.astcFormats) if (!formats.contains(format)) formats.add(format);
+                }
+                Long caps = s.mode.vulkanKind() ? TextureFormats.vulkan(probe, s.mode.driverKey()) : gpu.formats;
+                android.text.SpannableStringBuilder text = new android.text.SpannableStringBuilder();
+                if (s.reason != null && !s.reason.isEmpty()) text.append(s.reason).append('\n');
+                int from = text.length();
+                text.append(RendererInfo.textures(this, caps, formats, originals));
+                /* All of the game's formats: that line in the base's green. */
+                if (RendererInfo.allSupported(caps, originals))
+                    text.setSpan(new android.text.style.ForegroundColorSpan(ui.good), from, text.length(), 0);
+                String key = s.mode.driverKey();
+                String name = s.mode.vulkanKind() && probe != null ? probe.getOrDefault(key + ".device", "") : gpu.renderer;
+                String driver = s.mode.vulkanKind() && probe != null ? probe.getOrDefault(key + ".driver", "") : gpu.glesDriver;
+                String warning = hooks.rendererWarning(this, s.mode.id, name, driver);
+                if (warning != null) text.append('\n').append(warning);
+                hint = text;
+            }
+            card.addView(ui.choice(rendererTitle(s.mode, probe), hint, s.mode.id.equals(chosen), s.available, !s.available ? null : () -> {
                 Renderers.choose(this, selected, hooks, s.mode.id);
                 refresh(Texts.RENDERER, Texts.TEXTURES, Texts.PLAY);
             }));
@@ -1625,31 +2112,23 @@ public final class LauncherActivity extends Activity {
             card.addView(ui.buttons(download));
         }
         if (panvkDrivers) driverControls(card, VulkanDriver.PANVK, ASK_PANVK_DRIVER);
-        if (!advanced.isEmpty()) rendererSettings(card, advanced);
-        card.addView(ui.label(Texts.fmt(this, Texts.GPU, gpu.renderer.isEmpty() ? "?" : gpu.renderer, Gpu.version(gpu.vulkan)), 12, ui.muted));
-        card.addView(ui.label(Texts.t(this, Texts.N_APPLIES), 12, ui.muted));
+        for (Spec.Option option : spec.options(selected.id)) {
+            if (!option.rendererSetting || (option.arm64Only && !android.os.Process.is64Bit())) continue;
+            View control = ui.toggle(Texts.of(this, option.title), Texts.of(this, option.hint),
+                Renderers.on(Launch.option(this, option)), on -> selectOption(option, on ? "1" : "0"));
+            Ui.enable(control, idle());
+            card.addView(control);
+        }
+        if (!gpu.renderer.isEmpty()) card.addView(ui.label(gpu.renderer, 12, ui.muted));
     }
 
-    private void rendererSettings(LinearLayout card, List<Spec.Option> advanced) {
-        String title = Texts.t(this, Texts.RENDERER_SETTINGS);
-        TextView button = ui.button(title, Ui.SECONDARY, () -> {
-            LinearLayout values = column();
-            values.setPadding(ui.dp(20), ui.dp(8), ui.dp(20), ui.dp(8));
-            android.app.AlertDialog dialog = ui.show(ui.dialog().setTitle(title).setView(values)
-                .setPositiveButton(Texts.t(this, Texts.OK), null));
-            for (Spec.Option option : advanced) {
-                String value = Launch.option(this, option);
-                values.addView(ui.toggle(Texts.of(this, option.title), Texts.of(this, option.hint),
-                    "1".equals(value) || "true".equals(value), on -> {
-                        if (State.put(this, State.CHOICES, "option." + option.key, on ? "1" : "0")) return;
-                        dialog.dismiss();
-                        ui.show(ui.dialog().setMessage(Texts.t(this, Texts.E_SAVE_OPTION))
-                            .setPositiveButton(Texts.t(this, Texts.OK), null));
-                    }));
-            }
-        });
-        Ui.enable(button, idle());
-        card.addView(ui.buttons(button));
+    private String rendererTitle(Spec.Mode mode) {
+        return rendererTitle(mode, Probe.report(this));
+    }
+
+    private String rendererTitle(Spec.Mode mode, java.util.Map<String, String> probe) {
+        return RendererInfo.title(mode.kind, mode.title, Texts.t(this, Texts.VK_SYSTEM),
+            gpu == null ? 0 : gpu.gles, gpu == null ? 0 : gpu.vulkan, probe);
     }
 
     private void driverControls(LinearLayout card, VulkanDriver driver, int request) {
@@ -1774,6 +2253,7 @@ public final class LauncherActivity extends Activity {
     }
 
     private void checkRenderer() {
+        if (!ready(selected)) return;
         if (hasWindowFocus()) Probe.start(this, spec);
         if (Probe.running(this)) {
             handler.removeCallbacks(probeWatch);
@@ -1788,7 +2268,7 @@ public final class LauncherActivity extends Activity {
         options.removeAllViews();
         List<Spec.Option> list = new ArrayList<>(spec.options(selected.id));
         list.removeIf(o -> o.rendererSetting);
-        if (!selected.intro && list.isEmpty()) return;
+        if (!selected.intro && list.isEmpty() && spec.folders.isEmpty()) return;
         LinearLayout card = section(options, Texts.OPTIONS);
         if (selected.intro) {
             String key = "intro." + selected.id;
@@ -1799,9 +2279,21 @@ public final class LauncherActivity extends Activity {
         for (Spec.Option o : list) {
             if (o.arm64Only && !android.os.Process.is64Bit()) continue;
             String key = "option." + o.key, value = Launch.option(this, o);
-            if ("bool".equals(o.type)) {
+            if (spec.performanceHud && "fps_counter".equals(o.key)) {
+                card.addView(ui.toggle(Texts.of(this, o.title), null, !"0".equals(value), on ->
+                    State.update(this, State.CHOICES, prefs -> {
+                        prefs.setProperty(HudField.KEY, Integer.toString(HudField.mask(prefs, value)));
+                        prefs.setProperty(key, on ? "1" : "0");
+                    })));
+                card.addView(ui.buttons(ui.button(Texts.t(this, Texts.HUD_SETTINGS), Ui.SECONDARY,
+                    () -> hudSettings(Launch.option(this, o)))));
+            } else if ("bool".equals(o.type)) {
                 card.addView(ui.toggle(Texts.of(this, o.title), Texts.of(this, o.hint), "1".equals(value) || "true".equals(value),
-                    on -> State.put(this, State.CHOICES, key, on ? "1" : "0")));
+                    on -> {
+                        State.put(this, State.CHOICES, key, on ? "1" : "0");
+                        /* A renderer mode behind this switch ("option") comes or goes with it. */
+                        if (spec.modesNeed(o.key)) refresh(Texts.RENDERER, Texts.TEXTURES, Texts.PLAY);
+                    }));
                 android.view.View editor = hooks.optionEditor(this, o.key);
                 if (editor != null) card.addView(editor);
             } else if ("choice".equals(o.type)) {
@@ -1843,36 +2335,50 @@ public final class LauncherActivity extends Activity {
         }
         String hint = Texts.of(this, spec.optionsHint);
         if (!hint.isEmpty()) card.addView(ui.label(hint, 13, ui.muted));
-    }
-
-    /** A card per port.json folder: its path (selectable, with a copy button) and what goes there.
-     *  The folder is made once shared storage is writable, so a file manager finds it. */
-    private void refreshFolders() {
-        foldersBox.removeAllViews();
         for (Spec.Folder f : spec.folders) {
             File folder = spec.resolve(this, f.path);
-            if (!folder.isDirectory() && !folder.mkdirs()) android.util.Log.i("Launcher", "folder not made yet: " + folder);
-            LinearLayout card = ui.card(foldersBox);
-            card.addView(ui.heading(Texts.of(this, f.title)));
+            LinearLayout content = ui.card(options);
+            content.addView(ui.heading(Texts.of(this, f.title)));
             TextView path = ui.label(folder.getPath(), 13, ui.text);
             path.setTextIsSelectable(true);
-            card.addView(path);
-            String hint = Texts.of(this, f.hint);
-            if (!hint.isEmpty()) card.addView(ui.label(hint, 13, ui.muted));
-            card.addView(ui.buttons(ui.button(Texts.t(this, Texts.COPY), Ui.SECONDARY,
+            content.addView(path);
+            String description = Texts.of(this, f.hint);
+            if (!description.isEmpty()) content.addView(ui.label(description, 13, ui.muted));
+            content.addView(ui.buttons(ui.button(Texts.t(this, Texts.COPY), Ui.SECONDARY,
                 () -> Diagnostics.copy(this, folder.getPath()))));
         }
+    }
+
+    android.app.AlertDialog hudSettings(String mode) {
+        HudField[] fields = HudField.values();
+        String[] names = new String[fields.length];
+        boolean[] checked = new boolean[fields.length];
+        int[] mask = {HudField.read(this, mode)};
+        for (HudField field : fields) {
+            names[field.ordinal()] = field.title[Texts.column(this)];
+            checked[field.ordinal()] = field.in(mask[0]);
+        }
+        return ui.show(ui.dialog().setTitle(Texts.t(this, Texts.HUD_SETTINGS))
+            .setMultiChoiceItems(names, checked, (dlg, i, on) -> {
+                if (on) mask[0] |= fields[i].bit; else mask[0] &= ~fields[i].bit;
+            })
+            .setPositiveButton(Texts.t(this, Texts.OK), (dlg, w) ->
+                State.put(this, State.CHOICES, HudField.KEY, Integer.toString(mask[0])))
+            .setNegativeButton(Texts.t(this, Texts.CANCEL), null));
     }
 
     private void selectOption(Spec.Option option, String value) {
         String problem = hooks.optionProblem(this, option.key, value);
         if (problem != null) {
+            if (option.rendererSetting) refresh(Texts.RENDERER);
             ui.show(ui.dialog().setMessage(problem).setPositiveButton(Texts.t(this, Texts.OK), null));
             return;
         }
         Runnable save = () -> {
-            State.put(this, State.CHOICES, "option." + option.key, value);
-            refresh(Texts.OPTIONS);
+            if (!State.put(this, State.CHOICES, "option." + option.key, value))
+                note(option.rendererSetting ? Texts.RENDERER : Texts.OPTIONS, Texts.t(this, Texts.E_SAVE_OPTION), true);
+            rescanFiles();
+            refresh(option.rendererSetting ? Texts.RENDERER : Texts.OPTIONS);
         };
         CharSequence warning = hooks.optionWarning(this, option.key, value);
         if (warning == null) save.run();
@@ -1896,6 +2402,152 @@ public final class LauncherActivity extends Activity {
 
     /* --------------------------------------------------------- textures */
 
+    private TextureBackend textureBackend() {
+        if (textures == null && !spec.textureBackend.isEmpty()) {
+            try {
+                textures = (TextureBackend) Class.forName(spec.textureBackend).getDeclaredConstructor().newInstance();
+            } catch (ReflectiveOperationException | ClassCastException | LinkageError e) {
+                android.util.Log.w("Launcher", "textures: " + e);
+            }
+        }
+        return textures;
+    }
+
+    private List<TextureBackend.Mod> pendingModTextures() {
+        Spec.Mode mode = textureMode();
+        Long caps = Launch.textureCaps(this, mode, gpu);
+        if (mode == null || !selected.readsCache(mode) || !Boolean.FALSE.equals(TextureFormats.supports(caps, originalFormats()))
+                || !Boolean.TRUE.equals(TextureFormats.supports(caps, spec.etc2Formats)) || textureBackend() == null)
+            return java.util.Collections.emptyList();
+        return textures.pendingMods(this, selected.id, textureRoot());
+    }
+
+    private String modArchives(List<TextureBackend.Mod> mods) {
+        long bytes = 0;
+        for (TextureBackend.Mod mod : mods) bytes += mod.bytes;
+        return Texts.fmt(this, Texts.MOD_ARCHIVES, mods.size(), Texts.size(this, bytes));
+    }
+
+    private boolean offerTextures(Spec.Distribution d) {
+        Spec.Mode mode = textureMode();
+        if (!idle() || mode == null || !d.readsCache(mode) || textureBackend() == null) return false;
+        Long caps = Launch.textureCaps(this, mode, gpu);
+        if (caps == null) return false;
+        if (textureScan == null || !textureSourceKey().equals(textureSource)) {
+            if (!ready(d)) return false;
+            texturePlay = d;
+            refresh(Texts.TEXTURES);
+            return true;
+        }
+        List<String> formats = originalFormats();
+        if (textureScan.failure != null || textureScan.textures == 0 || formats.isEmpty()) return false;
+        /* What this renderer lacks and an existing cache does not cover yet (a cache of a backend that converts
+           everything covers all): after a renderer change a selective cache is extended, never redone. */
+        int existing = textureScan.converted;
+        boolean selective = textures.selective();
+        List<String> convert = TextureFormats.uncovered(TextureFormats.missing(caps, formats), existing, selective ? cacheCovers() : null);
+        if (convert.isEmpty()) return false;
+        boolean etc2 = (existing == 0 || existing == TextureBackend.ETC2) && Boolean.TRUE.equals(TextureFormats.supports(caps, spec.etc2Formats));
+        boolean astc = (existing == 0 || existing == TextureBackend.ASTC) && Boolean.TRUE.equals(TextureFormats.supports(caps, spec.astcFormats))
+            && textures.canEncode(TextureBackend.ASTC);
+        /* port.json textures.conversionRequired: no start without the conversion (owner, 24 November 2026). */
+        boolean required = spec.conversionRequired;
+        if (!etc2 && !astc) {
+            if (!required) return false;
+            ui.show(ui.dialog().setTitle(Texts.t(this, Texts.TEXTURES))
+                .setMessage(Texts.fmt(this, Texts.TEX_UNREADABLE, rendererTitle(mode), String.join(", ", convert)))
+                .setPositiveButton(Texts.t(this, Texts.OK), null));
+            return true;
+        }
+        String key = "textureOffer." + textureSourceKey() + "." + mode.id + "." + String.join(",", convert);
+        if (!required && "1".equals(State.get(this, State.CHOICES, key, ""))) return false;
+        List<String> sources = selective ? convert : null;
+        String which = selective ? Texts.fmt(this, Texts.TEX_CONVERT_ONLY, String.join(", ", convert))
+            : Texts.fmt(this, Texts.TEX_CONVERT_ALL, String.join(", ", formats));
+        String message = Texts.fmt(this, Texts.TEX_OFFER, rendererTitle(mode), String.join(", ", convert)) + "\n\n" + which;
+        android.app.AlertDialog.Builder dialog = ui.dialog().setTitle(Texts.t(this, Texts.TEXTURES));
+        if (required) {
+            /* Cancel and back leave the player in the launcher: nothing is saved, the next Play asks again. */
+            dialog.setMessage(message + "\n\n" + Texts.fmt(this, Texts.TEX_REQUIRED, rendererTitle(mode)))
+                .setNegativeButton(Texts.t(this, Texts.CANCEL), null);
+        } else {
+            dialog.setMessage(message)
+                .setNegativeButton(Texts.t(this, Texts.NOT_NOW), (dlg, w) -> {
+                    State.put(this, State.CHOICES, key, "1");
+                    if (!offerModTextures(d)) startEdition(d);
+                });
+        }
+        if (etc2) dialog.setPositiveButton("ETC2", (dlg, w) -> startTextures(TextureBackend.ETC2, sources));
+        if (astc) dialog.setNeutralButton("ASTC", (dlg, w) -> startTextures(TextureBackend.ASTC, sources));
+        ui.show(dialog);
+        return true;
+    }
+
+    /** The source formats the existing conversion covers: the backend's own word (Scan.convertedFormats), else
+     *  the launcher's record of the conversions it ran (TextureFormats.covered), else all of them (null): a
+     *  conversion of a backend that re-encodes everything, or one from before this record. Empty: no cache. */
+    private List<String> cacheCovers() {
+        if (textureScan == null || textureScan.converted == 0) return new ArrayList<>();
+        if (textureScan.convertedFormats != null) return textureScan.convertedFormats;
+        String record = State.get(this, State.CHOICES, coverKey(), "");
+        return record.isEmpty() ? null : TextureFormats.covers(record);
+    }
+
+    private String coverKey() { return "textureCovers." + textureSourceKey(); }
+
+    /** What a conversion converts now: for a selective backend, the source formats the selected renderer lacks
+     *  and the cache does not cover; null: all of them (a backend that converts everything, nothing missing, or
+     *  formats not known yet). */
+    private List<String> textureSources() {
+        if (textureBackend() == null || !textures.selective()) return null;
+        Spec.Mode mode = textureMode();
+        Long caps = mode == null ? null : Launch.textureCaps(this, mode, gpu);
+        List<String> formats = originalFormats();
+        if (caps == null || formats.isEmpty()) return null;
+        List<String> convert = TextureFormats.uncovered(TextureFormats.missing(caps, formats),
+            textureScan == null ? 0 : textureScan.converted, cacheCovers());
+        return convert.isEmpty() ? null : convert;
+    }
+
+    private boolean offerModTextures(Spec.Distribution d) {
+        if (!idle()) return false;
+        List<TextureBackend.Mod> mods = new ArrayList<>(pendingModTextures());
+        mods.removeIf(mod -> mod.offered);
+        if (mods.isEmpty()) return false;
+        modDialog(mods, d);
+        return true;
+    }
+
+    private void modDialog(List<TextureBackend.Mod> mods, Spec.Distribution play) {
+        StringBuilder details = new StringBuilder(modArchives(mods));
+        for (TextureBackend.Mod mod : mods) details.append('\n').append(mod.archive.getName());
+        details.append("\n\n").append(Texts.t(this, Texts.MOD_WHY));
+        TextureBackend backend = textures;
+        ui.show(ui.dialog().setTitle(Texts.t(this, Texts.MOD_TEXTURES)).setMessage(details)
+            .setPositiveButton(Texts.t(this, play == null ? Texts.MOD_CONVERT : Texts.MOD_CONVERT_PLAY), (dlg, w) -> {
+                backend.markMods(this, mods, false);
+                Work.Job job = textureJob(backend, textureRoot(), mods, TextureBackend.ETC2);
+                if (play == null) startJob(job);
+                else {
+                    startEdition(play);
+                    runJob(job);
+                }
+            })
+            .setNegativeButton(Texts.t(this, Texts.NOT_NOW), (dlg, w) -> {
+                backend.markMods(this, mods, false);
+                if (play != null) startEdition(play);
+            })
+            .setNeutralButton(Texts.t(this, Texts.MOD_IGNORE), (dlg, w) -> {
+                backend.markMods(this, mods, true);
+                if (play != null) startEdition(play);
+                else refresh(Texts.TEXTURES);
+            }));
+    }
+
+    private String textureError(String detail, boolean unreadableArchive) {
+        return unreadableArchive ? Texts.t(this, Texts.TEX_ARCHIVE_HELP) + "\n" + detail : detail;
+    }
+
     private File textureRoot() {
         Spec.Part first = selected.parts.get(0);
         return Install.folder(this, spec, selected, first);
@@ -1911,6 +2563,11 @@ public final class LauncherActivity extends Activity {
         textureScanning = false;
         if (source.equals(textureSource)) textureScan = scan;
         refresh(Texts.TEXTURES, Texts.RENDERER);
+        if (texturePlay != null && source.equals(textureSourceKey())) {
+            Spec.Distribution requested = texturePlay;
+            texturePlay = null;
+            if (requested == selected && hasWindowFocus() && !isFinishing() && !isDestroyed()) play(requested);
+        }
     }
 
     private interface TextureOperation<T> { T run(File index, int archiveFd); }
@@ -1919,22 +2576,38 @@ public final class LauncherActivity extends Activity {
         Spec.Part part = distribution.parts.get(0);
         String mount = Install.mount(this, distribution, part);
         if (mount.isEmpty()) return operation.run(null, -1);
-        File index = new File(State.folder(this), "mount-" + distribution.id + "-" + part.id + ".zmi");
-        try (ParcelFileDescriptor fd = mount.startsWith("content:")
-                ? getContentResolver().openFileDescriptor(Uri.parse(mount), "r")
-                : ParcelFileDescriptor.open(new File(mount), ParcelFileDescriptor.MODE_READ_ONLY)) {
-            if (fd == null) throw new IOException("Cannot open game archive");
+        File index = Install.archiveIndex(this, distribution, part);
+        ParcelFileDescriptor descriptor;
+        try {
+            descriptor = Install.openArchive(this, mount);
+        } catch (IOException | SecurityException failure) {
+            throw new IOException(Texts.t(this, Texts.ARCHIVE_UNAVAILABLE), failure);
+        }
+        try (ParcelFileDescriptor fd = descriptor) {
             return operation.run(index, fd.getFd());
         }
     }
 
     private void refreshTextures(boolean idle) {
         texturesBox.removeAllViews();
-        if (spec.textureBackend.isEmpty() || gpu == null) return;
+        if (!spec.textureSection || gpu == null) return;
         LinearLayout card = section(texturesBox, Texts.TEXTURES);
+        Spec.Mode mode = textureMode();
+        String hint = Texts.of(this, spec.textureHint);
+        card.addView(ui.label(hint.isEmpty() ? Texts.t(this, Texts.TEX_COMPARE) : hint, 13, ui.muted));
+        if (mode != null && !selected.readsCache(mode)) card.addView(ui.label(Texts.t(this, Texts.TEX_MODE_ORIGINAL), 13, ui.muted));
         if (initializing) return;
-        if (!Install.ready(this, spec, selected)) return;
-        if (!ensureTextures()) return;
+        if (!ready(selected)) return;
+        if (textureBackend() == null) return;
+        List<TextureBackend.Mod> mods = idle ? pendingModTextures() : java.util.Collections.emptyList();
+        if (!mods.isEmpty()) {
+            LinearLayout owner = (LinearLayout) card.getParent();
+            int position = owner.indexOfChild(card);
+            owner.addView(ui.label(modArchives(mods), 13, ui.accent), position);
+            owner.addView(ui.button(Texts.t(this, Texts.MOD_CONVERT), Ui.SECONDARY, () -> {
+                if (idle()) modDialog(mods, null);
+            }), position + 1);
+        }
         String source = textureSourceKey();
         if (!source.equals(textureSource)) {
             textureSource = source;
@@ -1945,9 +2618,9 @@ public final class LauncherActivity extends Activity {
             if (!textureScanning && idle) {
                 File root = textureRoot();
                 Spec.Distribution distribution = selected;
-                TextureBackend backend = textures;
                 long epoch = textureEpoch;
                 textureScanning = true;
+                TextureBackend backend = textures;
                 background(() -> {
                     File cache = Install.textureCacheRoot(this, spec, distribution, root);
                     return withTextureArchive(distribution, (index, fd) -> backend.scan(root, cache, index, fd));
@@ -1961,12 +2634,26 @@ public final class LauncherActivity extends Activity {
         }
         TextureBackend.Scan s = textureScan;
         boolean converted = s.converted != 0;
-        if (s.failure != null) { note(Texts.TEXTURES, s.failure, true); return; }
+        if (s.failure != null) { note(Texts.TEXTURES, textureError(s.failure, s.unreadableArchive), true); return; }
         if (converted) {
             card.addView(ui.label(Texts.fmt(this, Texts.TEX_DONE, s.converted == TextureBackend.ASTC ? "ASTC" : "ETC2",
                 Texts.size(this, s.convertedBytes)), 14, ui.text));
+            List<String> covers = textures.selective() ? cacheCovers() : null;
+            if (covers != null && !covers.isEmpty())
+                card.addView(ui.label(Texts.fmt(this, Texts.TEX_COVERS, String.join(", ", covers)), 13, ui.muted));
             if (s.originalsRemoved) card.addView(ui.label(Texts.t(this, Texts.TEX_GONE), 13, ui.muted));
             List<TextView> buttons = new ArrayList<>();
+            /* A selective cache and a renderer that lacks formats it does not cover: convert those as well. */
+            List<String> more = mode != null && selected.readsCache(mode) && !s.originalsRemoved ? textureSources() : null;
+            Long target = mode == null ? null : Launch.textureCaps(this, mode, gpu);
+            boolean readable = Boolean.TRUE.equals(TextureFormats.supports(target,
+                s.converted == TextureBackend.ASTC ? spec.astcFormats : spec.etc2Formats));
+            if (more != null && readable) {
+                int format = s.converted;
+                card.addView(ui.label(Texts.fmt(this, Texts.TEX_CONVERT_ONLY, String.join(", ", more)), 13, ui.muted));
+                buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, format == TextureBackend.ASTC ? "ASTC" : "ETC2"), Ui.SECONDARY,
+                    () -> startTextures(format, more)));
+            }
             if (s.removable > 0) buttons.add(ui.button(Texts.fmt(this, Texts.TEX_REMOVE, Texts.size(this, s.removable)), Ui.SECONDARY,
                 () -> ui.show(ui.dialog().setTitle(Texts.t(this, Texts.TEXTURES))
                     .setMessage(Texts.fmt(this, Texts.TEX_REMOVE_ASK, Texts.size(this, s.removable)))
@@ -1977,44 +2664,59 @@ public final class LauncherActivity extends Activity {
             if (!buttons.isEmpty()) card.addView(ui.buttons(buttons.toArray(new TextView[0])));
             return;
         }
-        if (!gpu.probed || Boolean.TRUE.equals(dxtSupport())) return;
+        if (mode == null || !selected.readsCache(mode)) return;
         if (s.textures == 0) { card.addView(ui.label(Texts.t(this, Texts.TEX_NOTHING), 13, ui.muted)); return; }
-        card.addView(ui.label(Texts.t(this, Texts.TEX_WHY), 13, ui.muted));
+        if (Boolean.FALSE.equals(TextureFormats.supports(Launch.textureCaps(this, mode, gpu), originalFormats())))
+            card.addView(ui.label(Texts.t(this, Texts.TEX_WHY), 13, ui.muted));
         card.addView(ui.label(s.sampled ? Texts.t(this, Texts.TEX_SAMPLE)
-            : Texts.fmt(this, Texts.TEX_FOUND, s.textures, Texts.size(this, s.bytes)), 14, ui.text));
+            : Texts.fmt(this, s.estimated ? Texts.TEX_ESTIMATE : Texts.TEX_FOUND, s.textures, Texts.size(this, s.bytes)), 14, ui.text));
         List<TextView> buttons = new ArrayList<>();
-        if (gpu.astc && textures.canEncode(TextureBackend.ASTC))
-            buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ASTC"), Ui.SECONDARY, () -> startTextures(TextureBackend.ASTC)));
-        buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ETC2"), Ui.SECONDARY, () -> startTextures(TextureBackend.ETC2)));
+        Long caps = Launch.textureCaps(this, mode, gpu);
+        if (caps == null) return;
+        /* Which textures a conversion touches: a selective backend only those of the formats the renderer lacks
+           (nothing to do when it lacks none), any other backend all of them. */
+        List<String> sources = textureSources(), known = originalFormats();
+        if (textures.selective() && !known.isEmpty()) {
+            if (sources == null) { card.addView(ui.label(Texts.t(this, Texts.TEX_NOTHING), 13, ui.muted)); return; }
+            card.addView(ui.label(Texts.fmt(this, Texts.TEX_CONVERT_ONLY, String.join(", ", sources)), 13, ui.muted));
+        } else if (!known.isEmpty()) {
+            card.addView(ui.label(Texts.fmt(this, Texts.TEX_CONVERT_ALL, String.join(", ", known)), 13, ui.muted));
+        }
+        if (Boolean.TRUE.equals(TextureFormats.supports(caps, spec.astcFormats)) && textures.canEncode(TextureBackend.ASTC))
+            buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ASTC"), Ui.SECONDARY, () -> startTextures(TextureBackend.ASTC, sources)));
+        if (Boolean.TRUE.equals(TextureFormats.supports(caps, spec.etc2Formats)))
+            buttons.add(ui.button(Texts.fmt(this, Texts.TEX_CONVERT, "ETC2"), Ui.SECONDARY, () -> startTextures(TextureBackend.ETC2, sources)));
+        if (buttons.isEmpty()) { card.addView(ui.label(Texts.t(this, Texts.TEX_NO_TARGET), 13, ui.muted)); return; }
         for (TextView b : buttons) Ui.enable(b, idle);
         card.addView(ui.buttons(buttons.toArray(new TextView[0])));
     }
 
-    private boolean ensureTextures() {
-        if (textures != null) return true;
-        if (spec.textureBackend.isEmpty()) return false;
-        try {
-            textures = (TextureBackend) Class.forName(spec.textureBackend).getDeclaredConstructor().newInstance();
-            return true;
-        } catch (ReflectiveOperationException | ClassCastException | LinkageError e) {
-            android.util.Log.w("Launcher", "textures: " + e);
-            return false;
-        }
-    }
-
     /** format 0 removes the conversion, TEX_REMOVE_ORIGINALS the originals it replaced. */
-    private void startTextures(int format) {
-        confirmJob(newTextureJob(format));
+    private void startTextures(int format) { startTextures(format, null); }
+
+    /** sources: the source formats to convert (a selective backend); null: all of them. */
+    private void startTextures(int format, List<String> sources) {
+        File root = textureRoot();
+        confirmJob(textureJob(textures, root, null, format, sources));
     }
 
-    private Work.Job newTextureJob(int format) {
-        File root = textureRoot();
-        TextureBackend backend = textures;
+    private Work.Job textureJob(TextureBackend backend, File root, List<TextureBackend.Mod> mods, int format) {
+        return textureJob(backend, root, mods, format, null);
+    }
+
+    private Work.Job textureJob(TextureBackend backend, File root, List<TextureBackend.Mod> mods, int format, List<String> sources) {
         Spec.Distribution distribution = selected;
         File cache = Install.textureCacheRoot(this, spec, distribution, root);
-        return new Work.Job(Texts.TEXTURES, Texts.t(this, Texts.JOB_TEXTURES), format > 0 ? cache : root) {
+        /* What the cache covers after this job (TextureFormats.covered): the next renderer change re-offers only
+           the formats it lacks and the cache does not cover. */
+        String coverKey = coverKey();
+        List<String> before = cacheCovers();
+        boolean selective = backend.selective();
+        return new Work.Job(Texts.TEXTURES, Texts.t(this, mods == null ? Texts.JOB_TEXTURES : Texts.MOD_TEXTURES), format > 0 ? cache : root) {
+            @Override boolean permitsPlay() { return mods != null; }
+            @Override void cancel() { super.cancel(); backend.cancel(); }
             @Override void work() throws Exception {
-                if (format == TextureBackend.ASTC || format == TextureBackend.ETC2) {
+                if (mods == null && (format == TextureBackend.ASTC || format == TextureBackend.ETC2)) {
                     if (!cache.equals(root) && !cache.isDirectory() && !cache.mkdirs() && !cache.isDirectory())
                         throw new IOException("Cannot create texture cache folder: " + cache);
                 }
@@ -2022,20 +2724,31 @@ public final class LauncherActivity extends Activity {
                     while (!finished) {
                         long[] p = backend.progress();
                         if (p != null && p.length >= 4) { done = p[2]; total = p[3]; itemsDone = p[0]; itemsTotal = p[1]; }
+                        if (mods != null) file = backend.currentMod();
                         try { Thread.sleep(250); } catch (InterruptedException e) { return; }
                     }
                 }, "texture-progress");
                 poll.start();
                 int result;
                 try {
-                    result = format == 0 ? backend.undo(root, cache) : format == TEX_REMOVE_ORIGINALS ? backend.removeOriginals(root)
-                    : withTextureArchive(distribution, (index, fd) -> backend.convert(root, cache, format,
-                        Runtime.getRuntime().availableProcessors(), index, fd));
+                    check();
+                    if (mods != null) {
+                        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                        result = backend.convertMods(LauncherActivity.this, mods);
+                    } else {
+                        List<String> only = selective ? sources : null;
+                        result = format == 0 ? backend.undo(root, cache) : format == TEX_REMOVE_ORIGINALS ? backend.removeOriginals(root)
+                        : withTextureArchive(distribution, (index, fd) -> backend.convert(root, cache, format,
+                            Runtime.getRuntime().availableProcessors(), index, fd, only));
+                    }
                 } finally {
                     poll.interrupt();
                 }
                 check();
-                if (result != 0) throw new Failure(Failure.IO, backend.message());
+                if (result != 0) throw new Failure(Failure.IO, textureError(backend.message(), backend.unreadableArchive()));
+                if (mods == null && format == 0) State.put(LauncherActivity.this, State.CHOICES, coverKey, null);
+                else if (mods == null && (format == TextureBackend.ETC2 || format == TextureBackend.ASTC))
+                    State.put(LauncherActivity.this, State.CHOICES, coverKey, TextureFormats.covered(before, sources, selective));
             }
         };
     }
@@ -2047,7 +2760,7 @@ public final class LauncherActivity extends Activity {
         if (initializing) return;
         boolean any = false;
         for (Spec.Category c : spec.categories) any |= c.part.isEmpty() || selected.part(c.part) != null;
-        if (!any || !Install.ready(this, spec, selected)) return;
+        if (!any || !ready(selected)) return;
         LinearLayout card = section(space, Texts.SPACE);
         TextView clean = ui.button(Texts.t(this, Texts.CLEAN), Ui.SECONDARY, this::scanCleanup);
         card.addView(ui.buttons(clean));
@@ -2196,6 +2909,8 @@ public final class LauncherActivity extends Activity {
         }
         card.addView(ui.toggle(Texts.t(this, Texts.ALWAYS_BUILTIN), null, "1".equals(State.get(this, State.CHOICES, "builtInBrowser", "0")),
             on -> State.put(this, State.CHOICES, "builtInBrowser", on ? "1" : "0")));
+        if (spec.hyperosNotice && HyperOs.vendor() != HyperOs.NONE)
+            card.addView(ui.toggle(Texts.t(this, Texts.HYPEROS_SETTING), null, !HyperOs.never(this), on -> HyperOs.never(this, !on)));
         if (spec.languages.size() > 1) {
             String current = State.get(this, State.CHOICES, "language", "");
             TextView language = ui.button(Texts.t(this, Texts.LANGUAGE) + ": " + (current.isEmpty() ? Texts.t(this, Texts.SYSTEM_LANGUAGE)
@@ -2224,11 +2939,16 @@ public final class LauncherActivity extends Activity {
     }
 
     private void copyDiagnostics() {
-        String gpuText = gpu == null ? "not checked" : gpu.renderer + " (" + gpu.vendor + ")"
-            + "; GLES DXT=" + (gpu.probed ? Boolean.toString(gpu.s3tc) : "unknown") + "; Vulkan=" + Gpu.version(gpu.vulkan);
+        String gpuText = gpu == null ? "not checked" : gpu.renderer + " (" + gpu.vendor + ") · GLES "
+            + Renderers.glVersion(gpu.gles) + " · Vulkan " + Gpu.version(gpu.vulkan);
         String mode = effectiveRenderer(selected);
+        Long caps = Launch.textureCaps(this, spec.mode(mode), gpu);
+        String formats = String.join(", ", originalFormats());
+        String exit = Launch.lastExit(this, selected);
         String report = Diagnostics.report(this, Texts.of(this, selected.title), gpuText,
-            mode == null ? "not checked" : mode, textureState(), lastError);
+            mode == null ? "not checked" : mode, textureState() + " " + formats + " · missing: "
+                + (caps == null ? "unknown" : TextureFormats.missing(caps, originalFormats())), lastError);
+        if (exit != null) report += "\n" + Texts.t(this, Texts.LAST_CRASH) + ": " + exit;
         boolean copied = Diagnostics.copy(this, report);
         note(Texts.ABOUT, Texts.t(this, copied ? Texts.DIAGNOSTICS_COPIED : Texts.E_CLIPBOARD), !copied);
     }

@@ -232,7 +232,10 @@ static int make_surface(void)
         G.window = window;
         G.surface = eglCreateWindowSurface(G.display, G.config, (EGLNativeWindowType)window, NULL);
         if (G.surface == EGL_NO_SURFACE || !eglMakeCurrent(G.display, G.surface, G.surface, G.context)) {
-            LOGGL("window surface failed %04X", eglGetError());
+            EGLint error = eglGetError();
+            if (error == EGL_CONTEXT_LOST) s2r_renderer_lost("eglMakeCurrent: EGL_CONTEXT_LOST (0x300E)");
+            LOGGL("window surface failed %04X", error);
+            s2r_fail_note("OpenGL ES: %s failed (EGL error 0x%04X)", G.surface == EGL_NO_SURFACE ? "eglCreateWindowSurface" : "eglMakeCurrent", error);
             if (G.surface != EGL_NO_SURFACE) eglDestroySurface(G.display, G.surface);
             G.surface = EGL_NO_SURFACE;
             eglMakeCurrent(G.display, G.pbuffer, G.pbuffer, G.context);
@@ -242,6 +245,16 @@ static int make_surface(void)
     void_android_window_ack(serial);
     G.cur_fbo = (GLuint)-1;
     return G.surface != EGL_NO_SURFACE;
+}
+
+/* The window make_surface took is still the activity's (a surface that failed for a window already replaced or
+   gone is no renderer failure: the next one is taken up). */
+static int window_still_current(void)
+{
+    uint32_t serial = 0;
+    void *current = void_android_window_current(&serial, 0);
+    if (current) ANativeWindow_release((ANativeWindow *)current);
+    return current && G.window && serial == G.window_serial;
 }
 
 static void follow_window(void)
@@ -389,18 +402,34 @@ static int gl_init(s2r_device *d)
     (void)d;
     memset(&G, 0, sizeof G);
     G.display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (G.display == EGL_NO_DISPLAY || !eglInitialize(G.display, NULL, NULL)) { LOGGL("eglInitialize failed"); return 0; }
+    if (G.display == EGL_NO_DISPLAY || !eglInitialize(G.display, NULL, NULL)) {
+        LOGGL("eglInitialize failed");
+        s2r_fail_note("OpenGL ES: %s failed (EGL error 0x%04X)", G.display == EGL_NO_DISPLAY ? "eglGetDisplay" : "eglInitialize", eglGetError());
+        return 0;
+    }
     /* RGBA8888 window buffers, as the Direct3D 9 layer asks (d3d9_gl.c) */
     const EGLint attrs[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_NONE };
     EGLint n = 0;
-    if (!eglChooseConfig(G.display, attrs, &G.config, 1, &n) || n < 1) { LOGGL("no EGL config"); return 0; }
-    for (int minor = 2; minor >= 1 && !G.context; --minor) {
+    if (!eglChooseConfig(G.display, attrs, &G.config, 1, &n) || n < 1) {
+        LOGGL("no EGL config");
+        s2r_fail_note("OpenGL ES: no RGBA8888 OpenGL ES 3 window config (eglChooseConfig)");
+        return 0;
+    }
+    /* debug.s2.gles=3.1 asks for the 3.1 context on a 3.2 driver (the path of a 3.1-only device). */
+    char gles_cap[92] = "";
+    __system_property_get("debug.s2.gles", gles_cap);
+    for (int minor = !strcmp(gles_cap, "3.1") ? 1 : 2; minor >= 1 && !G.context; --minor) {
         const EGLint ctx[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, minor, EGL_NONE };
         G.context = eglCreateContext(G.display, G.config, EGL_NO_CONTEXT, ctx);
         if (G.context) G.gles_minor = minor;
     }
-    if (!G.context) { LOGGL("OpenGL ES 3.1 context failed %04X", eglGetError()); return 0; }
+    if (!G.context) {
+        EGLint error = eglGetError();
+        LOGGL("OpenGL ES 3.1 context failed %04X", error);
+        s2r_fail_note("OpenGL ES: eglCreateContext for OpenGL ES 3.1 failed (EGL error 0x%04X)", error);
+        return 0;
+    }
     const EGLint pb[] = { EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE };
     G.pbuffer = eglCreatePbufferSurface(G.display, G.config, pb);
     G.surface = EGL_NO_SURFACE;
@@ -409,14 +438,34 @@ static int gl_init(s2r_device *d)
     uint32_t serial = 0;
     void *first = void_android_window_current(&serial, 1);   /* waits for the first window */
     if (first) ANativeWindow_release((ANativeWindow *)first);
-    make_surface();
+    /* The first window's surface: without it nothing can be shown (a window gone again meanwhile is no failure). */
+    if (!make_surface() && window_still_current()) return 0;
     LOGGL("%s / %s / %s", glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
     G.has_aniso = has_ext("GL_EXT_texture_filter_anisotropic");
     G.max_aniso = 1;
     if (G.has_aniso) glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &G.max_aniso);
     G.has_astc = has_ext("GL_KHR_texture_compression_astc_ldr");
-    G.has_s3tc = has_ext("GL_EXT_texture_compression_s3tc") || has_ext("GL_EXT_texture_compression_dxt1");
-    G.has_s3tc = G.has_s3tc && has_ext("GL_EXT_texture_compression_s3tc");
+    /* DXT per format, as the launcher's probe states them (Gpu.java: GL_COMPRESSED_TEXTURE_FORMATS): some drivers
+       expose only GL_EXT_texture_compression_dxt1; a format missing here goes through the launcher's cache. */
+    {
+        int s3tc = has_ext("GL_EXT_texture_compression_s3tc");
+        GLint count = 0;
+        glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &count);
+        GLint listed[256];
+        if (count < 0 || count > 256) count = 0;
+        if (count) glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, listed);
+        int lists_dxt1 = 0, lists_dxt3 = 0, lists_dxt5 = 0;
+        for (GLint i = 0; i < count; ++i) {
+            lists_dxt1 |= listed[i] == 0x83F1;      /* GL_COMPRESSED_RGBA_S3TC_DXT1_EXT */
+            lists_dxt3 |= listed[i] == 0x83F2;
+            lists_dxt5 |= listed[i] == 0x83F3;
+        }
+        G.has_s3tc = 0;
+        if (s3tc || has_ext("GL_EXT_texture_compression_dxt1") || lists_dxt1) G.has_s3tc |= S2R_DXT1;
+        if (s3tc || has_ext("GL_ANGLE_texture_compression_dxt3") || lists_dxt3) G.has_s3tc |= S2R_DXT3;
+        if (s3tc || has_ext("GL_ANGLE_texture_compression_dxt5") || lists_dxt5) G.has_s3tc |= S2R_DXT5;
+        while (glGetError() != GL_NO_ERROR) {}
+    }
     s2r_set_native_support(G.has_s3tc, 1, G.has_astc);
     if (void_android_gpu_strings) void_android_gpu_strings((const char *)glGetString(GL_RENDERER), (const char *)glGetString(GL_VERSION));
     GLint v = 0;
@@ -458,6 +507,11 @@ static int gl_init(s2r_device *d)
         if (G.base_vertex_attrib)
             LOGGL("base vertices by attribute offsets (%s)", !strcmp(choice, "attrib") ? "debug.s2.basevertex" : renderer);
         else if (mali_g51(renderer)) LOGGL("base-vertex workaround disabled (%s)", renderer);
+        /* glDrawElementsBaseVertex is OpenGL ES 3.2: a 3.1 context always takes the attribute offsets. */
+        if (G.gles_minor < 2 && !G.base_vertex_attrib) {
+            G.base_vertex_attrib = 1;
+            LOGGL("base vertices by attribute offsets (OpenGL ES 3.1 context)");
+        }
     }
     GLint align = 256;
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
@@ -486,7 +540,7 @@ static int gl_init(s2r_device *d)
     G.cur_fbo = (GLuint)-1;
     G.swap_applied = -1;
     LOGGL("GLES 3.%d, ASTC %s, S3TC %s, anisotropy %.0f, UBO align %u, rings %s, %u draw buffers", G.gles_minor,
-        G.has_astc ? "yes" : "no", G.has_s3tc ? "yes" : "no", G.max_aniso, G.uniforms.align,
+        G.has_astc ? "yes" : "no", s2r_dxt_names(G.has_s3tc), G.max_aniso, G.uniforms.align,
         G.uniforms.ptr ? "persistent" : "mapped per block", d3d_gl_limits.max_draw_buffers);
     G.target_scale = 1.0f;
     gl_check("init");
@@ -2176,8 +2230,15 @@ static void gl_present(s2r_device *d)
     uint64_t start = s2r_now_ns();
     d3d_rt_wait_begin();
     if (!eglSwapBuffers(G.display, G.surface)) {
-        LOGGL("eglSwapBuffers failed %04X: the surface is made again", eglGetError());
+        EGLint error = eglGetError();
+        /* a lost context cannot draw again: the launcher's renderer failure (renderer_failure.h) */
+        if (error == EGL_CONTEXT_LOST) s2r_renderer_lost("eglSwapBuffers: EGL_CONTEXT_LOST (0x300E)");
+        LOGGL("eglSwapBuffers failed %04X: the surface is made again", error);
         make_surface();
+        if (G.surface == EGL_NO_SURFACE && !s2r_renderer_has_presented() && window_still_current())
+            s2r_renderer_failed("OpenGL ES: no window surface before the first frame (eglSwapBuffers, then eglCreateWindowSurface failed)", 0);
+    } else {
+        s2r_renderer_presented();
     }
     d3d_rt_wait_end();
     d->present_ms = (double)(s2r_now_ns() - start) / 1e6;

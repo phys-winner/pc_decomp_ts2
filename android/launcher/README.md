@@ -2,7 +2,7 @@
 
 A template launcher that every static-recompilation port of this family builds into its own
 APK: game files from a folder or a ZIP (unpacked, or played straight from a stored ZIP), several
-distributions, renderer choice (OpenGL ES, DXVK, Turnip, also with the player's own Turnip driver package) with
+distributions, renderer choice (OpenGL ES, system Vulkan, Turnip and PanVK, including app-local drivers) with
 capability checks, cleanup of unused files,
 texture conversion, GitHub update checks passed on to the game, the port's version and GitHub link.
 English, Russian, German and Polish. Target SDK 37.
@@ -15,6 +15,15 @@ Release lists are cached for six hours (with an offline fallback), and downloade
 by SHA-256 for offline reuse. Resetting to the built-in driver keeps the cache; About offers deletion
 of unused external drivers and preserves the active one. No extra port.json settings are needed for a
 `turnip` mode; the manifest generator adds Internet access even when APK updates are disabled.
+
+Ports enable the shared overlay with `app.performanceHud` and a source of presented-frame intervals.
+The FPS overlay starts off. Turning it on for the first time shows only the frame rate. The settings dialog controls the FPS graph, frame-time range and
+each hardware or system row separately. See [integration](docs/INTEGRATION.md#оверлей-производительности).
+
+The [port inventory](docs/PORT_AUDIT.md) records the supported renderers, texture formats, shader assets
+and device results. The [per-port migration prompt](docs/PORT_SYNC_PROMPT.md) covers every project.
+The [native replacements](native/replacements/README.md) include AAudio, Lua, zlib, LZMA, ARM CRC32,
+a crash marker and the external Vulkan loader.
 
 The launcher and game editions share one Android task and one Recents card. Game activities use
 `singleTop` and inherit the application's task affinity; native libraries still run in their separate
@@ -32,7 +41,8 @@ respect the system animation setting and stop redrawing when disabled, hidden or
 
 Driver checks leave the cards in place while they run, so tapping and scrolling do not wait for
 the check to finish. Background results refresh only the requested sections after the current
-touch gesture ends; unrelated settings and cards stay attached.
+touch gesture ends, and only after the click that gesture posted has run (rebuilding a card
+detaches its Play button and would cancel that click); unrelated settings and cards stay attached.
 
 | Path | What |
 |---|---|

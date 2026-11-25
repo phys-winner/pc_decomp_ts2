@@ -29,6 +29,14 @@ static unsigned char guest[0x1000000];
 #define MEM8(p) (*GPTR(p))
 static int void_vm_readable(uint32_t p,uint32_t n){return p && n<=0x1000000u-(p&0xFFFFFFu);}
 static uint32_t void_call_guest_this(uint32_t f,uint32_t self,unsigned n,const uint32_t *args);
+typedef struct { int marker; } void_regs;
+static void void_regs_save(void_regs *saved){saved->marker=5;}
+static void void_regs_load(const void_regs *saved){assert(saved->marker==5);}
+static uint32_t fake_ticks, testing_calls, testing_value;
+static uint32_t void_tick_ms(void){return fake_ticks;}
+static uint32_t void_call_guest(uint32_t f,int n,const uint32_t *args,int pops){
+ assert(f==0xA0C2CBA3u&&!n&&!args&&!pops);++testing_calls;return 0xA0C2CB00u|testing_value;
+}
 static uint32_t void_galloc(uint32_t n);
 static void void_gfree(uint32_t p);
 static void void_log(const char *f,...){(void)f;}
@@ -71,7 +79,13 @@ static void reset(void){
  MEM32(0x6000)=0x7000;MEM32(0x6100)=0x7000;MEM32(0x7014)=0xA0001040;MEM32(0x7018)=0xA0001050;
  strcpy((char*)GPTR(0x8000),"motherlode");strcpy((char*)GPTR(0x8100),"help");strcpy((char*)GPTR(0x8200),"Add money");
 }
+static void check_testing_cheats(void) {
+ fake_ticks=250;testing_value=1;s2_cheats_sample_testing();assert(testing_calls==1&&atomic_load(&testing_cheats));
+ fake_ticks=499;testing_value=0;s2_cheats_sample_testing();assert(testing_calls==1&&atomic_load(&testing_cheats));
+ fake_ticks=500;s2_cheats_sample_testing();assert(testing_calls==2&&!atomic_load(&testing_cheats));
+}
 int main(void){
+ check_testing_cheats();
  char encoded[513];uint16_t unicode[]={0x044F,0xD83D,0xDE00},broken[]={0xD800},zero[]={0};
  assert(cheat_encode(unicode,3,encoded)&&!strcmp(encoded,"\xD1\x8F\xF0\x9F\x98\x80"));
  assert(!cheat_encode(broken,1,encoded)&&!cheat_encode(unicode+2,1,encoded)&&!cheat_encode(zero,1,encoded)&&!cheat_encode(unicode,129,encoded));
@@ -111,8 +125,15 @@ public class CheatsCheck{public static void main(String[] args){
  assert new CheatCommands.Command("motherLode\t").title(true).contains("50 000");
  assert new CheatCommands.Command("UnknownCommand\t").title(true).equals("UnknownCommand");
  assert CheatCommands.parse(new String[]{"z\tz",null,"","A\ta"}).get(0).name.equals("A");
+ java.util.List<CheatCommands.Command> catalog=CheatCommands.parse(new String[]{"boolProp\tOriginal help"});
+ assert catalog.size()==2&&catalog.get(0).input.equals("boolProp");
+ CheatCommands.Command testing=catalog.get(1);
+ assert testing.group()==6&&testing.title(true).equals("Режим разработчика (testingcheatsenabled)");
+ assert testing.input.equals("boolProp testingcheatsenabled true")&&testing.help(true).contains("false");
+ catalog=CheatCommands.parse(new String[]{"testingCheatsEnabled\tRegistered help"});
+ assert catalog.size()==1&&catalog.get(0).input.equals("testingCheatsEnabled")&&catalog.get(0).help(true).contains("Registered help");
  assert CheatCommands.groups(true).length==8&&CheatCommands.groups(false).length==8;
- System.out.println("PASS actual Java cheat catalog: all rows preserved, sorting, 8 groups, Russian annotations and original help preserved");
+ System.out.println("PASS actual Java cheat catalog: testingcheatsenabled shortcut, registered command retained, sorting, 8 groups and original help");
 }}'''
 
 
@@ -120,12 +141,14 @@ def main():
     production=(ROOT/'android/host/sims2_cheats.c').read_text(encoding='utf-8')
     compile_probe('cheats', production+HARNESS, {'host.h': HEADER,'input.h':'void void_input_screen_size(int *w,int *h);',
         'sims2_cheats.h':(ROOT/'android/host/sims2_cheats.h').read_text(),
-        'sims2_settings.h':(ROOT/'android/host/sims2_settings.h').read_text()},extra_flags=('/wd4505',))
+        'sims2_settings.h':(ROOT/'android/host/sims2_settings.h').read_text()},extra_flags=('/wd4505','/experimental:c11atomics'))
     pe=pefile.PE(str(ROOT/'original/Sims2EP9.exe'))
     assert struct.unpack('<9I',pe.get_data(0xeb8188,36)) == (0xA0CBE67E,0xA01CC32D,0xA01CD7AD,0xA0CBE190,0xA0CBE690,0xA0CBE6F0,0xA0CBE6D0,0xA0CBE460,0xA0CBE250)
     source=(ROOT/'generated/sims2-x86/sims2_A0CA8000.c').read_text()
     assert 'RECOMP_ICALL(eax); /* 0xA0CAA70D: call eax */' in source
     assert 'eax = MEM32(edi + 0x1C); /* 0xA0CAA708' in source
+    assert pe.get_data(0xe83990, 21) == b'testingCheatsEnabled\0'
+    assert pe.get_data(0xc2cbdf, 5) == b'\xbe\x90\x39\xe8\xa0'
     with tempfile.TemporaryDirectory(prefix='sims2-cheats-') as folder:
         out=Path(folder);harness=out/'CheatsCheck.java';harness.write_text(JAVA,encoding='utf-8')
         subprocess.run([str(JDK/'bin/javac.exe'),'--release','8','-encoding','UTF-8','-d',str(out),str(harness),str(ROOT/'android/app/src/org/sims2/port/CheatCommands.java')],check=True)

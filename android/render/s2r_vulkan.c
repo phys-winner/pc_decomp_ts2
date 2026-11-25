@@ -332,7 +332,9 @@ typedef struct vk_state {
     vk_tex gamma_lut;
     uint32_t gamma_serial;
     int gamma_valid;
-    int has_bc;
+    int has_bc;                   /* S2R_DXT* bits: the BC formats the driver samples */
+    VkResult sc_result;           /* the last surface/swapchain creation's failure (VK_SUCCESS: none) */
+    const char *sc_failed;        /* which call */
     vk_tex dummy[3];              /* black 2D, cube, 3D */
     VkBuffer default_vb; vk_mem default_vb_mem;
     VkQueryPool qpool;
@@ -380,6 +382,12 @@ static vk_query *open_query;
 
 static void check(VkResult r, const char *what)
 {
+    if (r == VK_ERROR_DEVICE_LOST) {
+        /* the device cannot be used again: the launcher's renderer failure, the game ends (renderer_failure.h) */
+        char reason[160];
+        snprintf(reason, sizeof reason, "%s: VK_ERROR_DEVICE_LOST (-4)", what);
+        s2r_renderer_lost(reason);
+    }
     if (r != VK_SUCCESS) {
         static int n;
         if (n++ < 60) LOGVK("%s failed: %d", what, (int)r);
@@ -2520,7 +2528,8 @@ static int swapchain_create(void)
 {
     if (!V.surface) return 0;
     VkSurfaceCapabilitiesKHR caps;
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(V.phys, V.surface, &caps) != VK_SUCCESS) return 0;
+    VkResult cr = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(V.phys, V.surface, &caps);
+    if (cr != VK_SUCCESS) { V.sc_result = cr; V.sc_failed = "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"; return 0; }
     uint32_t n = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(V.phys, V.surface, &n, NULL);
     VkSurfaceFormatKHR formats[32];
@@ -2571,12 +2580,21 @@ static int swapchain_create(void)
     VkSwapchainKHR sc;
     VkResult r = vkCreateSwapchainKHR(V.dev, &ci, NULL, &sc);
     if (V.swapchain) { swapchain_destroy(); vkDestroySwapchainKHR(V.dev, V.swapchain, NULL); V.swapchain = VK_NULL_HANDLE; }
-    if (r != VK_SUCCESS) { LOGVK("vkCreateSwapchainKHR failed: %d", (int)r); return 0; }
+    if (r != VK_SUCCESS) {
+        LOGVK("vkCreateSwapchainKHR failed: %d", (int)r);
+        V.sc_result = r; V.sc_failed = "vkCreateSwapchainKHR";
+        return 0;
+    }
     V.swapchain = sc;
     V.sc_format = fmt.format; V.sc_extent = extent; V.sc_transform = transform;
     if (!V.present_pipe || V.present_format != fmt.format) {
-        if (!present_init(fmt.format)) { LOGVK("present pass failed"); return 0; }
+        if (!present_init(fmt.format)) {
+            LOGVK("present pass failed");
+            V.sc_result = VK_ERROR_INITIALIZATION_FAILED; V.sc_failed = "the present pass (render pass, pipeline)";
+            return 0;
+        }
     }
+    V.sc_result = VK_SUCCESS; V.sc_failed = NULL;
     V.sc_count = MAX_IMAGES;
     vkGetSwapchainImagesKHR(V.dev, sc, &V.sc_count, V.sc_images);
     for (uint32_t i = 0; i < V.sc_count; ++i) {
@@ -2595,6 +2613,24 @@ static int swapchain_create(void)
     LOGVK("swapchain %ux%u format %d, %u images, transform %X, %s", extent.width, extent.height, (int)fmt.format, V.sc_count,
         (unsigned)transform, mode == VK_PRESENT_MODE_FIFO_KHR ? "FIFO" : "MAILBOX");
     return 1;
+}
+
+/* Before the first presented frame, a surface or swapchain the driver refuses for the activity's current window
+ * is the launcher's renderer failure (renderer_failure.h). A window gone or replaced meanwhile, or a surface
+ * reported lost / out of date, is not: the next window is taken up. */
+static void swapchain_failure_check(void)
+{
+    VkResult r = V.sc_result;
+    if (r == VK_SUCCESS || r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR || s2r_renderer_has_presented()) return;
+    uint32_t serial = 0;
+    void *current = void_android_window_current(&serial, 0);
+    if (current) ANativeWindow_release((ANativeWindow *)current);
+    if (!current || !V.window || serial != V.window_serial) return;
+    char reason[200];
+    snprintf(reason, sizeof reason, "Vulkan (%s, %s driver): %s failed (VkResult %d) before the first frame", V.props.deviceName,
+        s2r_vk_driver_name(V.driver), V.sc_failed ? V.sc_failed : "the swapchain", (int)r);
+    if (r == VK_ERROR_DEVICE_LOST) s2r_renderer_lost(reason);
+    s2r_renderer_failed(reason, 0);
 }
 
 /* The window the activity shows now; a new one replaces surface and swapchain.
@@ -2618,11 +2654,13 @@ static void follow_window(void)
         V.win_h = (uint32_t)ANativeWindow_getHeight(window);
         VkAndroidSurfaceCreateInfoKHR si = { VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
         si.window = window;
-        if (vkCreateAndroidSurfaceKHR(V.instance, &si, NULL, &V.surface) == VK_SUCCESS) swapchain_create();
-        else LOGVK("vkCreateAndroidSurfaceKHR failed");
+        VkResult sr = vkCreateAndroidSurfaceKHR(V.instance, &si, NULL, &V.surface);
+        if (sr == VK_SUCCESS) swapchain_create();
+        else { LOGVK("vkCreateAndroidSurfaceKHR failed"); V.sc_result = sr; V.sc_failed = "vkCreateAndroidSurfaceKHR"; }
         LOGVK("presenting into window %ux%u (serial %u)", V.win_w, V.win_h, serial);
     }
     void_android_window_ack(serial);
+    swapchain_failure_check();
 }
 
 /* =============================================================== present */
@@ -2866,7 +2904,7 @@ static void vk_present(s2r_device *d)
     if (!V.sc_fifo) { V.sc_fifo = 1; V.sc_dirty = 1; }
     s2r_pace();
     uint64_t present_start = s2r_now_ns();
-    if (V.swapchain && V.sc_dirty) { vkDeviceWaitIdle(V.dev); swapchain_create(); }
+    if (V.swapchain && V.sc_dirty) { vkDeviceWaitIdle(V.dev); swapchain_create(); swapchain_failure_check(); }
     vk_slot *s = &V.slots[V.cur];
     uint32_t image = UINT32_MAX;
     VkResult r = VK_ERROR_OUT_OF_DATE_KHR;
@@ -2875,6 +2913,7 @@ static void vk_present(s2r_device *d)
         r = vkAcquireNextImageKHR(V.dev, V.swapchain, UINT64_MAX, s->acquire, VK_NULL_HANDLE, &image);
         d3d_rt_wait_end();
         if (r == VK_ERROR_OUT_OF_DATE_KHR) { V.sc_dirty = 1; image = UINT32_MAX; }
+        if (r == VK_ERROR_DEVICE_LOST) check(r, "vkAcquireNextImageKHR");
     }
     if (image == UINT32_MAX || (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)) {
         /* no window: the frame still completes, paced like a display */
@@ -2969,6 +3008,7 @@ static void vk_present(s2r_device *d)
     d3d_rt_wait_begin();
     r = vkQueuePresentKHR(V.queue, &pi);
     d3d_rt_wait_end();
+    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) s2r_renderer_presented();
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) V.sc_dirty = 1;
     else check(r, "vkQueuePresentKHR");
     slot_next();
@@ -3199,11 +3239,15 @@ static int dummies_init(void)
     return 1;
 }
 
+/* Sampled and linearly filtered in optimal tiling: the game filters and mips its textures. The
+   launcher's probe (launcher/native/replacements/vulkan_driver.h port_vulkan_samples) states a
+   format of the selected driver by the same two bits, so its card and this renderer agree. */
 static int format_samples(VkFormat f)
 {
     VkFormatProperties fp;
     vkGetPhysicalDeviceFormatProperties(V.phys, f, &fp);
-    return (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    return (fp.optimalTilingFeatures & need) == need;
 }
 
 /* The driver's functions: global ones before the instance, the rest from it (device-level ones again
@@ -3275,36 +3319,44 @@ static int vk_open_device(int kind)
     PFN_vkGetInstanceProcAddr gipa = s2r_vk_open(kind, error, sizeof error);
     if (!gipa || !vk_load_global(gipa)) {
         LOGVK("%s Vulkan driver unavailable: %s", s2r_vk_driver_name(kind), error[0] ? error : "no vkCreateInstance");
+        s2r_fail_note("%s Vulkan driver unavailable: %s", s2r_vk_driver_name(kind), error[0] ? error : "no vkCreateInstance");
         return 0;
     }
     uint32_t loader = VK_API_VERSION_1_0;
     if (vkEnumerateInstanceVersion) vkEnumerateInstanceVersion(&loader);
-    if (loader < VK_API_VERSION_1_1) {
-        LOGVK("%s Vulkan driver: instance version %u.%u, the renderer needs 1.1", s2r_vk_driver_name(kind),
-            VK_API_VERSION_MAJOR(loader), VK_API_VERSION_MINOR(loader));
-        return 0;
-    }
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     app.pApplicationName = "The Sims 2"; app.pEngineName = "The Sims 2 native renderer";
-    app.apiVersion = VK_API_VERSION_1_1;
+    /* The renderer uses Vulkan 1.0 with VK_KHR_swapchain and SPIR-V 1.0 shaders only. A 1.0 loader
+       (Android 7-8 system drivers) refuses a higher apiVersion with VK_ERROR_INCOMPATIBLE_DRIVER. */
+    app.apiVersion = loader >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
     const char *iext[2] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME };
     VkInstanceCreateInfo ii = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ii.pApplicationInfo = &app; ii.enabledExtensionCount = 2; ii.ppEnabledExtensionNames = iext;
     VkResult r = vkCreateInstance(&ii, NULL, &V.instance);
-    if (r != VK_SUCCESS) { LOGVK("%s driver: vkCreateInstance failed: %d", s2r_vk_driver_name(kind), (int)r); return 0; }
-    if (!vk_load_instance()) return 0;
-    uint32_t n = 1;
-    r = vkEnumeratePhysicalDevices(V.instance, &n, &V.phys);
-    if ((r != VK_SUCCESS && r != VK_INCOMPLETE) || !n) { LOGVK("no Vulkan device"); return 0; }
-    vkGetPhysicalDeviceProperties(V.phys, &V.props);
-    vkGetPhysicalDeviceMemoryProperties(V.phys, &V.memprops);
-    if (VK_API_VERSION_MAJOR(V.props.apiVersion) == 1 && VK_API_VERSION_MINOR(V.props.apiVersion) < 1) {
-        LOGVK("%s supports Vulkan %u.%u only", V.props.deviceName, VK_API_VERSION_MAJOR(V.props.apiVersion),
-            VK_API_VERSION_MINOR(V.props.apiVersion));
+    if (r != VK_SUCCESS) {
+        LOGVK("%s driver: vkCreateInstance failed: %d", s2r_vk_driver_name(kind), (int)r);
+        s2r_fail_note("%s Vulkan driver: vkCreateInstance failed (VkResult %d)", s2r_vk_driver_name(kind), (int)r);
         return 0;
     }
+    if (!vk_load_instance()) {
+        s2r_fail_note("%s Vulkan driver lacks a Vulkan 1.0 instance or device function (sims2.log names it)", s2r_vk_driver_name(kind));
+        return 0;
+    }
+    uint32_t n = 1;
+    r = vkEnumeratePhysicalDevices(V.instance, &n, &V.phys);
+    if ((r != VK_SUCCESS && r != VK_INCOMPLETE) || !n) {
+        LOGVK("no Vulkan device");
+        s2r_fail_note("%s Vulkan driver: no GPU (vkEnumeratePhysicalDevices %d, %u devices)", s2r_vk_driver_name(kind), (int)r, n);
+        return 0;
+    }
+    vkGetPhysicalDeviceProperties(V.phys, &V.props);
+    vkGetPhysicalDeviceMemoryProperties(V.phys, &V.memprops);
     const char *mismatch = kind != S2R_VK_SYSTEM ? vk_driver_mismatch(kind) : NULL;
-    if (mismatch) { LOGVK("%s driver (%s): %s", s2r_vk_driver_name(kind), V.props.deviceName, mismatch); return 0; }
+    if (mismatch) {
+        LOGVK("%s driver (%s): %s", s2r_vk_driver_name(kind), V.props.deviceName, mismatch);
+        s2r_fail_note("%s Vulkan driver (%s): %s", s2r_vk_driver_name(kind), V.props.deviceName, mismatch);
+        return 0;
+    }
     VkPhysicalDeviceFeatures have;
     vkGetPhysicalDeviceFeatures(V.phys, &have);
     V.have = have;
@@ -3315,7 +3367,11 @@ static int vk_open_device(int kind)
     vkGetPhysicalDeviceQueueFamilyProperties(V.phys, &qn, qf);
     V.queue_family = UINT32_MAX;
     for (uint32_t i = 0; i < qn; ++i) if (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) { V.queue_family = i; break; }
-    if (V.queue_family == UINT32_MAX) { LOGVK("no graphics queue"); return 0; }
+    if (V.queue_family == UINT32_MAX) {
+        LOGVK("no graphics queue");
+        s2r_fail_note("%s Vulkan driver (%s): no graphics queue", s2r_vk_driver_name(kind), V.props.deviceName);
+        return 0;
+    }
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qi = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
     qi.queueFamilyIndex = V.queue_family; qi.queueCount = 1; qi.pQueuePriorities = &prio;
@@ -3330,7 +3386,11 @@ static int vk_open_device(int kind)
     di.enabledExtensionCount = 1; di.ppEnabledExtensionNames = dext;
     di.pEnabledFeatures = &want;
     r = vkCreateDevice(V.phys, &di, NULL, &V.dev);
-    if (r != VK_SUCCESS) { LOGVK("%s driver: vkCreateDevice failed: %d", s2r_vk_driver_name(kind), (int)r); return 0; }
+    if (r != VK_SUCCESS) {
+        LOGVK("%s driver: vkCreateDevice failed: %d", s2r_vk_driver_name(kind), (int)r);
+        s2r_fail_note("%s Vulkan driver (%s): vkCreateDevice failed (VkResult %d)", s2r_vk_driver_name(kind), V.props.deviceName, (int)r);
+        return 0;
+    }
     vkGetDeviceQueue(V.dev, V.queue_family, 0, &V.queue);
     vk_load_device();
     V.driver = kind;
@@ -3343,16 +3403,28 @@ static int vk_init(s2r_device *d)
     memset(&V, 0, sizeof V);
     V.serial = 1;
     int kind = s2r_vk_driver();
+    /* Only the chosen driver: one that cannot start is the launcher's renderer failure (s2r_init), never a
+       quiet switch to the system driver (owner's decision, 24 November 2026). */
     if (!vk_open_device(kind)) {
         vk_close_device();
-        if (kind == S2R_VK_SYSTEM || !vk_open_device(S2R_VK_SYSTEM)) { vk_close_device(); return 0; }
-        LOGVK("the %s driver could not start: the system Vulkan driver renders this session", s2r_vk_driver_name(kind));
+        return 0;
     }
     V.has_aniso = V.have.samplerAnisotropy;
     V.max_aniso = V.has_aniso ? V.props.limits.maxSamplerAnisotropy : 1.0f;
-    V.has_etc2 = V.have.textureCompressionETC2 && format_samples(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
+    /* The game's data holds DXT1, DXT3 and DXT5 (BC1-BC3; 13873 / 13392 / 701 TXTR in Base..EP9
+       and SP1-SP7). Each is sampled as it is where the driver samples that BC format (the launcher's
+       probe states them one by one); a missing one goes through the launcher's cache, which a selective
+       conversion fills with just the missing formats. An ETC2 cache stores opaque DXT1 as ETC2 RGB, the
+       others as ETC2 RGBA (s2r_texcache.c). */
+    V.has_etc2 = V.have.textureCompressionETC2 && format_samples(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK)
+        && format_samples(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK);
     V.has_astc = V.have.textureCompressionASTC_LDR && format_samples(VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
-    V.has_bc = V.have.textureCompressionBC && format_samples(VK_FORMAT_BC3_UNORM_BLOCK) && format_samples(VK_FORMAT_BC1_RGBA_UNORM_BLOCK);
+    V.has_bc = 0;
+    if (V.have.textureCompressionBC) {
+        if (format_samples(VK_FORMAT_BC1_RGBA_UNORM_BLOCK)) V.has_bc |= S2R_DXT1;
+        if (format_samples(VK_FORMAT_BC2_UNORM_BLOCK)) V.has_bc |= S2R_DXT3;
+        if (format_samples(VK_FORMAT_BC3_UNORM_BLOCK)) V.has_bc |= S2R_DXT5;
+    }
     s2r_set_native_support(V.has_bc, V.has_etc2, V.has_astc);
     d3d_gl_limits.max_texture = V.props.limits.maxImageDimension2D;
     d3d_gl_limits.max_3d_texture = V.props.limits.maxImageDimension3D;
@@ -3414,6 +3486,7 @@ static int vk_init(s2r_device *d)
         !ring_create(&V.staging, 8u << 20, 2u << 20, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0) ||
         !ring_create(&V.stream, 8u << 20, 1u << 20, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 0)) {
         LOGVK("ring buffers failed");
+        s2r_fail_note("Vulkan (%s): the uniform, staging and stream buffers could not be created", V.props.deviceName);
         return 0;
     }
     VkDescriptorSetLayoutBinding binds[24];
@@ -3464,7 +3537,11 @@ static int vk_init(s2r_device *d)
     free(pdata);
     V.cur = 0;
     slot_begin();
-    if (!dummies_init()) { LOGVK("dummy resources failed"); return 0; }
+    if (!dummies_init()) {
+        LOGVK("dummy resources failed");
+        s2r_fail_note("Vulkan (%s): the placeholder textures could not be created", V.props.deviceName);
+        return 0;
+    }
     uint32_t serial = 0;
     void *first = void_android_window_current(&serial, 1);   /* waits for the first window */
     if (first) ANativeWindow_release((ANativeWindow *)first);
@@ -3475,7 +3552,7 @@ static int vk_init(s2r_device *d)
         "pipeline cache %zu bytes, GPU timestamps %s",
         V.props.deviceName, s2r_vk_driver_name(V.driver), V.driver != S2R_VK_SYSTEM && s2r_vk_custom() ? " (the player's)" : "",
         VK_API_VERSION_MAJOR(V.props.apiVersion), VK_API_VERSION_MINOR(V.props.apiVersion),
-        VK_API_VERSION_PATCH(V.props.apiVersion), V.props.driverVersion, V.has_bc ? "yes" : "no", V.has_etc2 ? "yes" : "no",
+        VK_API_VERSION_PATCH(V.props.apiVersion), V.props.driverVersion, s2r_dxt_names(V.has_bc), V.has_etc2 ? "yes" : "no",
         V.has_astc ? "yes" : "no", V.max_aniso, (int)V.depth_format, V.ubo_align, psize,
         V.ts_ok ? "yes" : V.props.limits.timestampComputeAndGraphics ? "no (query pool failed)" : "no (timestampComputeAndGraphics false)");
     {

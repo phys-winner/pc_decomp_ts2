@@ -252,7 +252,8 @@ void d3d_rt_start(void)
     const char *env = getenv("S2_RENDER_THREAD");
     threaded = !(env && *env == '0');
     if (!threaded) { void_log("[rt] render thread off: GL calls run inline"); return; }
-    ring = (uint8_t *)aligned_alloc(64, RING_BYTES);
+    void *ring_memory = NULL;   /* aligned_alloc is API 28 */
+    ring = posix_memalign(&ring_memory, 64, RING_BYTES) ? NULL : (uint8_t *)ring_memory;
     if (!ring || pthread_create(&render_thread, NULL, render_main, NULL) != 0) {
         void_log("[rt] no render thread: GL calls run inline");
         threaded = 0;

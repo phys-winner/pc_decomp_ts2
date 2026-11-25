@@ -37,19 +37,20 @@ public class RendererDefaultsCheck {
 def main():
     spec=json.loads((ROOT/'android/port.json').read_text(encoding='utf-8'))
     assert spec['renderers']['default']=='gles'
-    assert spec['distributions'][0]['renderers']==['gles','vulkan','turnip','panvk']
+    assert spec['distributions'][0]['renderers']==['gles','vulkan','vulkan-turnip','vulkan-panvk']
     modes={m['id']:m for m in spec['renderers']['modes']}
-    assert set(modes)=={'gles','vulkan','turnip','panvk'}, sorted(modes)
+    assert set(modes)=={'gles','vulkan','vulkan-turnip','vulkan-panvk'}, sorted(modes)
     assert modes['gles']['kind']=='gles'
-    assert modes['vulkan']['kind']=='vulkan' and modes['vulkan']['vulkan']=='1.1' and modes['vulkan']['probe']=='version'
+    assert modes['vulkan']['kind']=='vulkan' and modes['vulkan']['vulkan']=='1.0' and modes['vulkan']['probe']=='version'
     # The app-local drivers: the native renderer's own version check (not DXVK's 1.3), their libraries
     # packed by build_game_apk.py from the pins, the driver library adrenotools loads.
     import build_game_apk
     pins=json.loads((ROOT/'dependencies.json').read_text(encoding='utf-8'))
     packed={n for c in build_game_apk.VULKAN_PINS for n in pins[c]['runtime']}
-    for mid,kind,driver in (('turnip','turnip','libs2turnip.so'),('panvk','panvk','libvulkan_panfrost.so')):
+    for mid,kind,driver in (('vulkan-turnip','turnip','libs2turnip.so'),('vulkan-panvk','panvk','libvulkan_panfrost.so')):
         m=modes[mid]
-        assert m['kind']==kind and m['vulkan']=='1.1' and m['probe']=='version' and m['driver']==driver, m
+        assert m['aliases']==[kind], m
+        assert m['kind']==kind and m['vulkan']=='1.0' and m['probe']=='version' and m['driver']==driver, m
         assert driver in m['libraries'] and set(m['libraries'])<=packed, (mid, sorted(set(m['libraries'])-packed))
     with tempfile.TemporaryDirectory(prefix='sims2-renderer-default-') as folder:
         out=Path(folder);test=out/'RendererDefaultsCheck.java';test.write_text(CHECK,encoding='utf-8')

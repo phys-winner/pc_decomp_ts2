@@ -1072,7 +1072,12 @@ WINAPI_EXPORT(K32, GetVersionExA, 1)
 WINAPI_EXPORT(K32, GetSystemInfo, 1)
 {
     uint32_t out = ARG(0);
-    long cpus = sysconf(_SC_NPROCESSORS_CONF);
+    /* bionic counts the configured CPUs by reading /sys/devices/system/cpu
+     * on every call, and the game asks per allocation (0xA00855B0): a lot's
+     * first frames spent 0.4% of the game thread there. The count is fixed. */
+    static long configured;
+    if (!configured) configured = sysconf(_SC_NPROCESSORS_CONF);
+    long cpus = configured;
     if (cpus < 1) cpus = 1;
     if (cpus > 32) cpus = 32;
     memset(GPTR(out), 0, 36);

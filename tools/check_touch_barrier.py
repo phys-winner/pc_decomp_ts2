@@ -49,6 +49,7 @@ double s2_ui_factor(void){return 1;}
 uint32_t s2_ui_pick(uint32_t root,int x,int y){uint32_t p[2]={(uint32_t)x,(uint32_t)y};return void_call_guest_this(MEM32(MEM32(root)+0xBC),root,2,p);}
 uint32_t s2_ui_mouse_pick(uint32_t root,int x,int y){return s2_ui_pick(root,x,y);}
 void s2_cheats_owner(unsigned serial,uint32_t manager){(void)serial;(void)manager;}
+void s2_cheats_sample_testing(void){}
 void sub_A0B4C1B0_lifted(void){bad=209;}
 void *memcpy(void *d,const void *s,size_t n){uint8_t *o=d;const uint8_t *i=s;while(n--)*o++=*i++;return d;}
 void *memset(void *d,int c,size_t n){uint8_t *o=d;while(n--)*o++=(uint8_t)c;return d;}

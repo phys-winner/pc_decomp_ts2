@@ -17,23 +17,25 @@ struct Utf {
 
 extern "C" {
 
-/* {textures, bytes, convertedFormat, convertedTextures, convertedBytes, stale}, or null with the
- * reason in nativeMessage(). */
+/* {textures, bytes, convertedFormat, convertedTextures, convertedBytes, stale, convertedSources (S2TC_SOURCE_BIT
+ * mask)}, or null with the reason in nativeMessage(). */
 JNIEXPORT jlongArray JNICALL Java_org_sims2_port_TextureCache_nativeScan(JNIEnv *env, jclass, jstring game, jstring cache, jstring index, jint fd)
 {
     Utf dir(env, game), output(env, cache), mount(env, index);
     s2texconv_status s;
     if (s2texconv_scan_at(dir.chars, output.chars, &s, mount.chars, fd)) return nullptr;
-    jlong values[] = {s.textures, s.bytes, s.converted_format, s.converted_textures, s.converted_bytes, s.stale};
-    jlongArray out = env->NewLongArray(6);
-    if (out) env->SetLongArrayRegion(out, 0, 6, values);
+    jlong values[] = {s.textures, s.bytes, s.converted_format, s.converted_textures, s.converted_bytes, s.stale,
+                      static_cast<jlong>(s.converted_sources)};
+    jlongArray out = env->NewLongArray(7);
+    if (out) env->SetLongArrayRegion(out, 0, 7, values);
     return out;
 }
 
-JNIEXPORT jint JNICALL Java_org_sims2_port_TextureCache_nativeConvert(JNIEnv *env, jclass, jstring game, jstring cache, jint format, jint threads, jstring index, jint fd)
+/* sources: S2TC_SOURCE_BIT mask of the DXT formats to convert (selective conversion), 0 all of them. */
+JNIEXPORT jint JNICALL Java_org_sims2_port_TextureCache_nativeConvert(JNIEnv *env, jclass, jstring game, jstring cache, jint format, jint threads, jstring index, jint fd, jint sources)
 {
     Utf dir(env, game), output(env, cache), mount(env, index);
-    return s2texconv_convert_at(dir.chars, output.chars, format, threads, mount.chars, fd);
+    return s2texconv_convert_sources(dir.chars, output.chars, format, threads, mount.chars, fd, static_cast<unsigned>(sources));
 }
 
 JNIEXPORT jint JNICALL Java_org_sims2_port_TextureCache_nativeRemove(JNIEnv *env, jclass, jstring game)

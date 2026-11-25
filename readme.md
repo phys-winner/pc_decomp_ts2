@@ -364,12 +364,12 @@ adb -s DEVICE_SERIAL shell am start -n org.sims2.port/.GameActivity --es userdat
 
 ## Local release artifacts
 
-Version `0.3-dev` and version code `7` are stored in
+Version `0.3.1-dev` and version code `8` are stored in
 `android/app/AndroidManifest.xml`. Increase the code for subsequent published updates.
 
 Package a published release from its reviewed commit so that the launcher's
 `assets/launcher/build.json` records that source commit. Name the artifact
-**`pub/sims2-0.3-dev-COMMIT.apk`**, where `COMMIT`
+**`pub/sims2-0.3.1-dev-COMMIT.apk`**, where `COMMIT`
 is the first eight characters of the Git commit, with a matching `.apk.sha256`.
 For a local build with uncommitted changes, append `-dirty` to the commit suffix.
 
@@ -378,7 +378,7 @@ $env:PORT_LAUNCHER = (Resolve-Path android/launcher).Path
 python -X utf8 -B tools/build_game_apk.py --skip-native
 $sims2Commit = git rev-parse --short=8 HEAD
 if (git status --porcelain) { $sims2Commit += "-dirty" }
-$sims2ApkName = "sims2-0.3-dev-$sims2Commit.apk"
+$sims2ApkName = "sims2-0.3.1-dev-$sims2Commit.apk"
 New-Item -ItemType Directory -Force pub | Out-Null
 Copy-Item build/android-game/sims2.apk (Join-Path pub $sims2ApkName)
 $sims2Hash = (Get-FileHash (Join-Path pub $sims2ApkName) -Algorithm SHA256).Hash.ToLowerInvariant()

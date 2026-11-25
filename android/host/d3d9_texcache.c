@@ -149,9 +149,12 @@ static void open_cache(int etc2, int astc)
     }
     cache_format = (int)header.format;
     state = 1;
-    void_log("[texcache] %s: %s, %llu levels of %llu textures, %.0f MB, index %s (%.1f MB)", path, name,
+    uint32_t covered = s2tc_covered(header.sources);
+    void_log("[texcache] %s: %s, %llu levels of %llu textures, %.0f MB, index %s (%.1f MB), sources%s%s%s", path, name,
         (unsigned long long)header.entry_count, (unsigned long long)header.textures, (double)header.file_size / 1048576.0,
-        mapped ? "mapped" : "read", (double)bytes / 1048576.0);
+        mapped ? "mapped" : "read", (double)bytes / 1048576.0,
+        (covered & S2TC_SOURCE_BIT(S2TC_SRC_DXT1)) ? " DXT1" : "", (covered & S2TC_SOURCE_BIT(S2TC_SRC_DXT3)) ? " DXT3" : "",
+        (covered & S2TC_SOURCE_BIT(S2TC_SRC_DXT5)) ? " DXT5" : "");
 }
 
 int d3d_texcache_open(int etc2, int astc)

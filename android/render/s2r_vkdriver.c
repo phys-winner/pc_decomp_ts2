@@ -100,9 +100,15 @@ static void driver_environment(int kind)
     if (kind == S2R_VK_TURNIP) {
         char model[64];
         gpu_model(model, sizeof model);
-        if (!strncmp(model, "Adreno6", 7)) {
+        /* The launcher's switch (port.json "adreno6_sysmem", Renderer -> advanced settings, on by
+           default); 0 lets Turnip choose GMEM tiles again. vulkan.env still wins either way. */
+        const char *option = getenv("PORT_OPTION_ADRENO6_SYSMEM");
+        int wanted = !option || strcmp(option, "0");
+        if (!strncmp(model, "Adreno6", 7) && wanted) {
             setenv("TU_DEBUG", "sysmem", 0);
             LOGVD("%s: Turnip renders without GMEM tiles (TU_DEBUG=%s)", model, getenv("TU_DEBUG"));
+        } else if (!strncmp(model, "Adreno6", 7)) {
+            LOGVD("%s: the sysmem workaround is off in the launcher: Turnip may use GMEM tiles", model);
         }
     } else if (kind == S2R_VK_PANVK) {
         char product[PROP_VALUE_MAX] = "";

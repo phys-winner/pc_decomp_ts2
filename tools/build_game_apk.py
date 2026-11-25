@@ -113,9 +113,9 @@ def build_unpacker(abi="arm64"):
     out.parent.mkdir(exist_ok=True)
     xz = XZ_EMBEDDED / "linux/lib/xz"
     if abi == "arm32":
-        target, define, page = "armv7a-linux-androideabi29", "XZ_DEC_ARMTHUMB", "4096"
+        target, define, page = "armv7a-linux-androideabi26", "XZ_DEC_ARMTHUMB", "4096"
     else:
-        target, define, page = "aarch64-linux-android29", "XZ_DEC_ARM64", "16384"
+        target, define, page = "aarch64-linux-android26", "XZ_DEC_ARM64", "16384"
     run(NDK / "toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe", "--target=" + target, "-O2",
         "-std=gnu11", "-fPIC", "-shared", "-Wall", "-Wextra", "-D" + define, "-DXZ_USE_CRC64", "-DXZ_DEC_SINGLE",
         "-I" + str(XZ_EMBEDDED / "linux/include/linux"), "-I" + str(XZ_EMBEDDED / "userspace"),
@@ -149,32 +149,47 @@ def glslang_notice():
     return "\n".join(parts)
 
 
-# The app-local Vulkan drivers of the native Vulkan renderer (port.json modes "turnip" and "panvk",
-# android/render/s2r_vkdriver.c): adrenotools with its hooks and libc++_shared, Mesa Turnip, Mesa PanVK.
-# Each library must match its pin in dependencies.json; they come from build/vulkan-runtime (or
-# S2_VULKAN_RUNTIME), staged from the ut3 port's Turnip runtime and Frostpunk's PanVK build.
+# The app-local Vulkan drivers of the native Vulkan renderer (port.json modes "vulkan-turnip" and
+# "vulkan-panvk", android/render/s2r_vkdriver.c): adrenotools with its hooks and libc++_shared, Mesa
+# Turnip, Mesa PanVK. Each library must match its pin in dependencies.json. PanVK is the shared
+# reference of all ports, ../launcher/drivers/panvk (S2_PANVK_DIR overrides), whose MANIFEST.json must
+# name the same hash; the others come from build/vulkan-runtime (or S2_VULKAN_RUNTIME), staged from the
+# ut3 port's Turnip runtime.
 VULKAN_RUNTIME = Path(os.environ.get("S2_VULKAN_RUNTIME", ROOT / "build/vulkan-runtime"))
 VULKAN_PINS = ("adrenotools", "turnip", "panvk", "libcxx_shared")
 VULKAN_LICENSES = {"adrenotools.txt": ("adrenotools", "adrenotools.BSD-2-Clause.txt"),
                    "linkernsbypass.txt": ("adrenotools", "linkernsbypass.BSD-2-Clause.txt"),
                    "turnip-mesa.txt": ("turnip", "Turnip-LICENSE-NOTE.txt"),
-                   "PanVK-JimVulkan-NOTICE.txt": ("panvk", "PanVK-JimVulkan-NOTICE.txt"),
+                   "PanVK-NOTICE.txt": ("panvk", "NOTICE.txt"),
                    "libcxx-ndk.txt": ("libcxx_shared", "NOTICE")}
+
+
+def panvk_reference():
+    """The shared PanVK folder (launcher/drivers/panvk), or None when this checkout has none."""
+    folder = Path(os.environ.get("S2_PANVK_DIR", ROOT.parent / "launcher/drivers/panvk"))
+    return folder if (folder / "MANIFEST.json").is_file() else None
 
 
 def vulkan_drivers():
     """[(file, packaged name)] of the driver libraries and [(file, license name)], checked against the pins."""
     import json
     pins = json.loads((ROOT / "dependencies.json").read_text(encoding="utf-8"))
+    reference = panvk_reference()
+    if reference:
+        manifest = json.loads((reference / "MANIFEST.json").read_text(encoding="utf-8"))
+        for name, digest in pins["panvk"]["runtime"].items():
+            if manifest["library"]["file"] != name or manifest["library"]["sha256"] != digest:
+                raise SystemExit(f"{reference / 'MANIFEST.json'}: names {manifest['library']['sha256'][:12]}..., "
+                                 f"dependencies.json pins {digest[:12]}... for {name}")
     libraries, licenses = [], []
     for component in VULKAN_PINS:
         for name, digest in pins[component]["runtime"].items():
-            path = VULKAN_RUNTIME / name
+            path = (reference if component == "panvk" and reference else VULKAN_RUNTIME) / name
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise SystemExit(f"{path}: missing or not the pinned {component} library ({digest[:12]}...)")
             libraries.append((path, name))
     for name, (component, pinned) in VULKAN_LICENSES.items():
-        path = VULKAN_RUNTIME / "licenses" / name
+        path = reference / pinned if component == "panvk" and reference else VULKAN_RUNTIME / "licenses" / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != pins[component]["licenses"][pinned]:
             raise SystemExit(f"{path}: missing or not the pinned {component} notice")
         licenses.append((path, name))
@@ -249,7 +264,7 @@ def main():
     ndk = os.environ.get("ANDROID_NDK", str(NDK))
     for target in abis:
         subprocess.run([sys.executable, str(ROOT / "tools/build_texconv.py"), "--abi", target], check=True)
-        probes[target] = port_launcher.build_probe(OUT / "probe" / target, prepared["package"], ndk=ndk, api=29, abi=target)
+        probes[target] = port_launcher.build_probe(OUT / "probe" / target, prepared["package"], ndk=ndk, api=26, abi=target)
     shutil.copyfile(ROOT / "reference/astcenc/LICENSE.txt", assets / "licenses/astcenc.txt")
     shutil.copyfile(ROOT / "reference/etcpak/LICENSE.txt", assets / "licenses/etcpak.txt")
     shutil.copyfile(XZ_EMBEDDED / "COPYING", assets / "licenses/xz-embedded.txt")
@@ -269,7 +284,7 @@ def main():
     # cmd.exe limits d8.bat to 8191 characters; the launcher's class list exceeds it.
     inputs = OUT / "d8-inputs.txt"
     inputs.write_text("".join(f"{path}\n" for path in classes), encoding="utf-8")
-    run(TOOLS / "d8.bat", "--lib", ANDROID_JAR, "--min-api", "29", "--output", OUT / "dex", "@" + str(inputs), shell=False)
+    run(TOOLS / "d8.bat", "--lib", ANDROID_JAR, "--min-api", "26", "--output", OUT / "dex", "@" + str(inputs), shell=False)
     unsigned = OUT / "unsigned.apk"
     shutil.copy(OUT / "base.apk", unsigned)
     with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as apk:

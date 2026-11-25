@@ -103,13 +103,13 @@
  "panvk": {
   "url": "https://github.com/JimVulkan/mali-panvk",
   "revision": "58f2c55854",
-  "source": "Frostpunk tools/build_panvk.sh with its GPU patch and Android gralloc support",
-  "note": "Pinned output of Frostpunk's tools/build_panvk.sh (frostpunk/build/gpu-runtime/panvk/libvulkan_panfrost-fixed.so), staged in build/vulkan-runtime; the launcher's \"panvk\" renderer mode. The bundled kbase build uses 4 KiB kernel pages.",
+  "source": "The shared reference of all ports: ../launcher/drivers/panvk (MANIFEST.json, panvk-r10.patch, build_panvk.sh, NOTICE.txt); mali-panvk 58f2c55854 with Kraid e7371b07 and the ports' patch 74ae56c6",
+  "note": "tools/build_game_apk.py takes libvulkan_panfrost.so and NOTICE.txt from ../launcher/drivers/panvk (S2_PANVK_DIR overrides; else build/vulkan-runtime) and checks both against these pins and the folder's MANIFEST.json; the launcher's \"vulkan-panvk\" renderer mode. Needs Android API 30 (the library imports the C11 thrd_/mtx_/cnd_ functions of API 30) and 4 KiB kernel pages. Replaces the 6e85bc6f build of Frostpunk's recipe (a subset of this one, see the manifest's history).",
   "runtime": {
-   "libvulkan_panfrost.so": "6e85bc6f076289101b9da04373f1e36640f8cb2aea6132b9f31c49cf4285a836"
+   "libvulkan_panfrost.so": "04bde80d79916b6934fda15cc2aeb0a59e2a395a4eb564f3a7dece35d5e54492"
   },
   "licenses": {
-   "PanVK-JimVulkan-NOTICE.txt": "a0dda6f48f48df50c29d07e1f4721b42a6ed861010efe51296c488465179d6ac"
+   "NOTICE.txt": "a0dda6f48f48df50c29d07e1f4721b42a6ed861010efe51296c488465179d6ac"
   }
  },
  "libcxx_shared": {

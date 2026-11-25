@@ -37,3 +37,66 @@ void sub_A0831280(void)
     g_eax = (uint32_t)strlen((const char *)GPTR(MEM32(g_esp + 4)));
     g_esp += 4;
 }
+
+/* The scene graph's material command parser (a lot's zoom-out, rotation and
+ * floor-change frames: 70% material creation on the Huawei POT-LX1,
+ * 2026-11-25) scans its text with these four; lifted, each byte cost a
+ * dozen guest operations (the SSE2/AVX2 forms through per-instruction
+ * emulation). Same contracts as the originals; ECX/EDX are scratch to every
+ * caller. */
+
+/* strncmp (ucrt strncmp.asm): 0 when equal within the count or up to the
+ * terminator, else -1 or 1 by the first differing byte, unsigned (sbb/or). */
+void sub_A08318B0_lifted(void);
+void sub_A08318B0(void)
+{
+    const uint8_t *a = (const uint8_t *)GPTR(MEM32(g_esp + 4)), *b = (const uint8_t *)GPTR(MEM32(g_esp + 8));
+    uint32_t count = MEM32(g_esp + 12), result = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint8_t x = a[i], y = b[i];
+        if (x != y) { result = x < y ? 0xFFFFFFFFu : 1u; break; }
+        if (!x) break;
+    }
+    g_eax = result;
+    g_esp += 4;
+}
+
+/* memchr (vcruntime memchr.asm): the first byte equal to (unsigned char)value
+ * in the count, or NULL. */
+void sub_A0828340_lifted(void);
+void sub_A0828340(void)
+{
+    uint32_t buf = MEM32(g_esp + 4), count = MEM32(g_esp + 12), result = 0;
+    if (count) {
+        const uint8_t *p = (const uint8_t *)GPTR(buf);
+        const uint8_t *hit = (const uint8_t *)memchr(p, (int)(MEM32(g_esp + 8) & 0xFFu), count);
+        if (hit) result = buf + (uint32_t)(hit - p);
+    }
+    g_eax = result;
+    g_esp += 4;
+}
+
+/* strcspn (ucrt strcspn.asm): the length of the leading span without any
+ * byte of the control string (a 256-bit set, so bytes above 0x7F count). */
+void sub_A08413C0_lifted(void);
+void sub_A08413C0(void)
+{
+    g_eax = (uint32_t)strcspn((const char *)GPTR(MEM32(g_esp + 4)), (const char *)GPTR(MEM32(g_esp + 8)));
+    g_esp += 4;
+}
+
+/* std::find for a byte range (__std_find_trivial_impl<_Find_traits_1,
+ * unsigned char>, __stdcall first, last, value, `retn 0Ch`): the first byte
+ * equal to value in [first, last), else last. */
+void sub_A08212F0_lifted(void);
+void sub_A08212F0(void)
+{
+    uint32_t first = MEM32(g_esp + 4), last = MEM32(g_esp + 8), result = last;
+    if (last > first) {
+        const uint8_t *p = (const uint8_t *)GPTR(first);
+        const uint8_t *hit = (const uint8_t *)memchr(p, (int)(MEM32(g_esp + 12) & 0xFFu), last - first);
+        if (hit) result = first + (uint32_t)(hit - p);
+    }
+    g_eax = result;
+    g_esp += 16;
+}

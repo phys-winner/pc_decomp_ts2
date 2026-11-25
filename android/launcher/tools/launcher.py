@@ -9,7 +9,8 @@ prepare writes into --out:
                               default "<manifest package>.launcher"): the base is a template, every
                               game gets its own copy at build time
   AndroidManifest.xml         the game's manifest with its two markers expanded:
-                                <!-- launcher:manifest -->     permissions and <queries> (inside <manifest>)
+                                <!-- launcher:manifest -->     permissions and <queries> (inside <manifest>;
+                                                               the vendors' game tools unless app.gameModeNotice is false)
                                 <!-- launcher:application -->  the launcher's activities and services
                               (with a minSdkVersion below 30 also the storage permissions of Android 8-10
                               and requestLegacyExternalStorage for Android 10)
@@ -17,9 +18,10 @@ prepare writes into --out:
   assets/launcher/build.json  versionName, versionCode, commit and build time
 and prints a JSON summary. A build script imports prepare() instead. Standard library only.
 
-probe compiles native/vulkan_probe.c into libportprobe.so (arm64-v8a, 16 KB pages) with the Android
-NDK for the game's launcher package: the Vulkan driver check behind the DXVK renderers (Probe.java).
-A build script calls build_probe() and puts the library beside the game's own.
+probe compiles native/vulkan_probe.c into libportprobe.so with the Android NDK for the game's
+launcher package: the Vulkan driver check behind the DXVK renderers (Probe.java). build_probe()
+defaults to arm64-v8a with 16 KB pages; abi="arm32" is armeabi-v7a with 4 KB pages. A build script
+calls build_probe() and puts the library beside the game's own.
 """
 import argparse
 import datetime
@@ -38,18 +40,21 @@ PROBE_SOURCE = ROOT / "native/vulkan_probe.c"
 PROBE_LIBRARY = "libportprobe.so"
 LANGUAGES = ("en", "ru", "de", "pl")
 KINDS = ("gles", "vulkan", "turnip", "panvk")
+PROBES = ("dxvk", "version")   # what the driver check asks of a Vulkan mode (Renderers.java)
+BC_FORMATS = set("DXT1 DXT2 DXT3 DXT4 DXT5 DXT1_SRGB DXT3_SRGB DXT5_SRGB BC1_RGB BC1_RGBA BC2 BC3 BC4 BC4_SNORM BC5 BC5_SNORM BC6H_UFLOAT BC6H_SFLOAT BC7".split())
+BC_FORMATS.update(f"{name}_SRGB" for name in ("BC1_RGB", "BC1_RGBA", "BC2", "BC3", "BC7"))
+ETC_FORMATS = {"ETC2_RGB", "ETC2_RGB_A1", "ETC2_RGBA", "EAC_R11", "EAC_R11_SNORM", "EAC_RG11", "EAC_RG11_SNORM"}
+ETC_FORMATS.update(f"{name}_SRGB" for name in ("ETC2_RGB", "ETC2_RGB_A1", "ETC2_RGBA"))
+ASTC_FORMATS = {f"ASTC_{size}{suffix}" for size in "4x4 5x4 5x5 6x5 6x6 8x5 8x6 8x8 10x5 10x6 10x8 10x10 12x10 12x12".split()
+                for suffix in ("", "_SRGB")}
+# An ASTC conversion may write one- and two-channel data (BC4, BC5 and their signed forms) as EAC
+# R11 / RG11: ASTC has no signed formats (Prey's normal maps are BC5_SNORM). astcFormats then names
+# those EAC formats too, so the offer requires what the cache really holds.
+EAC_FORMATS = {"EAC_R11", "EAC_R11_SNORM", "EAC_RG11", "EAC_RG11_SNORM"}
 OPTION_TYPES = ("bool", "choice", "text")
 FPS_COUNTER = {
-    "key": "fps_counter", "type": "choice", "default": "0",
-    "title": {"en": "Performance overlay", "ru": "Оверлей производительности",
-              "de": "Leistungsanzeige", "pl": "Nakładka wydajności"},
-    "choices": [
-        {"value": "0", "title": {"en": "Off", "ru": "Выключен", "de": "Aus", "pl": "Wyłączona"}},
-        {"value": "1", "title": {"en": "FPS and frame times", "ru": "FPS и время кадра",
-                                 "de": "FPS und Bildzeiten", "pl": "FPS i czasy klatek"}},
-        {"value": "2", "title": {"en": "FPS, frame times and system metrics", "ru": "FPS, время кадра и метрики системы",
-                                 "de": "FPS, Bildzeiten und Systemdaten", "pl": "FPS, czasy klatek i dane systemu"}},
-    ],
+    "key": "fps_counter", "type": "bool", "default": "0",
+    "title": {"en": "FPS counter", "ru": "Счётчик FPS", "de": "FPS-Zähler", "pl": "Licznik FPS"},
 }
 ANDROID = "http://schemas.android.com/apk/res/android"
 
@@ -75,8 +80,8 @@ def validate(spec):
     def theme_colours(theme, path, keys):
         need(isinstance(theme, dict), f"{path} must be an object")
         if isinstance(theme, dict):
-            need(theme.get("playParticleStyle", "magic") in ("magic", "snow", "embers", "water", "plumbob"),
-                 f"{path}.playParticleStyle must be magic, snow, embers, water or plumbob")
+            need(theme.get("playParticleStyle", "magic") in ("magic", "snow", "embers", "water", "plumbob", "stars"),
+                 f"{path}.playParticleStyle must be magic, snow, embers, water, plumbob or stars")
             for key in keys:
                 if key in theme:
                     need(isinstance(theme[key], str) and re.fullmatch(r"#[0-9a-fA-F]{6}", theme[key]),
@@ -102,36 +107,88 @@ def validate(spec):
              f"app.licenses: {entry!r} must be an asset path or {{\"path\", \"title\"}}")
         if isinstance(entry, dict) and "title" in entry:
             need(text_ok(entry["title"]), f"app.licenses: {path}: title must be a text or a map of texts")
+    need(type(app.get("hyperosNotice", False)) is bool, "app.hyperosNotice must be true or false")
+    need(type(app.get("gameModeNotice", True)) is bool, "app.gameModeNotice must be true or false")
     package = app.get("javaPackage", "")
     need(package == "" or re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+", package), "app.javaPackage must be a Java package")
     renderers = spec.get("renderers") or {}
+    textures = spec.get("textures") or {}
+    for key, allowed in (("formats", BC_FORMATS), ("etc2Formats", ETC_FORMATS), ("astcFormats", ASTC_FORMATS | EAC_FORMATS)):
+        if key in textures:
+            values = textures[key]
+            need(isinstance(values, list) and all(isinstance(v, str) and v in allowed for v in values),
+                 f"textures.{key} must list known format names ({', '.join(sorted(allowed))})")
+    if "conversionRequired" in textures:
+        need(isinstance(textures["conversionRequired"], bool), "textures.conversionRequired must be true or false")
+        need(not textures["conversionRequired"] or textures.get("backend"),
+             "textures.conversionRequired needs textures.backend (a converter)")
     modes = [m.get("id") for m in renderers.get("modes", [])]
     for mode in renderers.get("modes", []):
         need(isinstance(mode.get("id"), str) and mode.get("id"), "renderers.modes[].id is required")
+        need(isinstance(mode.get("aliases", []), list) and all(isinstance(a, str) and a for a in mode.get("aliases", [])),
+             f"renderers.modes[{mode.get('id')}].aliases must be a list of earlier ids")
+        taken = [m.get("id") for m in renderers.get("modes", [])] +                 [a for m in renderers.get("modes", []) if m is not mode for a in m.get("aliases", []) if isinstance(m.get("aliases", []), list)]
+        need(not any(a in taken for a in mode.get("aliases", []) if isinstance(mode.get("aliases", []), list)),
+             f"renderers.modes[{mode.get('id')}].aliases: an alias repeats another mode's id or alias")
         need(mode.get("kind", "gles") in KINDS, f"renderer {mode.get('id')}: kind must be one of {', '.join(KINDS)}")
         if "vulkan" in mode:
             need(re.fullmatch(r"\d+\.\d+", str(mode["vulkan"])), f"renderer {mode.get('id')}: vulkan must look like 1.3")
+        if "gles" in mode:
+            need(mode.get("kind", "gles") == "gles" and mode["gles"] in ("3.0", "3.1", "3.2"),
+                 f"renderer {mode.get('id')}: gles must be 3.0, 3.1 or 3.2 on a GLES mode")
+        if "textureCache" in mode:
+            need(mode["textureCache"] in ("read", "originals", "incompatible"),
+                 f"renderer {mode.get('id')}: textureCache must be read, originals or incompatible")
         if "adreno" in mode:
             need(isinstance(mode["adreno"], list) and len(mode["adreno"]) == 2, f"renderer {mode.get('id')}: adreno must be [min, max]")
         if mode.get("kind") in ("turnip", "panvk"):
             need(isinstance(mode.get("driver"), str) and mode.get("driver", "").endswith(".so"),
-                 f"renderer {mode.get('id')}: name its driver library (\"driver\": \"lib….so\")")
+                 f"renderer {mode.get('id')}: a {mode.get('kind')} mode names its driver library (\"driver\": \"lib….so\")")
         if mode.get("kind") == "panvk":
-            need("vulkan" in mode, f"renderer {mode.get('id')}: PanVK needs a Vulkan version")
-        if "probe" in mode:
-            need(mode.get("probe") in ("version", "dxvk") and mode.get("kind") in KINDS[1:],
-                 f"renderer {mode.get('id')}: probe must be dxvk or version for a Vulkan renderer")
+            need("vulkan" in mode, f"renderer {mode.get('id')}: a panvk mode is checked by its \"vulkan\" version: give it")
         if "needsBC" in mode:
             need(isinstance(mode["needsBC"], bool), f"renderer {mode.get('id')}: needsBC must be true or false")
+        if "maintenance1" in mode:
+            need(mode.get("kind") in ("vulkan", "turnip", "panvk") and type(mode["maintenance1"]) is bool,
+                 f"renderer {mode.get('id')}: maintenance1 is a Vulkan requirement and must be true or false")
+        if "vulkanRequires" in mode:
+            verified = {"androidSurface", "swapchain", "graphicsQueue", "robustBufferAccess"}
+            requirements = mode["vulkanRequires"]
+            need(mode.get("probe") == "version" and isinstance(requirements, list)
+                 and all(isinstance(value, str) and value in verified for value in requirements),
+                 f"renderer {mode.get('id')}: vulkanRequires must list native probe capabilities")
+        if "probe" in mode:
+            need(mode["probe"] in PROBES, f"renderer {mode.get('id')}: probe must be one of {', '.join(PROBES)}")
+            if mode["probe"] == "version":
+                need(mode.get("kind", "gles") in ("vulkan", "turnip", "panvk"),
+                     f"renderer {mode.get('id')}: probe \"version\" is for a Vulkan mode (the port's own renderer)")
+                need("vulkan" in mode, f"renderer {mode.get('id')}: probe \"version\" checks the mode's \"vulkan\" version: give it")
+        if "option" in mode:
+            switches = [o.get("key") for o in spec.get("options", []) if o.get("type", "bool") == "bool"]
+            need(mode["option"] in switches, f"renderer {mode.get('id')}: option must name a bool option of \"options\"")
     if modes:
         need(renderers.get("default", modes[0]) in modes, "renderers.default must be one of the modes")
+    if "failureWindowSeconds" in renderers:
+        # How long after the first presented frame a GPU device loss still counts as the renderer's failure
+        # (RendererFailure.java: the launcher offers the next renderer); later it is an ordinary crash.
+        window = renderers["failureWindowSeconds"]
+        need(type(window) is int and 0 <= window <= 600,
+             "renderers.failureWindowSeconds must be an integer from 0 to 600 (seconds after the first presented frame)")
     distributions = spec.get("distributions") or []
     need(distributions, "at least one distribution is required")
     ids = set()
     for d in distributions:
         did = d.get("id")
+        if "originalTextureRenderers" in d:
+            ids_using_originals = d["originalTextureRenderers"]
+            need(isinstance(ids_using_originals, list) and all(m in d.get("renderers", modes) for m in ids_using_originals),
+                 f"distribution {did}: originalTextureRenderers must name this edition's renderers")
+        if "textureFormats" in d:
+            formats = d["textureFormats"]
+            need(isinstance(formats, list) and all(isinstance(f, str) and f in BC_FORMATS for f in formats),
+                 f"distribution {did}: textureFormats must list known source formats")
         theme_colours(d.get("theme", {}), f"distribution {did}: theme",
-                      ("primaryFill", "accentDark", "playGlow", "playParticles"))
+                      ("primaryFill", "accentDark", "playGlow", "playParticles", "playFill"))
         need(isinstance(did, str) and re.fullmatch(r"[a-z0-9_]+", did or ""), f"distribution id {did!r} must be [a-z0-9_]+")
         need(did not in ids, f"distribution {did} is listed twice")
         ids.add(did)
@@ -181,6 +238,9 @@ def validate(spec):
             need(group not in groups or groups[group] == definition, f"folder group {group}: members must use the same part id, folder and fixed setting")
             groups[group] = definition
     for o in spec.get("options", []):
+        if "rendererSetting" in o:
+            need(type(o["rendererSetting"]) is bool and (not o["rendererSetting"] or o.get("type", "bool") == "bool"),
+                 f"option {o.get('key')}: rendererSetting is for a bool renderer switch")
         need(o.get("type", "bool") in OPTION_TYPES, f"option {o.get('key')}: type must be one of {', '.join(OPTION_TYPES)}")
         need(re.fullmatch(r"[a-z0-9_]+", o.get("key", "")), f"option key {o.get('key')!r} must be [a-z0-9_]+")
         minimum = o.get("defaultMinRamGiB", 0)
@@ -190,20 +250,23 @@ def validate(spec):
              f"option {o.get('key')}: defaultMinRamGiB requires a bool option")
         need(type(o.get("arm64Only", False)) is bool,
              f"option {o.get('key')}: arm64Only must be a boolean")
-        renderer_setting = o.get("rendererSetting", False)
-        need(type(renderer_setting) is bool and (not renderer_setting or o.get("type", "bool") == "bool"),
-             f"option {o.get('key')}: rendererSetting must be a boolean and requires a bool option")
         for only in o.get("only", []):
             need(only in ids, f"option {o.get('key')}: unknown distribution {only}")
         if o.get("type") == "choice":
             need(o.get("choices"), f"option {o.get('key')}: choices are required")
+        if "offer" in o:
+            need(o.get("type", "bool") == "bool" and text_ok(o["offer"]),
+                 f"option {o.get('key')}: offer is the question of a bool option (a text or a map of texts)")
     for key, value in (spec.get("hints") or {}).items():
         need(key in ("gameFiles", "options") and text_ok(value), f"hints.{key}: a text or a map of texts for gameFiles or options")
-    for f in spec.get("folders", []):
+    folders = spec.get("folders", [])
+    need(isinstance(folders, list), "folders must be an array")
+    for f in folders if isinstance(folders, list) else []:
         path = f.get("path", "") if isinstance(f, dict) else ""
         need(isinstance(f, dict) and text_ok(f.get("title")) and (f.get("hint") is None or text_ok(f.get("hint"))),
              "folders: each needs a title (text or map of texts) and an optional hint")
         need(isinstance(path, str) and re.match(r"^\{(storage|files|private)\}/", path) and "\\" not in path
+             and not any(ord(c) < 32 for c in path) and ":" not in path
              and all(part not in ("", ".", "..") for part in path.split("/")[1:]),
              f"folders: path {path!r} must start with {{storage}}/, {{files}}/ or {{private}}/ and stay inside it")
     for c in (spec.get("cleanup") or {}).get("categories", []):
@@ -293,12 +356,18 @@ def expand_manifest(text, spec, package):
         '    <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="https" /></intent>',
         '    <package android:name="com.google.android.documentsui" />',
         '    <package android:name="com.android.documentsui" />',
-        "  </queries>",
     ]
+    if app.get("gameModeNotice", True):
+        # The game-mode tip (HyperOs.java) opens the vendor's game tool by the package's launch
+        # intent: getLaunchIntentForPackage sees a package only when it is queried.
+        head += ['    <package android:name="com.miui.securitycenter" />',
+                 '    <package android:name="com.samsung.android.game.gamehome" />',
+                 '    <package android:name="com.oplus.games" />']
+    head.append("  </queries>")
     process = (app.get("processes") or {}).get("launcher", ":launcher")
     where = f' android:process="{process}"' if process else ""
     probe = (app.get("processes") or {}).get("probe", ":probe")
-    vulkan = any(m.get("kind") in KINDS[1:] for m in (spec.get("renderers") or {}).get("modes", []))
+    vulkan = any(m.get("kind") in ("vulkan", "turnip", "panvk") for m in (spec.get("renderers") or {}).get("modes", []))
     changes = "orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density"
     body = [
         "    <!-- The launcher base (tools/launcher.py): the home-screen entry. -->",
@@ -336,6 +405,14 @@ def git_commit(folder):
 def write_assets(spec, manifest_text, out, game_root):
     folder = Path(out) / "launcher"
     folder.mkdir(parents=True, exist_ok=True)
+    modes = (spec.get("renderers") or {}).get("modes", [])
+    if any(m.get("kind", "gles") == "gles" and "gles" not in m for m in modes):
+        versions = [node.get(f"{{{ANDROID}}}glEsVersion", "") for node in ElementTree.fromstring(manifest_text).findall("uses-feature")]
+        minimum = max((int(v, 0) for v in versions if re.fullmatch(r"0[xX][0-9a-fA-F]+|[1-9][0-9]*", v)), default=0)
+        if minimum:
+            gl = f"{minimum >> 16}.{minimum & 0xffff}"
+            spec = dict(spec, renderers=dict(spec["renderers"], modes=[
+                dict(m, gles=gl) if m.get("kind", "gles") == "gles" and "gles" not in m else m for m in modes]))
     if spec["app"].get("performanceHud"):
         options = spec.get("options", [])
         if not any(option["key"] == FPS_COUNTER["key"] for option in options):
@@ -352,9 +429,10 @@ def write_assets(spec, manifest_text, out, game_root):
 
 
 def ndk_root():
-    """The newest Android NDK: ANDROID_NDK_HOME / ANDROID_NDK_ROOT, else the SDK's ndk folder."""
+    """The Android NDK: ANDROID_NDK_HOME / ANDROID_NDK_ROOT when it has the unified sysroot (r19+;
+    an older one cannot build the probe: no <dlfcn.h> beside its clang), else the newest in the SDK's ndk folder."""
     for name in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT"):
-        if os.environ.get(name) and Path(os.environ[name]).is_dir():
+        if os.environ.get(name) and any(Path(os.environ[name]).glob("toolchains/llvm/prebuilt/*/sysroot/usr/include/dlfcn.h")):
             return Path(os.environ[name])
     sdk = next((Path(os.environ[n]) for n in ("ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_SDK")
                 if os.environ.get(n) and Path(os.environ[n]).is_dir()), Path.home() / "AppData/Local/Android/Sdk")
@@ -381,7 +459,8 @@ def jni_class(package):
 
 def build_probe(out, package, ndk=None, api=30, abi="arm64"):
     """Compiles libportprobe.so (the Vulkan driver check) into the folder out. arm64-v8a is 16 KB
-    aligned; armeabi-v7a (abi="arm32") is 4 KB. Returns its path."""
+    aligned; armeabi-v7a (abi="arm32") is 4 KB. Returns its path. The Java class it registers with
+    is the game's. The default abi keeps every other game on arm64."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     library = out / PROBE_LIBRARY
@@ -418,7 +497,7 @@ def prepare(spec_path, manifest_path, out):
         raise SpecError(f"{manifest_path}: the manifest is not well-formed XML: {failure}") from failure
     manifest.write_text(expanded, encoding="utf-8", newline="\n")
     build = write_assets(spec, manifest_text, out / "assets", spec_path.parent)
-    vulkan = any(m.get("kind") in KINDS[1:] for m in (spec.get("renderers") or {}).get("modes", []))
+    vulkan = any(m.get("kind") in ("vulkan", "turnip", "panvk") for m in (spec.get("renderers") or {}).get("modes", []))
     return {"package": package, "sources": [str(p) for p in sources], "manifest": str(manifest),
             "assets": str(out / "assets"), "build": build, "probe": vulkan}
 

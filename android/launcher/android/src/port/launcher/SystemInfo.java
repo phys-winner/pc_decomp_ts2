@@ -35,6 +35,7 @@ final class SystemInfo {
     private static final Pattern GPU = Pattern.compile("gpu|g3d|kgsl|mali");
 
     private final Context context;
+    private final int mask;
     private final IntentFilter batteryChanged = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
     private final Supplier<String> renderer, gpuStrings;
     private final DoubleSupplier fpsLimit;
@@ -47,8 +48,9 @@ final class SystemInfo {
     private long processTicks = -1, sampledNs, nextHeadroomMs;
     private float headroom = Float.NaN;
 
-    SystemInfo(Context context, Supplier<String> renderer, DoubleSupplier fpsLimit, Supplier<String> gpuStrings) {
+    SystemInfo(Context context, int mask, Supplier<String> renderer, DoubleSupplier fpsLimit, Supplier<String> gpuStrings) {
         this.context = context.getApplicationContext();
+        this.mask = mask;
         this.renderer = renderer;
         this.fpsLimit = fpsLimit;
         this.gpuStrings = gpuStrings;
@@ -59,8 +61,9 @@ final class SystemInfo {
             probe = Probe.parse(Probe.read(new File(State.folder(context), Probe.REPORT)));
             String model = Build.VERSION.SDK_INT >= 31
                 ? (Build.SOC_MANUFACTURER + " " + Build.SOC_MODEL).trim() : Build.HARDWARE;
-            findSensors(new File("/sys/class/thermal"), cpuSensors, gpuSensors);
-            for (String path : Arrays.asList("/sys/class/kgsl/kgsl-3d0/temp", "/sys/class/misc/mali0/device/temp")) {
+            if (HudField.CPU_TEMP.in(mask) || HudField.GPU_TEMP.in(mask))
+                findSensors(new File("/sys/class/thermal"), cpuSensors, gpuSensors);
+            if (HudField.GPU_TEMP.in(mask)) for (String path : Arrays.asList("/sys/class/kgsl/kgsl-3d0/temp", "/sys/class/misc/mali0/device/temp")) {
                 File sensor = new File(path);
                 if (sensor.canRead()) gpuSensors.add(sensor);
             }
@@ -68,16 +71,16 @@ final class SystemInfo {
         }
 
         List<String[]> rows = new ArrayList<>();
-        add(rows, "CPU:", soc);
-        add(rows, "Clock:", FpsCounter.clocks(clusterKHz()));
-        add(rows, "Load:", load());
-        add(rows, "CPU temp:", temperature(cpuSensors));
-        renderInfo(rows);
-        add(rows, "GPU temp:", temperature(gpuSensors));
-        add(rows, "RAM:", memory());
-        add(rows, "Thermal:", thermal());
-        battery(rows);
-        add(rows, "Screen:", screen());
+        if (HudField.CPU.in(mask)) add(rows, "CPU:", soc);
+        if (HudField.CLOCK.in(mask)) add(rows, "Clock:", FpsCounter.clocks(clusterKHz()));
+        if (HudField.LOAD.in(mask)) add(rows, "Load:", load());
+        if (HudField.CPU_TEMP.in(mask)) add(rows, "CPU temp:", temperature(cpuSensors));
+        if (HudField.GPU.in(mask) || HudField.DRIVER.in(mask) || HudField.API.in(mask)) renderInfo(rows);
+        if (HudField.GPU_TEMP.in(mask)) add(rows, "GPU temp:", temperature(gpuSensors));
+        if (HudField.RAM.in(mask)) add(rows, "RAM:", memory());
+        if (HudField.THERMAL.in(mask)) add(rows, "Thermal:", thermal());
+        if (HudField.BATTERY.in(mask) || HudField.POWER.in(mask)) battery(rows);
+        if (HudField.SCREEN.in(mask)) add(rows, "Screen:", screen());
         return rows.toArray(new String[0][]);
     }
 
@@ -100,14 +103,14 @@ final class SystemInfo {
             if (!reported[0].isEmpty()) device = reported[0];
             if (reported.length > 1 && !reported[1].isEmpty()) driver = reported[1];
         }
-        if ("turnip".equals(kind)) {
-            String own = Os.getenv("PORT_TURNIP_DRIVER");
+        if ("turnip".equals(kind) || "panvk".equals(kind)) {
+            String own = Os.getenv("turnip".equals(kind) ? "PORT_TURNIP_DRIVER" : "PORT_PANVK_DRIVER");
             if (own != null && !own.isEmpty())
                 driver = new File(own).getName() + (driver.isEmpty() ? "" : " · " + driver);
         }
-        add(rows, "GPU:", FpsCounter.shorten(device, 44));
-        add(rows, "Driver:", FpsCounter.shorten(driver, 44));
-        if (mode != null) {
+        if (HudField.GPU.in(mask)) add(rows, "GPU:", FpsCounter.shorten(device, 44));
+        if (HudField.DRIVER.in(mask)) add(rows, "Driver:", FpsCounter.shorten(driver, 44));
+        if (mode != null && HudField.API.in(mask)) {
             String version = vulkan ? probe.getOrDefault(prefix + "api", "") : "";
             add(rows, "API:", mode.title + (version.isEmpty() ? "" : " · Vulkan " + version));
         }
@@ -219,11 +222,11 @@ final class SystemInfo {
     private void battery(List<String[]> rows) {
         Intent sticky = context.registerReceiver(null, batteryChanged);
         if (sticky == null || !sticky.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true)) return;
-        add(rows, "Battery:", FpsCounter.battery(sticky.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
+        if (HudField.BATTERY.in(mask)) add(rows, "Battery:", FpsCounter.battery(sticky.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
             sticky.getIntExtra(BatteryManager.EXTRA_SCALE, -1),
             sticky.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE)));
         BatteryManager manager = context.getSystemService(BatteryManager.class);
-        if (manager != null) {
+        if (HudField.POWER.in(mask) && manager != null) {
             long current = manager.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);
             add(rows, "Power:", FpsCounter.power(current, sticky.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)));
         }

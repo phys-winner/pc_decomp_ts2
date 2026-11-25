@@ -21,7 +21,12 @@ public final class GamePreferences implements PortHooks {
     static boolean floorHintShown(){return controls==null||controls.getBoolean("floor_swipe_hint_shown",false);}
     static void markFloorHintShown(){if(controls!=null)controls.edit().putBoolean("floor_swipe_hint_shown",true).apply();}
     static boolean takeCheatMenuHint(boolean qa){
-        String key=qa?"cheat_menu_hint_shown":"cheat_menu_hold_hint_shown";
+        return takeHint(qa?"cheat_menu_hint_shown":"cheat_menu_hold_hint_shown");
+    }
+    static boolean takeTestingCheatsHint(boolean qa){
+        return takeHint(qa?"qa_testing_cheats_hint_shown":"testing_cheats_hint_shown");
+    }
+    private static boolean takeHint(String key){
         if(controls==null||controls.getBoolean(key,false))return false;
         controls.edit().putBoolean(key,true).apply();
         return true;

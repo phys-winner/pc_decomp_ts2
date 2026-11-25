@@ -17,7 +17,7 @@ final class FpsCounter {
     /** The HUD's colours: (1, 0.25, 0.25) and white as DXVK writes them to an sRGB swapchain. */
     static final int LABEL = 0xFFFF8989, VALUE = 0xFFFFFFFF;
 
-    private static final float TARGET_US = 16_666.6f, MIN_US = 5_000.0f, MAX_US = 100_000.0f;
+    private static final float TARGET_US = 16_666.6f;
     private static final String[] THERMAL = {"none", "light", "moderate", "severe", "critical", "emergency", "shutdown"};
     private static final String[] GAME_MODE = {"", "standard", "performance", "battery", "custom"};
 
@@ -36,11 +36,8 @@ final class FpsCounter {
         return (tenths / 10) + "." + (tenths % 10);
     }
 
-    /** HudFrameTimeItem::render: the height of a frame's bar in the 40-unit graph (1/40 at least; a
-     *  frame over 100 ms fills it). */
-    static float height(float us) {
-        double value = log2(Math.max((us - MIN_US) / TARGET_US + 1.0f, 1.0f)) / log2((MAX_US - MIN_US) / TARGET_US);
-        return (float) Math.min(Math.max(value, 1.0 / 40.0), 1.0);
+    static float fpsHeight(int intervalUs, int scaleFps) {
+        return intervalUs > 0 ? Math.min(1f, 1_000_000f / intervalUs / scaleFps) : 0f;
     }
 
     /** ... and its colour: green up to 16.7 ms, through yellow to red at 66.7 ms. The unorm colour is
@@ -188,7 +185,4 @@ final class FpsCounter {
         return count;
     }
 
-    private static double log2(double value) {
-        return Math.log(value) / Math.log(2.0);
-    }
 }

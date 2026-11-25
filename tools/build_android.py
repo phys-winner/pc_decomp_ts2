@@ -26,6 +26,13 @@ TOOLCHAIN = NDK / "toolchains/llvm/prebuilt/windows-x86_64"
 CLANG = TOOLCHAIN / "bin/clang.exe"
 CLANGXX = TOOLCHAIN / "bin/clang++.exe"
 API = 29
+# The APK's minSdkVersion (Android 8.0). The generated objects keep the API 29 target (their
+# fingerprints, hours of compilation; they use no thread-local storage and no libc symbol newer
+# than API 26: the link below is checked). Host, renderer and glslang objects use emulated TLS,
+# because bionic before API 29 refuses a library with a PT_TLS segment, and the library is
+# linked against the API 26 system libraries with undefined symbols refused.
+MIN_API = 26
+EMULATED_TLS = ["-femulated-tls"]
 TARGET = f"aarch64-linux-android{API}"
 OUT = ROOT / "build/arm64"
 # -ffunction-sections: the link packs the functions the device runs together
@@ -170,6 +177,7 @@ NATIVE_OVERRIDES = (
     "sub_A0ACB780",   # UI-only Reset: remove duplicate material parse, retain GPU buffers and later scene rebind (sims2_patches.c)
     "sub_A0039752",   # guarded D3DX RGBX row quantizer; exact lifted fallback (sims2_fast.c)
     "sub_A003AA9F",   # guarded D3DX A8 row quantizer; exact lifted fallback (sims2_fast.c)
+    "sub_A00390A6",   # guarded D3DX R8G8B8 row quantizer; exact lifted fallback (sims2_rgb24.c)
     "sub_A0084173",   # D3DX BC1 (DXT1) block encoder, bit-exact; lifted fallback (sims2_bc1.c)
     "sub_A06815D7",   # hold an owned object's position until explicit touch preview
     "sub_A067D8A4",   # initial object preview uses its undo record's exact WorldLocation
@@ -245,6 +253,9 @@ NATIVE_OVERRIDES = (
     "sub_A09187BE",   # guarded font-parser substring search with native first-byte skipping (sims2_fast.c)
     "sub_A0845799",   # CRT _stricmp: ASCII folding, also under the game's locale (sims2_fast.c)
     "sub_A08287A0",   # CRT strchr (SSE2 form): libc strchr (sims2_fast.c)
+    "sub_A08318B0", "sub_A0828340", "sub_A08413C0",   # CRT strncmp, memchr, strcspn (crt_native.c)
+    "sub_A08212F0",   # std::find over bytes (__std_find_trivial_impl, SSE2/AVX2 forms) (crt_native.c)
+    "sub_A001E89E",   # D3DXAssembleShader: repeat statistics around the lifted body (sims2_shaderasm.c)
     "sub_A0229E45",   # a job queue's pump: no spinning on an empty queue (sims2_fast.c)
     # EA SND's PC output driver without DirectSound: the mixer renders into the
     # AAudio low-latency FIFO at the device rate (sims2_audio.c, audio.c).
@@ -435,6 +446,56 @@ def touch_camera_hover_guard(text):
     check = b"    if(s2_touch_camera_hover_active())goto L_A068D4F5;" + newline
     declaration = b"extern int s2_touch_camera_hover_active(void);" + newline
     return declaration + text[:start] + body.replace(anchor, anchor + check, 1) + text[end.end():]
+
+
+def native_normal_map_rows(text):
+    """D3DXComputeNormalMap's pixel loop (0xA001DD67) runs natively: android/host/sims2_normalmap.c
+    computes the row and leaves the loop's state, or returns 0 and the lifted loop runs."""
+    marker = b"void sub_A001D884(void) {"
+    if marker not in text:
+        return text
+    if text.count(marker) != 1:
+        raise ValueError("duplicate D3DXComputeNormalMap body")
+    start = text.index(marker)
+    end = FUNCTION_END.search(text, start)
+    if end is None:
+        raise ValueError("unterminated D3DXComputeNormalMap body")
+    body = text[start:end.end()]
+    newline = b"\r\n" if b"\r\n" in body else b"\n"
+    anchor = b"L_A001DD67:" + newline
+    entry = anchor + b"    fp_push(*(float*)&MEM32((-0x5F25FC18))); /* 0xA001DD67: fld dword ptr [0xa0da03e8] */"
+    exit_ = b"L_A001E0F7:" + newline + b"    PUSH32(esp, MEM32(ebp + (-0x20))); /* 0xA001E0F7: push dword ptr [ebp - 0x20] */"
+    if body.count(entry) != 1 or body.count(exit_) != 1:
+        raise ValueError("D3DXComputeNormalMap pixel loop layout changed")
+    # After the loop the only live state is ebx (= the width) and its last compare.
+    hook = (b"    RECOMP_REGS_OUT();" + newline +
+            b"    if (s2_normal_map_row()) { RECOMP_REGS_IN(); _flag_k = FK_CMP; _flag_a = _flag_b = ebx; _cf = 0; "
+            b"goto L_A001E0F7; }" + newline +
+            b"    RECOMP_REGS_IN();" + newline)
+    # debug.s2.normalmap=check: the lifted loop ran after a native trial; compare their states.
+    check = (b"    if (s2_normal_map_pending) { RECOMP_REGS_OUT(); s2_normal_map_check(_flag_k, _flag_a, _flag_b, _cf); "
+             b"RECOMP_REGS_IN(); }" + newline)
+    body = body.replace(anchor, anchor + hook, 1)
+    body = body.replace(b"L_A001E0F7:" + newline, b"L_A001E0F7:" + newline + check, 1)
+    # The height row of the row below (0xA001DD0E-0xA001DD5C), right after its reader returns.
+    heights_at = (b"    RECOMP_FLAGS_IN();" + newline +
+                  b"    eax = MEM32(ebp + (-0x4C)); /* 0xA001DD0E: mov eax, dword ptr [ebp - 0x4c] */")
+    heights_exit = b"L_A001DD5E:" + newline
+    if body.count(heights_at) != 1 or body.count(heights_exit) != 1:
+        raise ValueError("D3DXComputeNormalMap height row layout changed")
+    heights = (b"    RECOMP_FLAGS_IN();" + newline +
+               b"    RECOMP_REGS_OUT();" + newline +
+               b"    if (s2_normal_map_heights()) { RECOMP_REGS_IN(); goto L_A001DD5E; }" + newline +
+               b"    RECOMP_REGS_IN();" + newline +
+               heights_at[len(b"    RECOMP_FLAGS_IN();" + newline):])
+    body = body.replace(heights_at, heights, 1)
+    body = body.replace(heights_exit, heights_exit + b"    if (s2_normal_map_heights_pending) { RECOMP_REGS_OUT(); "
+                        b"s2_normal_map_heights_check(); RECOMP_REGS_IN(); }" + newline, 1)
+    declarations = (b"extern int s2_normal_map_row(void), s2_normal_map_pending;" + newline +
+                    b"extern void s2_normal_map_check(unsigned int, unsigned int, unsigned int, unsigned int);" + newline +
+                    b"extern int s2_normal_map_heights(void), s2_normal_map_heights_pending;" + newline +
+                    b"extern void s2_normal_map_heights_check(void);" + newline)
+    return declarations + text[:start] + body + text[end.end():]
 
 
 DOT_INLINE_CALLS = (0xA0AF26A9, 0xA0AF2739, 0xA0AF2754, 0xA0AF2841, 0xA0AF2856, 0xA0AF286B)
@@ -669,6 +730,36 @@ uint32_t s2_resource_skip(uint32_t,uint32_t,uint32_t,uint32_t);
     return target
 
 
+def msvc_jumps(text):
+    """Arm setjmp in the actual caller; keep the original guest CRT on both paths."""
+    call = b"RECOMP_CALL(sub_A0C49D20)"
+    tail = b"{ _itail_tgt = (uint32_t)(MEM32(edx + 0x14)); goto _ljump; }"
+    changed = False
+
+    def owner(match):
+        nonlocal changed
+        body = match.group(0)
+        count = body.count(call)
+        if not count:
+            return body
+        changed = True
+        anchor = re.search(rb"    RECOMP_ENTER\([^\n]*\);\r?\n", body)
+        if anchor is None:
+            raise ValueError("setjmp owner has no register prologue")
+        body = body[:anchor.end()] + (b"    const uint32_t _sj_entry = g_esp;\n"
+                                     + b"    guest_jmp_frame _sj[%d];\n" % count) + body[anchor.end():]
+        for slot in range(count):
+            body = body.replace(call, b"RECOMP_MSVC_SETJMP(sub_A0C49D20, _sj[%d])" % slot, 1)
+        leave = b"".join(b"void_guest_jmp_leave(&_sj[%d]); " % slot for slot in range(count))
+        return body.replace(b"return;", leave + b"return;")
+
+    text = re.sub(rb"\nvoid sub_[A-Fa-f0-9]+(?:_lifted)?\(void\) \{.*?\n\}", owner, text, flags=re.S)
+    if tail in text and b"0x56433230u" in text:
+        changed = True
+        text = text.replace(tail, b"RECOMP_REGS_OUT();\n    void_guest_jmp_try_resume();\n    RECOMP_REGS_IN();\n    " + tail)
+    return b'#include "guest_jmp.h"\n' + text if changed else text
+
+
 def override_source(source, local_xmm):
     """The file to compile for a generated source and its extra flags: a
     patched copy under build/ when it defines one of NATIVE_OVERRIDES or (with
@@ -713,6 +804,7 @@ def override_source(source, local_xmm):
                         call, b"RECOMP_CALL(" + wrapper + b"); /*" + call.split(b"/*", 1)[1], 1)
             if RELEASE is None:
                 text = touch_camera_hover_guard(text)
+                text = native_normal_map_rows(text)
                 if source.name == "sims2_A0670000.c":
                     # Compare the cTSMainToolbar floor around the UCP button handler's setter.
                     call = b"    RECOMP_ICALL(MEM32(edx + 0x6C)); /* 0xA06739F9: call dword ptr [edx + 0x6c] */"
@@ -723,6 +815,10 @@ def override_source(source, local_xmm):
                     text = b"void s2_touch_note_floor_button(void);\n" + text.replace(
                         call, before + call + after, 1)
             text = inline_dot(text)
+            text = msvc_jumps(text)
+            if b'#include "guest_jmp.h"' in text:
+                if "-Iandroid/host" not in flags:
+                    flags.append("-Iandroid/host")
         if local_xmm:
             text = localize_registers(text)
     if text == original:
@@ -947,6 +1043,7 @@ def main():
             source, extra = override_source(source, local_xmm=not args.global_regs)
             if "-Iandroid/host" in extra:
                 digest += sha_file(ROOT / "android/host/sims2_extender.h")
+                digest += sha_file(ROOT / "android/host/guest_jmp.h")
             flags = GENERATED_FLAGS + extra
             fp = hashlib.sha256(json.dumps([sha_file(source), digest, compiler_sha, flags]).encode()).hexdigest()
             jobs.append((source, obj, flags, fp))
@@ -962,7 +1059,7 @@ def main():
         fp = hashlib.sha256(json.dumps([sha_file(source), header_digest(sorted((ROOT / MOJO_DIR).glob("*.h"))),
                                         compiler_sha, MOJO_FLAGS]).encode()).hexdigest()
         jobs.append((source, obj, MOJO_FLAGS, fp))
-    host_flags = HOST_FLAGS + (["-DVOID_ANDROID_APP"] if args.shared else [])
+    host_flags = HOST_FLAGS + EMULATED_TLS + (["-DVOID_ANDROID_APP"] if args.shared else [])
     if args.release:
         host_flags = host_flags + ["-DVOID_RELEASE", "-I" + GENERATED.relative_to(ROOT).as_posix()]
     host_dir = "obj/host-app" if args.shared else "obj/host"
@@ -982,7 +1079,7 @@ def main():
         inputs = [sha_file(source), host_digest, header_digest(sorted((ROOT / MOJO_DIR).glob("*.h"))), compiler_sha, render_flags]
         jobs.append((source, obj, render_flags, hashlib.sha256(json.dumps(inputs).encode()).hexdigest()))
     glslang_build_info()
-    cxx_flags = COMMON + ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DGLSLANG_OSINCLUDE_UNIX",
+    cxx_flags = COMMON + EMULATED_TLS + ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-DGLSLANG_OSINCLUDE_UNIX",
                           "-I" + str(GLSLANG), "-I" + str(RENDER_GEN)]
     cxx_sha = sha_file(CLANGXX)
     glslang_digest = header_digest([RENDER_GEN / "glslang/build_info.h"])
@@ -1035,7 +1132,8 @@ def main():
     output = OUT / (library if args.shared else ("sims2-arm32" if args.abi == "arm32" else "sims2-arm64"))
     # clang++ links glslang's C++ runtime statically (libc++ is not a system library).
     page = "4096" if args.abi == "arm32" else "16384"
-    link = [str(CLANGXX), "--target=" + TARGET, "-fuse-ld=lld", "-static-libstdc++", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc",
+    link_target = TARGET[:-len(str(API))] + str(MIN_API)
+    link = [str(CLANGXX), "--target=" + link_target, "-fuse-ld=lld", "-Wl,--no-undefined", "-static-libstdc++", "-Wl,--gc-sections", "-Wl,-z,nostart-stop-gc",
             f"-Wl,-z,max-page-size={page}", f"-Wl,-z,common-page-size={page}",
             "-Wl,--build-id=sha1", "@" + str(response), "-o", str(output), "-lm", "-lz", "-llog", "-ldl", "-lEGL", "-lGLESv3"]
     if args.abi == "arm32":
@@ -1057,6 +1155,10 @@ def main():
     result = subprocess.run(link, cwd=ROOT, capture_output=True, text=True)
     if result.returncode:
         print(result.stderr[-6000:])
+        sys.exit(1)
+    headers = subprocess.run([str(TOOLCHAIN / "bin/llvm-readelf.exe"), "-lW", str(output)], capture_output=True, text=True).stdout
+    if any(line.split()[:1] == ["TLS"] for line in headers.splitlines()):
+        print(f"{output} has a PT_TLS segment: Android before 10 cannot load it (compile the object with -femulated-tls)")
         sys.exit(1)
     print(f"linked {output} ({output.stat().st_size / 1e6:.1f} MB) in {time.time() - start:.0f}s")
 

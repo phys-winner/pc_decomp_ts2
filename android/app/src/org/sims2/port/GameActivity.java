@@ -5,6 +5,7 @@ import org.sims2.port.launcher.FpsOverlay;
 import org.sims2.port.launcher.Launch;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Environment;
@@ -22,13 +23,16 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.content.Context;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.EditorInfo;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 
 /** Original game UI fills the surface. Android dialogs edit only settings and native text. */
 public final class GameActivity extends Activity implements SurfaceHolder.Callback {
@@ -61,6 +65,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private static native long nativeCheatsStatus(int serial);
     private static native String[] nativeCheatsRows(int serial);
     private static native void nativeCheatsCancel();
+    static native boolean nativeTestingCheats();
     static native long nativeTouchGameSize();
     static native long nativeTouchLayoutEpoch();
     static native long nativeTouchRotateObject(float x,float y,long tool,int context,long gameSize,long layoutEpoch,int direction);
@@ -110,6 +115,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private LinearLayout objectControls;
     private LinearLayout photoControls;
     private Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;
+    private CheckBox testingCheats;
     private FpsOverlay fpsOverlay;
     private String fpsMode;
     private FrameLayout targetRadiusPanel;
@@ -222,7 +228,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 if(gamepad!=null)gamepad.setEnabledInput(hasWindowFocus()&&cheatSerial==0);
             }
         });
-        next.show();next.getWindow().getDecorView().setForceDarkAllowed(false);
+        next.show();if(android.os.Build.VERSION.SDK_INT>=29)next.getWindow().getDecorView().setForceDarkAllowed(false);
     }
     private AlertDialog.Builder cheatBuilder(String title){
         return new AlertDialog.Builder(this,R.style.PortDialog).setTitle(title).setNegativeButton(text(R.string.close),null);
@@ -240,7 +246,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         for(CheatCommands.Command command:cheats)if(command.group()==group)items.add(command);
         String[] labels=new String[items.size()];for(int i=0;i<labels.length;i++)labels[i]=items.get(i).title(cheatRussian());
         showCheatDialog(cheatBuilder(CheatCommands.groups(cheatRussian())[group]).setItems(labels,(d,which)->{
-            CheatCommands.Command command=items.get(which);showCheatConsole(command.name,command.help(cheatRussian()));
+            CheatCommands.Command command=items.get(which);showCheatConsole(command.input,command.help(cheatRussian()));
         }).setNeutralButton(cheatText("All groups","Все группы"),(d,which)->showCheatGroups()));
     }
     private void showCheatConsole(String initial,String originalHelp){
@@ -344,6 +350,18 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams helpLayout=new FrameLayout.LayoutParams(Math.round(52*density),Math.round(48*density),android.view.Gravity.RIGHT|android.view.Gravity.TOP);
         helpLayout.rightMargin=helpLayout.topMargin=Math.round(8*density);root.addView(helpButton,helpLayout);
         helpButton.setOnClickListener(v->{if(active==this&&started)showTouchSettings();});
+        testingCheats=new CheckBox(this);
+        testingCheats.setText("testingcheats");
+        testingCheats.setTextColor(Color.rgb(35,60,112));
+        testingCheats.setButtonTintList(ColorStateList.valueOf(Color.rgb(35,60,112)));
+        testingCheats.setBackground(objectControlBackground(density));
+        testingCheats.setMinHeight(Math.round(48*density));
+        testingCheats.setPadding(Math.round(6*density),0,Math.round(12*density),0);
+        testingCheats.setVisibility(View.GONE);
+        testingCheats.setOnCheckedChangeListener((view,checked)->touch.testingCheats(checked));
+        FrameLayout.LayoutParams cheatsLayout=new FrameLayout.LayoutParams(-2,-2,helpLayout.gravity);
+        cheatsLayout.rightMargin=helpLayout.rightMargin;cheatsLayout.topMargin=helpLayout.topMargin;
+        root.addView(testingCheats,cheatsLayout);
         targetRadiusPanel=new FrameLayout(this);
         targetRadiusPanel.setClipChildren(false);
         targetRadiusPanel.setBackground(objectControlBackground(density));
@@ -441,6 +459,20 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
     }
 
+    /** The selected renderer could not start or lost its GPU device (android/render/s2r_core.c
+     *  s2r_renderer_failed, from the render thread). No other renderer or driver takes over: the launcher
+     *  opens, offers its next renderer, and this process ends (owner's decision, 24 November 2026). The
+     *  native record (renderer_failure.h, `recorded`) carries the time since the first frame the renderer
+     *  presented, which this side learns only at its next HUD poll: it is kept, and Launch.rendererFailed,
+     *  which writes the record from the Java side's first frame, runs only when the native one is missing. */
+    private void nativeRendererFailed(String reason, boolean deviceLost, boolean recorded) {
+        android.util.Log.e("Sims2", "renderer failure (" + (deviceLost ? "GPU device lost" : "did not start") + "): " + reason);
+        if (!recorded) launch.rendererFailed(reason, deviceLost);
+        Launch.openLauncher(this, launch.distribution());
+        finish();
+        android.os.Process.killProcess(android.os.Process.myPid());
+    }
+
     private static String fpsRenderer() {
         switch (nativeRendererActive()) {
             case 2: return "vulkan";
@@ -508,6 +540,12 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         objectControls.setVisibility(visible||townLot?View.VISIBLE:View.GONE);
         placeButton.setVisibility(townLot?View.GONE:View.VISIBLE);cancelButton.setVisibility(townLot?View.GONE:View.VISIBLE);
         int mode=nativeTouchContext();
+        boolean developerCheats=nativeTestingCheats();
+        if(!developerCheats&&testingCheats.isChecked())testingCheats.setChecked(false);
+        boolean cheatToggle=controlsAllowed&&firstFrame&&developerCheats&&mode==TouchLayer.LIVE;
+        testingCheats.setVisibility(cheatToggle?View.VISIBLE:View.GONE);
+        if(cheatToggle&&hasWindowFocus()&&GamePreferences.takeTestingCheatsHint(getIntent().hasExtra("userdata")))
+            touchNotice(text(R.string.testing_cheats_hint));
         photoControls.setVisibility(canUsePhotoControls(mode)?View.VISIBLE:View.GONE);
         boolean help=active==this&&started&&!inputOverlayOpen()&&
                 (mode&(TouchLayer.OPTIONS|TouchLayer.MODAL|TouchLayer.LOADING|TouchLayer.TEXT_FOCUS))==TouchLayer.OPTIONS;
@@ -532,11 +570,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
 
     private void applySafeInsets(android.view.WindowInsets insets){
-        android.graphics.Insets safe=android.os.Build.VERSION.SDK_INT>=30
-                ?insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout())
-                :insets.getSystemWindowInsets();
-        int left=safe.left,top=safe.top,right=safe.right,bottom=safe.bottom;
-        if(android.os.Build.VERSION.SDK_INT<30&&insets.getDisplayCutout()!=null){
+        int left,top,right,bottom;
+        if(android.os.Build.VERSION.SDK_INT>=30){android.graphics.Insets safe=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.displayCutout());
+            left=safe.left;top=safe.top;right=safe.right;bottom=safe.bottom;}
+        else{left=insets.getSystemWindowInsetLeft();top=insets.getSystemWindowInsetTop();right=insets.getSystemWindowInsetRight();bottom=insets.getSystemWindowInsetBottom();}
+        if(android.os.Build.VERSION.SDK_INT>=28&&android.os.Build.VERSION.SDK_INT<30&&insets.getDisplayCutout()!=null){
             android.view.DisplayCutout cutout=insets.getDisplayCutout();
             left=Math.max(left,cutout.getSafeInsetLeft());top=Math.max(top,cutout.getSafeInsetTop());
             right=Math.max(right,cutout.getSafeInsetRight());bottom=Math.max(bottom,cutout.getSafeInsetBottom());
@@ -560,6 +598,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams helpLayout=(FrameLayout.LayoutParams)helpButton.getLayoutParams();
         helpLayout.leftMargin=left;helpLayout.rightMargin=right+Math.round(8*getResources().getDisplayMetrics().density);
         helpLayout.topMargin=top+Math.round(8*getResources().getDisplayMetrics().density);helpLayout.bottomMargin=bottom;helpButton.setLayoutParams(helpLayout);
+        FrameLayout.LayoutParams cheatsLayout=(FrameLayout.LayoutParams)testingCheats.getLayoutParams();
+        cheatsLayout.rightMargin=helpLayout.rightMargin;cheatsLayout.topMargin=helpLayout.topMargin;
+        testingCheats.setLayoutParams(cheatsLayout);
         positionTargetRadiusControls(getResources().getDisplayMetrics().density);
         FrameLayout.LayoutParams toolsLayout=(FrameLayout.LayoutParams)toolsButton.getLayoutParams();
         toolsLayout.rightMargin=right+Math.round(8*getResources().getDisplayMetrics().density);
@@ -634,6 +675,25 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         getWindow().setAttributes(attributes);
         hideSystemUi();
         base = new File(Environment.getExternalStorageDirectory(), "Sims2");
+        String archiveProblem=launch.archiveProblem();
+        if(archiveProblem!=null){
+            launch.failed(archiveProblem);Launch.openLauncher(this,launch.distribution());finish();return;
+        }
+        File data;
+        try{data=new File(base,userdataName(getIntent().getStringExtra("userdata")));}
+        catch(IllegalArgumentException failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
+        try{
+            java.nio.file.Path profile=Files.createDirectories(data.toPath());
+            Files.delete(Files.createTempFile(profile,"s2-write-",".tmp"));
+        }catch(IOException failure){
+            android.util.Log.w("Sims2","Cannot write game profile "+data,failure);
+            String message=failure.getMessage();
+            boolean denied=failure instanceof java.nio.file.AccessDeniedException
+                    ||message!=null&&(message.contains("Permission denied")||message.contains("Read-only file system"));
+            if(denied)launch.storageFailed(text(R.string.profile_write_denied,data.getPath()));
+            else launch.failed(text(R.string.profile_open_failed,data.getPath(),message==null?failure.toString():message));
+            Launch.openLauncher(this,launch.distribution());finish();return;
+        }
         /* The first start of a build unpacks the engine from the APK (NativeLibrary, a few seconds):
          * a progress screen while it runs off the UI thread, then this activity anew with the library
          * in place. Nothing native is called before that. */
@@ -646,14 +706,16 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             /* The native renderers (android/render): OpenGL ES by default, Vulkan when chosen (on the system
              * driver, Mesa Turnip or Mesa PanVK, also the player's own driver: PORT_TURNIP_DRIVER and
              * PORT_PANVK_DRIVER); "legacy" (adb QA runs only) keeps the old Direct3D 9 -> GLES layer. */
-            nativeRenderer("vulkan".equals(renderer)?2:"turnip".equals(renderer)?3:"panvk".equals(renderer)?4
+            nativeRenderer("vulkan".equals(renderer)?2
+                    :"vulkan-turnip".equals(renderer)||"turnip".equals(renderer)?3
+                    :"vulkan-panvk".equals(renderer)||"panvk".equals(renderer)?4
                     :"legacy".equals(renderer)?0:1,
                     getApplicationInfo().nativeLibraryDir,getCacheDir().getAbsolutePath());
         }catch(LinkageError|java.io.IOException failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
         started = true;
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
-        root.setForceDarkAllowed(false);
+        if(android.os.Build.VERSION.SDK_INT>=29)root.setForceDarkAllowed(false);
         SurfaceView surface = new SurfaceView(this);
         surface.getHolder().addCallback(this);
         root.addView(surface, new FrameLayout.LayoutParams(-1, -1));
@@ -669,10 +731,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         loadingView.addView(loadingText);root.addView(loadingView,new FrameLayout.LayoutParams(-1,-1));
         setContentView(root);
         hideSystemUi();
-        File data;
-        try{data=new File(base,userdataName(getIntent().getStringExtra("userdata")));}
-        catch(IllegalArgumentException failure){launch.failed(failure.getMessage());Launch.openLauncher(this,launch.distribution());finish();return;}
-        if(!data.isDirectory()&&!data.mkdirs()){launch.failed("Cannot create game profile");Launch.openLauncher(this,launch.distribution());finish();return;}
         String extenderChoice = launch.option("ts2_extender");
         String qaExtender = "userdata".equals(data.getName()) ? null : getIntent().getStringExtra("qa_ts2_extender");
         if ("0".equals(qaExtender) || "1".equals(qaExtender)) extenderChoice = qaExtender;
@@ -877,7 +935,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             if(active==this){touch.setBlocked(!hasWindowFocus());hideSystemUi();}
         });
         settingsDialog.show();
-        settingsDialog.getWindow().getDecorView().setForceDarkAllowed(false);
+        if(android.os.Build.VERSION.SDK_INT>=29)settingsDialog.getWindow().getDecorView().setForceDarkAllowed(false);
     }
     private void controlOption(LinearLayout content,int label,boolean enabled,java.util.function.Consumer<Boolean> change){
         android.widget.CheckBox box=new android.widget.CheckBox(content.getContext());
@@ -924,7 +982,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         });
         textDialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING|WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         textDialog.show();
-        textDialog.getWindow().getDecorView().setForceDarkAllowed(false);
+        if(android.os.Build.VERSION.SDK_INT>=29)textDialog.getWindow().getDecorView().setForceDarkAllowed(false);
     }
     private void handleTextReceipt(long receipt){
         int status=(int)receipt&255,serial=(int)(receipt>>>32);

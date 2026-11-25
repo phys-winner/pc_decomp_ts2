@@ -106,8 +106,9 @@ STUBS = {'android/content/Context.java': 'package android.content; public class 
 
 STUBS.update({
 'android/view/DisplayCutout.java':'''package android.view;public class DisplayCutout {int l,t,r,b;public DisplayCutout(int a,int c,int d,int e){l=a;t=c;r=d;b=e;}public int getSafeInsetLeft(){return l;}public int getSafeInsetTop(){return t;}public int getSafeInsetRight(){return r;}public int getSafeInsetBottom(){return b;}}''',
-'android/widget/CheckBox.java':'''package android.widget;public class CheckBox extends TextView {public boolean checked;public interface Changed {void change(Object button,boolean value);}public Changed changed;public CheckBox(android.content.Context c){super(c);}public void setChecked(boolean v){checked=v;if(changed!=null)changed.change(this,v);}public void setOnCheckedChangeListener(Changed c){changed=c;}}''',
-'org/sims2/port/GamePreferences.java':'''package org.sims2.port;class GamePreferences {static final int MIN_TARGET_RADIUS=4,MAX_TARGET_RADIUS=48;static int radius=16;static boolean targetHint;static boolean targetRadiusHintShown(){return targetHint;}static void markTargetRadiusHintShown(){targetHint=true;}static int targetRadius(){return radius;}static void targetRadius(int r){radius=r;}static boolean swipes=true,hintShown=true;static boolean uiSwipeControls(){return swipes;}static void uiSwipeControls(boolean b){swipes=b;}static boolean timeHintShown(){return hintShown;}static void markTimeHintShown(){hintShown=true;}}''',
+'android/content/res/ColorStateList.java':'''package android.content.res;public class ColorStateList {public static ColorStateList valueOf(int color){return new ColorStateList();}}''',
+'android/widget/CheckBox.java':'''package android.widget;public class CheckBox extends TextView {public boolean checked;public interface Changed {void change(Object button,boolean value);}public Changed changed;public CheckBox(android.content.Context c){super(c);}public void setChecked(boolean v){checked=v;if(changed!=null)changed.change(this,v);}public boolean isChecked(){return checked;}public void setMinHeight(int h){}public void setPadding(int a,int b,int c,int d){}public void setButtonTintList(android.content.res.ColorStateList c){}public void setOnCheckedChangeListener(Changed c){changed=c;}}''',
+'org/sims2/port/GamePreferences.java':'''package org.sims2.port;class GamePreferences {static final int MIN_TARGET_RADIUS=4,MAX_TARGET_RADIUS=48;static int radius=16;static boolean targetHint;static boolean targetRadiusHintShown(){return targetHint;}static void markTargetRadiusHintShown(){targetHint=true;}static int targetRadius(){return radius;}static void targetRadius(int r){radius=r;}static boolean swipes=true,hintShown=true;static boolean uiSwipeControls(){return swipes;}static void uiSwipeControls(boolean b){swipes=b;}static boolean timeHintShown(){return hintShown;}static void markTimeHintShown(){hintShown=true;}static boolean testingHint;static boolean takeTestingCheatsHint(boolean qa){if(testingHint)return false;testingHint=true;return true;}}''',
 'android/graphics/Rect.java':'''package android.graphics;public class Rect {public int left,top,right,bottom;public Rect(int l,int t,int r,int b){left=l;top=t;right=r;bottom=b;}}''',
 'android/graphics/Color.java':'''package android.graphics;public class Color {public static final int WHITE=-1,BLACK=0xff000000;public static int rgb(int r,int g,int b){return (255<<24)|(r<<16)|(g<<8)|b;}}''',
 'android/graphics/drawable/GradientDrawable.java':'''package android.graphics.drawable;public class GradientDrawable {public int color,stroke,strokeColor;public float radius;public void setColor(int c){color=c;}public void setCornerRadius(float r){radius=r;}public void setStroke(int w,int c){stroke=w;strokeColor=c;}}''',
@@ -115,12 +116,12 @@ STUBS.update({
 'android/widget/FrameLayout.java':'''package android.widget;public class FrameLayout extends android.view.View {public interface Click {void click(Object v);}public Click click;public void setOnClickListener(Click c){click=c;}public java.util.List<Object> children=new java.util.ArrayList<>();public FrameLayout(android.content.Context c){super(c);}public void setClipChildren(boolean b){}public void addView(Object v,Object p){children.add(v);if(v instanceof android.view.View)((android.view.View)v).setLayoutParams(p);}public void removeView(Object v){children.remove(v);}public static class LayoutParams {public int width,height,gravity,topMargin,leftMargin,rightMargin,bottomMargin;public LayoutParams(int w,int h){this(w,h,0);}public LayoutParams(int w,int h,int g){width=w;height=h;gravity=g;}}}''',
 'android/graphics/Insets.java':'''package android.graphics;public class Insets {public int left,top,right,bottom;public Insets(int l,int t,int r,int b){left=l;top=t;right=r;bottom=b;}}''',
 'android/view/RoundedCorner.java':'''package android.view;public class RoundedCorner {int radius;public RoundedCorner(int r){radius=r;}public int getRadius(){return radius;}}''',
-'android/view/WindowInsets.java':'''package android.view;public class WindowInsets {public android.graphics.Insets safe;public DisplayCutout cutout;public android.graphics.Insets getSystemWindowInsets(){return safe;}public DisplayCutout getDisplayCutout(){return cutout;}public RoundedCorner[] corners=new RoundedCorner[4];public WindowInsets(int l,int t,int r,int b){safe=new android.graphics.Insets(l,t,r,b);}public android.graphics.Insets getInsets(int type){assert type==3;return safe;}public RoundedCorner getRoundedCorner(int n){return corners[n];}public static class Type {public static int systemBars(){return 1;}public static int displayCutout(){return 2;}}}''',
+'android/view/WindowInsets.java':'''package android.view;public class WindowInsets {public android.graphics.Insets safe;public DisplayCutout cutout;public int getSystemWindowInsetLeft(){return safe.left;}public int getSystemWindowInsetTop(){return safe.top;}public int getSystemWindowInsetRight(){return safe.right;}public int getSystemWindowInsetBottom(){return safe.bottom;}public DisplayCutout getDisplayCutout(){return cutout;}public RoundedCorner[] corners=new RoundedCorner[4];public WindowInsets(int l,int t,int r,int b){safe=new android.graphics.Insets(l,t,r,b);}public android.graphics.Insets getInsets(int type){assert type==3;return safe;}public RoundedCorner getRoundedCorner(int n){return corners[n];}public static class Type {public static int systemBars(){return 1;}public static int displayCutout(){return 2;}}}''',
 'android/view/Display.java':'''package android.view;public class Display {Mode current;Mode[] modes;public Display(Mode c,Mode... m){current=c;modes=m;}public Mode getMode(){return current;}public Mode[] getSupportedModes(){return modes;}public static class Mode {int w,h;float hz;public Mode(int x,int y,float rate){w=x;h=y;hz=rate;}public int getPhysicalWidth(){return w;}public int getPhysicalHeight(){return h;}public float getRefreshRate(){return hz;}}}''',
 'android/widget/Button.java':'''package android.widget;public class Button extends TextView {public interface Click {void click(Object v);}public Click listener;public float textSize;public int textColor;public boolean caps;public Button(android.content.Context c){super(c);}public void setAllCaps(boolean b){caps=b;}public void setTextSize(float n){textSize=n;}public void setTextColor(int c){textColor=c;}public void setMinWidth(int n){}public void setMinHeight(int n){}public void setPadding(int a,int b,int c,int d){}public void setOnClickListener(Click c){listener=c;}public interface LongClick {boolean click(Object v);}public LongClick longListener;public void setOnLongClickListener(LongClick c){longListener=c;}public void performClick(){if(enabled&&listener!=null)listener.click(this);}}''',
 'android/widget/ScrollView.java':'''package android.widget;public class ScrollView {public final android.content.Context context;public Object child;public ScrollView(android.content.Context c){context=c;}public void addView(Object view){child=view;}}''',
 'android/R.java':'''package android;public class R {public static class style {public static final int Theme_Material_Light_Dialog_Alert=1234;}}''',
-'android/content/Intent.java':'''package android.content;public class Intent {public static final int FLAG_ACTIVITY_NEW_TASK=1,FLAG_ACTIVITY_CLEAR_TASK=2;public boolean copied;public Intent(Context c,Class<?> k){}public Intent putExtras(Intent i){copied=true;return this;}public Intent addFlags(int f){return this;}}''',
+'android/content/Intent.java':'''package android.content;public class Intent {public static final int FLAG_ACTIVITY_NEW_TASK=1,FLAG_ACTIVITY_CLEAR_TASK=2;public boolean copied;public Intent(Context c,Class<?> k){}public Intent putExtras(Intent i){copied=true;return this;}public Intent addFlags(int f){return this;}public boolean hasExtra(String key){return false;}}''',
 'android/app/PendingIntent.java':'''package android.app;public class PendingIntent {public static final int FLAG_CANCEL_CURRENT=1,FLAG_IMMUTABLE=2;public static PendingIntent getActivity(android.content.Context c,int n,android.content.Intent i,int flags){assert (flags&FLAG_IMMUTABLE)!=0&&i.copied;return new PendingIntent();}}''',
 'android/app/AlarmManager.java':'''package android.app;public class AlarmManager {public static final int ELAPSED_REALTIME=3;public static final AlarmManager instance=new AlarmManager();public static int scheduled;public static boolean fail;public void set(int type,long at,PendingIntent p){assert type==ELAPSED_REALTIME&&at==1750;if(fail)throw new IllegalStateException();scheduled++;}}''',
 'android/os/SystemClock.java':'''package android.os;public class SystemClock {public static long elapsedRealtime(){return 1000;}public static long uptimeMillis(){return android.os.Handler.uptime();}}''',
@@ -161,6 +162,7 @@ static boolean swipes=''')
 
 NATIVE = r'''package org.sims2.port;
 import android.app.AlertDialog;import android.widget.*;import android.view.*;import android.text.*;
+import android.content.res.ColorStateList;
 import android.view.inputmethod.InputMethodManager;import android.view.inputmethod.EditorInfo;import java.nio.charset.StandardCharsets;import android.content.Context;
 import android.app.AlarmManager;import android.app.PendingIntent;import android.content.Intent;import android.util.AtomicFile;import java.io.File;
 import android.graphics.Color;
@@ -251,6 +253,7 @@ public class GameActivity extends ActivityBase {
  static long nativeTouchReplaceTextStatus(int s){polls++;lastSerial=s;return statusReceipt;}
  static void nativeTouchCancelText(){cancels++;}
  static int cheatRequests;static void touchCheatsRequested(){cheatRequests++;}static void nativeCheatsCancel(){}
+ static boolean testingCheatsEnabled;static boolean nativeTestingCheats(){return testingCheatsEnabled;}
  boolean cheatUi(){return toolMenu!=null;}
  static String lastNotice;static void touchNotice(String s){notices++;lastNotice=s;}
  static String text(int id,Object...args){return String.format(java.util.Locale.ROOT,R.values[id],args);}
@@ -262,6 +265,7 @@ public class GameActivity extends ActivityBase {
  GamepadLayer gamepad;TouchLayer touch=new TouchLayer(this);android.os.Handler controlHandler=new android.os.Handler(android.os.Looper.getMainLooper());Runnable updateControls=()->{};
  AlertDialog settingsDialog,textDialog,languageDialog,cheatDialog;EditText textEditor;TextView scaleStatus;int textSerial,desiredScale,lastSubmittedScale,cheatSerial;boolean scaleRequested;String textDraft="";
  LinearLayout objectControls,targetRadiusTextPanel;TextView objectCost,targetRadiusHint;Button rotateButton,placeButton,cancelButton,helpButton,toolsButton;FrameLayout root=new FrameLayout(this),toolMenu,targetRadiusPanel;int toolMenuContext;long toolMenuSize,toolMenuEpoch;
+ CheckBox testingCheats;
  LinearLayout photoControls;View fpsOverlay;
  FrameLayout.LayoutParams fpsLayout(){return new FrameLayout.LayoutParams(-1,-1);}
  void updateFpsOverlay(){}void stopFpsOverlay(){}
@@ -465,6 +469,14 @@ public class TouchCheck {
  }
  static void world(){
   tapsAndMenus();
+  TouchLayer cheat=layer(128,2,1);cheat.testingCheats(true);GameActivity.testingCheatsEnabled=true;
+  GameActivity.events.clear();tap(cheat,600,500);Handler.advance(50);
+  assert GameActivity.mouse&&GameActivity.keys[0xA0];
+  assert GameActivity.events.indexOf("key:160:true")<GameActivity.events.indexOf("button:true:600:500");
+  clean();assert GameActivity.events.indexOf("button:false:600:500")<GameActivity.events.indexOf("key:160:false");
+  tap(cheat,600,500);Handler.advance(50);cheat.releaseAll();assert !GameActivity.mouse&&!GameActivity.keys[0xA0];
+  GameActivity.testingCheatsEnabled=false;tap(cheat,600,500);Handler.advance(50);
+  assert GameActivity.mouse&&!GameActivity.keys[0xA0];noExtra(cheat);
   TouchLayer targets=layer(128,2,1);int clicksBeforeChoice=GameActivity.clicks;
   GameActivity.WorldTarget first=new GameActivity.WorldTarget(593,497,500,420,11,new byte[0]);
   GameActivity.WorldTarget second=new GameActivity.WorldTarget(611,505,650,560,22,new byte[0]);
@@ -474,6 +486,9 @@ public class TouchCheck {
   assert GameActivity.clicks==clicksBeforeChoice&&GameActivity.shownTargets.length==3;
   GameActivity.events.clear();GameActivity.chooseTarget.accept(second);
   assert GameActivity.events.contains("button:true:611:505")&&GameActivity.events.contains("button:false:611:505")&&!GameActivity.mouse;
+  GameActivity.testingCheatsEnabled=true;targets.testingCheats(true);
+  tap(targets,600,500);clean();GameActivity.chooseTarget.accept(first);
+  assert GameActivity.mouse&&GameActivity.keys[0xA0];clean();GameActivity.testingCheatsEnabled=false;
   int selected=GameActivity.clicks;
   tap(targets,600,500);clean();GameActivity.confirmTarget=false;GameActivity.chooseTarget.accept(first);
   assert GameActivity.clicks==selected;GameActivity.confirmTarget=true;

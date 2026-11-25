@@ -160,7 +160,7 @@ final class ExtenderSettings {
         dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
                 | android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         dialog.show();
-        dialog.getWindow().getDecorView().setForceDarkAllowed(false);
+        if(android.os.Build.VERSION.SDK_INT>=29)dialog.getWindow().getDecorView().setForceDarkAllowed(false);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             byte[] bytes = input.getText().toString().getBytes(StandardCharsets.UTF_8);
             FileOutputStream out = null;

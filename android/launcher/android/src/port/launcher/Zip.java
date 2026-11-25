@@ -11,14 +11,9 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.IntConsumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
@@ -30,51 +25,6 @@ import java.util.zip.Inflater;
  *  Android has no decoder of it). Plain Java over a FileChannel, from the Heroes V port. */
 final class Zip implements Closeable {
     static final int STORED = 0, DEFLATE = 8, DEFLATE64 = 9;
-    private static final String MD5_TOKEN = "([0-9a-f]{32})(?![a-z0-9])";
-    private static final Pattern TAGGED_MD5 = Pattern.compile("(?<![a-z0-9])md5[ ._=-]*" + MD5_TOKEN, Pattern.CASE_INSENSITIVE);
-    private static final Pattern BARE_MD5 = Pattern.compile("(?<![a-z0-9])" + MD5_TOKEN, Pattern.CASE_INSENSITIVE);
-
-    static String expectedMd5(String name) {
-        if (name == null) return null;
-        Matcher tagged = TAGGED_MD5.matcher(name);
-        if (tagged.find()) return tagged.group(1);
-        Matcher bare = BARE_MD5.matcher(name);
-        return bare.find() ? bare.group(1) : null;
-    }
-
-    /** Verify the full archive on the same descriptor the importer will use. */
-    static void verifyMd5(FileChannel channel, String expected, IntConsumer progress) throws IOException {
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("MD5");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IOException(e);
-        }
-        ByteBuffer buffer = ByteBuffer.allocate(256 * 1024);
-        long size = channel.size();
-        int reported = 0;
-        progress.accept(reported);
-        for (long offset = 0; offset < size;) {
-            buffer.clear();
-            buffer.limit((int) Math.min(buffer.capacity(), size - offset));
-            int read = channel.read(buffer, offset);
-            if (read <= 0) throw new Failure(Failure.CHANGED, null);
-            digest.update(buffer.array(), 0, read);
-            offset += read;
-            int percent = (int) (offset * 100.0 / size);
-            if (percent > reported && percent < 100) {
-                reported = percent;
-                progress.accept(percent);
-            }
-        }
-        if (channel.size() != size) throw new Failure(Failure.CHANGED, null);
-        byte[] actual = digest.digest();
-        for (int i = 0; i < actual.length; ++i) {
-            if ((actual[i] & 255) != Integer.parseInt(expected.substring(2 * i, 2 * i + 2), 16))
-                throw new Failure(Failure.MD5_MISMATCH, expected);
-        }
-        progress.accept(100);
-    }
 
     static final class Entry {
         final String name;   /* '/' between folders, a folder's ends with one */

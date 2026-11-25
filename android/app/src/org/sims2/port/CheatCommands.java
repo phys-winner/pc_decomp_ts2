@@ -4,11 +4,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** The running game's registry supplies commands; labels never change their exact syntax. */
+/** The game's registry supplies the catalog, with a shortcut for the testingCheatsEnabled property. */
 final class CheatCommands {
+    private static final String TESTING_CHEATS = "testingcheatsenabled";
+
     static final class Command {
-        final String name,help;
-        Command(String row){int tab=row.indexOf('\t');name=tab<0?row:row.substring(0,tab);help=tab<0?"":row.substring(tab+1);}
+        final String name,help,input;
+        Command(String row){this(row,null);}
+        private Command(String row,String input){
+            int tab=row.indexOf('\t');
+            name=tab<0?row:row.substring(0,tab);
+            help=tab<0?"":row.substring(tab+1);
+            this.input=input==null?name:input;
+        }
         int group(){
             String n=name.toLowerCase(Locale.ROOT);
             if(n.contains("money")||n.contains("fund")||n.equals("kaching")||n.equals("motherlode")||n.contains("aspiration")||n.contains("motive")||n.contains("careerreward"))return 0;
@@ -17,17 +25,20 @@ final class CheatCommands {
             if(n.contains("neighborhood")||n.contains("lot")||n.contains("terrain")||n.contains("vacation"))return 3;
             if(n.equals("sethour")||n.contains("slowmotion")||n.contains("speed")||n.contains("time")||n.startsWith("displayanim"))return 4;
             if(n.contains("bloom")||n.contains("vignette")||n.contains("filmgrain")||n.contains("letterbox")||n.contains("render")||n.contains("vsync")||n.contains("effect")||n.contains("audio")||n.equals("eh")||n.equals("aev")||n.equals("ams")||n.equals("listener")||n.equals("fog")||n.equals("overlay")||n.equals("lightmap")||n.equals("unlitroomcolor"))return 5;
-            if(n.endsWith("prop")||n.equals("help")||n.equals("clear")||n.equals("exit")||n.equals("expand")||n.equals("history")||n.equals("gameversion"))return 6;
+            if(n.equals(TESTING_CHEATS)||n.endsWith("prop")||n.equals("help")||n.equals("clear")||n.equals("exit")||n.equals("expand")||n.equals("history")||n.equals("gameversion"))return 6;
             return 7;
         }
         String title(boolean ru){
+            if(TESTING_CHEATS.equalsIgnoreCase(name))return (ru?"Режим разработчика":"Developer mode")+" ("+TESTING_CHEATS+")";
             if(!ru)return name;
             String label=russianTitle();return label==null?name:label+" — "+name;
         }
         String help(boolean ru){
-            String description=ru?russianTitle():null;
             String translated=ru?russianHelp():null;
-            String text=description==null?name:description+" — "+name;
+            if(TESTING_CHEATS.equalsIgnoreCase(name))
+                translated=ru?"Значение true включает режим разработчика и показывает галку testingcheats в режиме жизни. Для отключения используйте false."
+                        :"Use true to enable developer mode and show the testingcheats checkbox in Live mode. Use false to turn it off.";
+            String text=title(ru);
             if(translated!=null)text+="\n\n"+translated;
             return help.isEmpty()?text:text+"\n\n"+(ru?"Синтаксис и справка оригинальной игры:\n":"Original game syntax and help:\n")+help;
         }
@@ -248,6 +259,8 @@ final class CheatCommands {
         List<Command> commands=new ArrayList<>();
         java.util.Set<String> seen=new java.util.HashSet<>();
         if(rows!=null)for(String row:rows)if(row!=null&&!row.isEmpty()&&seen.add(row))commands.add(new Command(row));
+        if(commands.stream().noneMatch(command->TESTING_CHEATS.equalsIgnoreCase(command.name)))
+            commands.add(new Command(TESTING_CHEATS,"boolProp "+TESTING_CHEATS+" true"));
         commands.sort((a,b)->a.name.compareToIgnoreCase(b.name));return commands;
     }
     static String[] groups(boolean ru){return ru?new String[]{"Деньги, потребности и награды","Симы и семья","Строительство и предметы","Город и участки","Время и анимация","Изображение, эффекты и звук","Свойства и консоль","Диагностика и другие команды"}:new String[]{"Money, needs and rewards","Sims and family","Building and objects","Neighborhood and lots","Time and animation","Graphics, effects and audio","Properties and console","Diagnostics and other commands"};}

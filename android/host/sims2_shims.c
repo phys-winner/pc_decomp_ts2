@@ -14,6 +14,8 @@
 #include "com.h"
 #include <ctype.h>
 #include <errno.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/random.h>
@@ -131,7 +133,7 @@ WINAPI_EXPORT(ADV, SystemFunction036, 2)
     uint8_t chunk[256];
     for (uint32_t done = 0; done < length;) {
         uint32_t n = length - done < sizeof chunk ? length - done : (uint32_t)sizeof chunk;
-        if (getrandom(chunk, n, 0) != (ssize_t)n) for (uint32_t i = 0; i < n; ++i) chunk[i] = (uint8_t)rand();
+        if (syscall(SYS_getrandom, chunk, (size_t)n, 0u) != (long)n)   /* the libc wrapper is API 28 */ for (uint32_t i = 0; i < n; ++i) chunk[i] = (uint8_t)rand();
         memcpy(GPTR(buffer + done), chunk, n);
         done += n;
     }

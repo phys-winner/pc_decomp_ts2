@@ -16,7 +16,9 @@
 #define GL_COMPRESSED_RGBA_ASTC_6x6_KHR 0x93B4
 #endif
 
-static int native_bc, native_etc2 = 1, native_astc;
+static int native_dxt, native_etc2 = 1, native_astc;   /* native_dxt: S2R_DXT* bits */
+
+static int dxt_bit(int conv) { return conv == CONV_DXT1 ? S2R_DXT1 : conv == CONV_DXT3 ? S2R_DXT3 : conv == CONV_DXT5 ? S2R_DXT5 : 0; }
 
 static uint8_t gpu_of_internal(GLenum internal)
 {
@@ -144,8 +146,9 @@ int s2r_image_describe(s2r_image *img, int kind, uint32_t w, uint32_t h, uint32_
     if (native_internal) {
         img->gpu = gpu_of_internal(native_internal);
         img->swizzle[0] = S2R_SW_R; img->swizzle[1] = S2R_SW_G; img->swizzle[2] = S2R_SW_B; img->swizzle[3] = S2R_SW_A;
-    } else if (native_bc && !img->render_target && (f->conv == CONV_DXT1 || f->conv == CONV_DXT3 || f->conv == CONV_DXT5)) {
-        /* DXT blocks as they are; the decoded path's swizzle is the identity too */
+    } else if ((native_dxt & dxt_bit(f->conv)) && !img->render_target) {
+        /* DXT blocks as they are where the device samples that format (a format it lacks goes through the
+           launcher's cache or the decode: s2r_texcache.c); the decoded path's swizzle is the identity too */
         img->gpu = f->conv == CONV_DXT1 ? S2R_GPU_BC1 : f->conv == CONV_DXT3 ? S2R_GPU_BC2 : S2R_GPU_BC3;
         img->compressed_dxt = 1;
         img->swizzle[0] = S2R_SW_R; img->swizzle[1] = S2R_SW_G; img->swizzle[2] = S2R_SW_B; img->swizzle[3] = S2R_SW_A;
@@ -167,13 +170,19 @@ int s2r_image_describe(s2r_image *img, int kind, uint32_t w, uint32_t h, uint32_
 }
 
 /* The backends report what they sample natively when they start. */
-void s2r_set_native_support(int bc, int etc2, int astc)
+void s2r_set_native_support(int dxt, int etc2, int astc)
 {
-    native_bc = bc;
+    native_dxt = dxt & S2R_DXT_ALL;
     native_etc2 = etc2;
     native_astc = astc;
 }
 
-int s2r_bc_supported(void) { return native_bc; }
+int s2r_bc_supported(void) { return native_dxt; }
+const char *s2r_dxt_names(int mask)
+{
+    static const char *const names[8] = { "no", "DXT1 only", "DXT3 only", "DXT1+DXT3 only", "DXT5 only", "DXT1+DXT5 only",
+        "DXT3+DXT5 only", "yes" };
+    return names[mask & S2R_DXT_ALL];
+}
 int s2r_etc2_supported(void) { return native_etc2; }
 int s2r_astc_supported(void) { return native_astc; }

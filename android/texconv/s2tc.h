@@ -47,8 +47,17 @@ typedef struct {
     uint64_t source_bytes;                        /* their DXT bytes */
     uint64_t converted_bytes;                     /* the data area */
     uint64_t signature;                           /* of the game's package files (sizes, names) */
-    uint8_t reserved[128 - 88];
+    uint32_t sources;                             /* S2TC_SOURCE_BIT of the source formats converted; 0: all
+                                                     (a cache from before selective conversion) */
+    uint8_t reserved[128 - 92];
 } s2tc_header;
+
+/* Selective conversion (the launcher converts only the DXT formats the selected renderer lacks): a cache holds
+   the levels of the formats in `sources`, and a later conversion of other formats into a cache of the same target
+   format adds them in place (new blocks and a new index after the old end, the header last). */
+#define S2TC_SOURCE_BIT(source) (1u << (unsigned)(source))
+#define S2TC_SOURCES_ALL (S2TC_SOURCE_BIT(S2TC_SRC_DXT1) | S2TC_SOURCE_BIT(S2TC_SRC_DXT3) | S2TC_SOURCE_BIT(S2TC_SRC_DXT5))
+static inline uint32_t s2tc_covered(uint32_t sources) { return sources ? sources & S2TC_SOURCES_ALL : S2TC_SOURCES_ALL; }
 
 typedef struct {
     uint64_t key;

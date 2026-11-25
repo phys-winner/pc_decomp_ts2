@@ -615,6 +615,7 @@ int encode_rgba(int encoding, const uint8_t *rgba, uint32_t w, uint32_t h, uint8
 struct Cache {
     int fd = -1;
     int format = 0;
+    uint32_t sources = S2TC_SOURCES_ALL;    /* the source formats this run converts (S2TC_SOURCE_BIT) */
     std::mutex lock;
     uint64_t data_end = sizeof(s2tc_header);
     std::vector<s2tc_entry> index;
@@ -657,6 +658,7 @@ struct Cache {
 /* Decodes and encodes one level into the cache (each distinct level once). */
 bool convert_level(Cache &cache, const Level &level, std::vector<uint8_t> &rgba, std::vector<uint8_t> &out)
 {
+    if (!(cache.sources & S2TC_SOURCE_BIT(level.source))) return true;    /* a format this run does not convert */
     uint64_t key = s2tc_key(level.data, level.bytes, level.source);
     if (!cache.claim(key)) return true;
     rgba.resize(static_cast<size_t>(level.width) * level.height * 4);
@@ -720,12 +722,27 @@ bool for_each_package(const std::vector<PackageIndex> &packages, int threads, Wo
     return !failed;
 }
 
-int convert(const Source &source, const std::string &output, int format, int threads)
+/* A complete cache file and its index, for extending it in place. */
+bool read_cache(const std::string &path, s2tc_header &h, std::vector<s2tc_entry> &index)
+{
+    Fd f(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+    if (f.fd < 0 || !read_exact(f.fd, &h, sizeof h, 0)) return false;
+    if (h.magic != S2TC_MAGIC || h.version != S2TC_VERSION || !(h.flags & 1)) return false;
+    struct stat st;
+    if (fstat(f.fd, &st) || static_cast<uint64_t>(st.st_size) < h.file_size || h.entry_count > (1u << 26) ||
+        h.index_offset + h.entry_count * sizeof(s2tc_entry) > h.file_size) return false;
+    index.resize(static_cast<size_t>(h.entry_count));
+    return index.empty() || read_exact(f.fd, index.data(), index.size() * sizeof(s2tc_entry), h.index_offset);
+}
+
+int convert(const Source &source, const std::string &output, int format, int threads, uint32_t sources)
 {
     const std::string &game = source.game;
     begin(S2TEXCONV_SCANNING);
     cancelled = false;
     if (format != S2TC_FORMAT_ETC2 && format != S2TC_FORMAT_ASTC) return fail("Unknown texture format %d", format);
+    uint32_t wanted = sources ? sources & S2TC_SOURCES_ALL : S2TC_SOURCES_ALL;
+    if (!wanted) return fail("No DXT format among the requested sources (%#x)", sources);
 #ifdef S2TC_NO_ASTC
     if (format == S2TC_FORMAT_ASTC) return fail("ASTC encoding is not in this build");
 #endif
@@ -749,15 +766,44 @@ int convert(const Source &source, const std::string &output, int format, int thr
     if (mkdir(directory.c_str(), 0775) && errno != EEXIST)
         return fail("Cannot create %s: %s", directory.c_str(), strerror(errno));
     std::string final_path = cache_path(output), temporary = final_path + ".tmp";
-    Fd file(::open(temporary.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0664));
-    if (file.fd < 0) return fail("Cannot create %s: %s", temporary.c_str(), strerror(errno));
+    /* A selective run over a complete cache of this format and game extends it: the formats it covers are
+       skipped, new blocks and the new index go after its end and the header is written last, so an interrupted
+       run leaves the old cache as it was (the file is cut back to its old size). */
+    s2tc_header old{};
+    std::vector<s2tc_entry> old_index;
+    bool extend = sources && read_cache(final_path, old, old_index) && old.format == static_cast<uint32_t>(format) &&
+                  old.signature == signature;
+    if (extend) {
+        wanted &= ~s2tc_covered(old.sources);
+        if (!wanted) { set_state(S2TEXCONV_DONE); return 0; }
+    } else {
+        old_index.clear();
+    }
+    Fd file(extend ? ::open(final_path.c_str(), O_RDWR | O_CLOEXEC)
+                   : ::open(temporary.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0664));
+    if (file.fd < 0) return fail("Cannot %s %s: %s", extend ? "open" : "create", extend ? final_path.c_str() : temporary.c_str(),
+                                 strerror(errno));
     struct PartialCache {
         const char *path;
-        ~PartialCache() { if (path) unlink(path); }
-    } partial{temporary.c_str()};
+        int fd;
+        uint64_t size;
+        ~PartialCache() {
+            if (path) unlink(path);
+            else if (fd >= 0 && ftruncate(fd, static_cast<off_t>(size))) {}
+        }
+    } partial{extend ? nullptr : temporary.c_str(), extend ? file.fd : -1, extend ? old.file_size : 0};
     Cache cache;
     cache.format = format;
     cache.fd = file.fd;
+    cache.sources = wanted;
+    if (extend) {
+        cache.data_end = old.file_size;
+        cache.index = std::move(old_index);
+        for (const s2tc_entry &e : cache.index) cache.keys.insert(e.key);
+        cache.levels = old.levels;
+        cache.source_bytes = old.source_bytes;
+        cache.textures = old.textures;
+    }
     if (threads <= 0) threads = hardware_threads();
     set_state(S2TEXCONV_CONVERTING);
 
@@ -777,7 +823,7 @@ int convert(const Source &source, const std::string &output, int format, int thr
             int source = 0;
             size_t before = refs.size();
             if (!parse_txtr(data, levels, refs, source) || !source) continue;
-            if (!levels.empty() || refs.size() > before) cache.textures++;
+            if ((cache.sources & S2TC_SOURCE_BIT(source)) && (!levels.empty() || refs.size() > before)) cache.textures++;
             for (const Level &level : levels) convert_level(cache, level, rgba, out);
         }
         std::lock_guard<std::mutex> l(refs_lock);
@@ -814,7 +860,7 @@ int convert(const Source &source, const std::string &output, int format, int thr
         return 1;
     }
     if (cache.failed) {
-        return fail("Writing %s failed (is the storage full?)", temporary.c_str());
+        return fail("Writing %s failed (is the storage full?)", extend ? final_path.c_str() : temporary.c_str());
     }
     set_state(S2TEXCONV_FINISHING);
     std::sort(cache.index.begin(), cache.index.end(), [](const s2tc_entry &a, const s2tc_entry &b) { return a.key < b.key; });
@@ -834,6 +880,19 @@ int convert(const Source &source, const std::string &output, int format, int thr
     h.source_bytes = cache.source_bytes;
     h.converted_bytes = cache.data_end - sizeof(s2tc_header);
     h.signature = signature;
+    h.sources = extend ? (s2tc_covered(old.sources) | wanted) : wanted;
+    if (extend) {
+        /* The new index after the blocks, both on the storage before the header that points at them. Once the
+           header is written the file is not cut back (it would point past the end). */
+        bool ok = (index_bytes == 0 || write_exact(cache.fd, cache.index.data(), index_bytes, index_at)) && fsync(cache.fd) == 0;
+        if (ok) {
+            partial.fd = -1;
+            ok = write_exact(cache.fd, &h, sizeof h, 0) && fsync(cache.fd) == 0;
+        }
+        if (!ok) return fail("Extending %s failed: %s", final_path.c_str(), strerror(errno));
+        set_state(S2TEXCONV_DONE);
+        return 0;
+    }
     bool ok = (index_bytes == 0 || write_exact(cache.fd, cache.index.data(), index_bytes, index_at)) &&
               write_exact(cache.fd, &h, sizeof h, 0) && fsync(cache.fd) == 0;
     if (ok) ok = ::close(file.fd) == 0;
@@ -863,6 +922,7 @@ int scan(const Source &source, const std::string &output, s2texconv_status *out)
             out->converted_format = static_cast<int>(h.format);
             out->converted_textures = static_cast<int64_t>(h.textures);
             out->converted_bytes = static_cast<int64_t>(h.file_size);
+            out->converted_sources = s2tc_covered(h.sources);
         } else {
             out->stale = 1;
         }
@@ -915,11 +975,17 @@ try {
 }
 
 extern "C" int s2texconv_convert_at(const char *game_dir, const char *output, int format, int threads, const char *index, int fd)
+{
+    return s2texconv_convert_sources(game_dir, output, format, threads, index, fd, 0);
+}
+
+extern "C" int s2texconv_convert_sources(const char *game_dir, const char *output, int format, int threads, const char *index,
+    int fd, unsigned sources)
 try {
     if (!game_dir || !output) return -1;
     Source source(game_dir, index, fd);
     if (index && !source.mount) return fail("Cannot open game ZIP index");
-    return convert(source, output, format, threads);
+    return convert(source, output, format, threads, sources);
 } catch (const std::exception &e) {
     return fail("Texture conversion failed: %s", e.what());
 }

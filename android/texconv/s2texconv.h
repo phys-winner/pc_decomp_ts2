@@ -43,6 +43,7 @@ typedef struct {
     int64_t converted_textures;       /* TXTR resources with DXT levels it covers */
     int64_t converted_bytes;          /* the cache file */
     int stale;                        /* a conversion exists but the sampled package changed since */
+    uint32_t converted_sources;       /* S2TC_SOURCE_BIT of the source formats the conversion covers (s2tc.h) */
 } s2texconv_status;
 
 /* One texture package sample and the existing cache. 0, or -1 with the reason in the progress message. */
@@ -56,6 +57,11 @@ S2TEXCONV_API int s2texconv_convert_zip(const char *game_dir, int format, int th
 /* The launcher may place the cache on a different volume; index is null for plain folders. */
 S2TEXCONV_API int s2texconv_scan_at(const char *game_dir, const char *output, s2texconv_status *out, const char *index, int fd);
 S2TEXCONV_API int s2texconv_convert_at(const char *game_dir, const char *output, int format, int threads, const char *index, int fd);
+/* Selective: only levels whose source format is in `sources` (S2TC_SOURCE_BIT mask; 0 all of them). A complete
+ * cache of the same target format and game at `output` is extended in place (formats it covers are skipped);
+ * otherwise a new cache replaces it. Same results as s2texconv_convert_at. */
+S2TEXCONV_API int s2texconv_convert_sources(const char *game_dir, const char *output, int format, int threads, const char *index,
+    int fd, unsigned sources);
 /* Deletes the conversion. 0, or -1. */
 S2TEXCONV_API int s2texconv_remove(const char *game_dir);
 S2TEXCONV_API void s2texconv_cancel(void);

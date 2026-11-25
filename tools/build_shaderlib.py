@@ -208,7 +208,7 @@ def translate(tool, jobs, name):
 def glslc(stage, source, path):
     path.write_text(source, encoding="utf-8", newline="\n")
     spv = path.with_suffix(path.suffix + ".spv")
-    result = subprocess.run([str(GLSLC), f"-fshader-stage={stage}", "--target-env=vulkan1.1", "-O", "-o", str(spv), str(path)],
+    result = subprocess.run([str(GLSLC), f"-fshader-stage={stage}", "--target-env=vulkan1.0", "-O", "-o", str(spv), str(path)],
                             capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError(f"glslc failed for {path.name}:\n{result.stdout}{result.stderr}")

@@ -178,6 +178,7 @@ uint32_t void_wait_extra_cond(int count, const uint32_t *handles, uint32_t timeo
 void void_log_open(const char *path);
 void void_log_flush(void);
 void void_install_fault_handlers(void);
+void void_crash_marker_present(void);   /* the first presented frame, for the launcher's crash journal */
 void void_dispatch_image(uint32_t lo, uint32_t hi);
 
 void void_regs_save(void_regs *r);

@@ -17,7 +17,7 @@ origins are recorded in [dependencies.json](dependencies.json).
 | Android NDK libc++ | Apache-2.0 WITH LLVM-exception; linked statically into `libsims2.so` (glslang is C++). The LLVM exception covers object code embedded this way. `libc++_shared.so` (the adrenotools libraries' runtime) is packaged with the NDK `NOTICE` as `assets/licenses/libcxx-ndk.txt`. |
 | adrenotools and linkernsbypass | BSD-2-Clause; the pinned runtime licenses are copied into the APK (`assets/licenses/adrenotools.txt`, `linkernsbypass.txt`). They load the app-local Vulkan drivers of the native Vulkan renderer. |
 | Mesa Turnip community binary | See the distribution limitation below and the APK's `assets/licenses/turnip-mesa.txt`. |
-| Mesa PanVK (mali-panvk, patched Frostpunk build) | Pinned component notices in the APK's `assets/licenses/PanVK-JimVulkan-NOTICE.txt`. |
+| Mesa PanVK (mali-panvk 58f2c55854 with the ports' patch; the shared reference `launcher/drivers/panvk`, SHA-256 `04bde80d…`) | Mesa MIT and the notices of the components compiled in: the reference's `NOTICE.txt`, copied into the APK as `assets/licenses/PanVK-NOTICE.txt`. Source, patch and recipe: `launcher/drivers/panvk/MANIFEST.json`. |
 
 The bundled launcher is a source snapshot of the common launcher used by this
 family of ports. Its source is retained in `android/launcher`; no separate

@@ -146,8 +146,9 @@ extern "C" int s2r_glslang_compile(int pixel, const char *source, uint32_t **wor
     glslang::TShader shader(stage);
     shader.setStrings(&source, 1);
     shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
-    shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
-    shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
+    /* Vulkan 1.0 / SPIR-V 1.0: every driver the renderer accepts reads it (tools/build_shaderlib.py matches). */
+    shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
+    shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
     EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
     if (!shader.parse(&resources, 450, false, messages)) {
         copy_log(log, log_cap, shader.getInfoLog(), shader.getInfoDebugLog());

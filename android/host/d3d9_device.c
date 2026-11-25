@@ -491,6 +491,7 @@ void d3d_present(d3d_device *d)
     static uint64_t frame_start;
     uint64_t now = void_monotonic_ns();
     if (frame_start) s2_load_present(now - frame_start);
+    void_crash_marker_present();
     if (frame_start) {
         if (d->frame == 2) void_perf_hint_start((int32_t)gettid(), (int32_t)d3d_rt_render_tid(), frame_budget_ns());
         void_perf_hint_report((int64_t)(now - frame_start), frame_budget_ns());

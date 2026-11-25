@@ -11,6 +11,7 @@
     "javaPackage": "org.sims2.port.launcher",
     "logTag": "Sims2",
     "storage": "Sims2",
+    "downloadArchivePrefix": "ts2_game_data_md5_",
     "github": "phys-winner/pc_decomp_ts2",
     "languages": [
       "en",
@@ -44,8 +45,8 @@
       "renderers": [
         "gles",
         "vulkan",
-        "turnip",
-        "panvk"
+        "vulkan-turnip",
+        "vulkan-panvk"
       ],
       "intro": {
         "default": false
@@ -74,14 +75,14 @@
       {
         "id": "gles",
         "kind": "gles",
-        "gles": "3.2",
+        "gles": "3.1",
         "textureCache": "read",
         "title": "OpenGL ES",
         "description": {
-          "en": "The port's native OpenGL ES 3.2 renderer",
-          "ru": "Нативный рендерер OpenGL ES 3.2",
-          "de": "Nativer OpenGL-ES-3.2-Renderer des Ports",
-          "pl": "Natywny renderer OpenGL ES 3.2"
+          "en": "The port's native OpenGL ES renderer (3.1 or newer)",
+          "ru": "Нативный рендерер OpenGL ES (3.1 и новее)",
+          "de": "Nativer OpenGL-ES-Renderer des Ports (ab 3.1)",
+          "pl": "Natywny renderer OpenGL ES (3.1 lub nowszy)"
         }
       },
       {
@@ -90,16 +91,17 @@
         "textureCache": "read",
         "title": "Vulkan",
         "description": {
-          "en": "The port's native Vulkan 1.1 renderer",
-          "ru": "Нативный рендерер Vulkan 1.1",
-          "de": "Nativer Vulkan-1.1-Renderer des Ports",
-          "pl": "Natywny renderer Vulkan 1.1"
+          "en": "The port's native Vulkan renderer on the system driver",
+          "ru": "Нативный рендерер Vulkan на системном драйвере",
+          "de": "Nativer Vulkan-Renderer des Ports mit dem Systemtreiber",
+          "pl": "Natywny renderer Vulkan na sterowniku systemowym"
         },
-        "vulkan": "1.1",
+        "vulkan": "1.0",
         "probe": "version"
       },
       {
-        "id": "turnip",
+        "id": "vulkan-turnip",
+        "aliases": ["turnip"],
         "kind": "turnip",
         "textureCache": "read",
         "title": "Vulkan (Turnip)",
@@ -109,7 +111,7 @@
           "de": "Nativer Vulkan-Renderer mit Mesa Turnip für Adreno 6xx/7xx (oder Ihrem eigenen Treiber)",
           "pl": "Natywny renderer Vulkan na Mesa Turnip dla Adreno 6xx/7xx (lub na własnym sterowniku)"
         },
-        "vulkan": "1.1",
+        "vulkan": "1.0",
         "probe": "version",
         "minSdk": 30,
         "adreno": [
@@ -128,7 +130,8 @@
         ]
       },
       {
-        "id": "panvk",
+        "id": "vulkan-panvk",
+        "aliases": ["panvk"],
         "kind": "panvk",
         "textureCache": "read",
         "title": "Vulkan (PanVK)",
@@ -138,7 +141,7 @@
           "de": "Nativer Vulkan-Renderer mit Mesa PanVK für kompatible Mali-GPUs (oder Ihrem eigenen Treiber)",
           "pl": "Natywny renderer Vulkan na Mesa PanVK dla zgodnych układów Mali (lub na własnym sterowniku)"
         },
-        "vulkan": "1.1",
+        "vulkan": "1.0",
         "probe": "version",
         "minSdk": 30,
         "driver": "libvulkan_panfrost.so",
@@ -203,6 +206,24 @@
         "ru": "Устраняет мерцание и пропавшие объекты на Mali-G51 в OpenGL ES. Применяется при следующем запуске игры.",
         "de": "Behebt Flackern und fehlende Objekte auf Mali-G51 mit OpenGL ES. Gilt ab dem nächsten Spielstart.",
         "pl": "Usuwa migotanie i brakujące obiekty na Mali-G51 w OpenGL ES. Zacznie działać po następnym uruchomieniu gry."
+      }
+    },
+    {
+      "key": "adreno6_sysmem",
+      "type": "bool",
+      "default": "1",
+      "rendererSetting": true,
+      "title": {
+        "en": "Turnip on Adreno 6xx: render without GMEM tiles",
+        "ru": "Turnip на Adreno 6xx: рендер без тайлов GMEM",
+        "de": "Turnip auf Adreno 6xx: ohne GMEM-Kacheln rendern",
+        "pl": "Turnip na Adreno 6xx: renderowanie bez kafelków GMEM"
+      },
+      "hint": {
+        "en": "Vulkan (Turnip) only. With GMEM tiles Turnip hung or faulted an Adreno 650 within 10-100 seconds on a lot; without them it was also faster. Applies on the next game launch.",
+        "ru": "Только для Vulkan (Turnip). С тайлами GMEM Turnip вешал или ронял Adreno 650 через 10–100 секунд на участке; без них он к тому же быстрее. Применяется при следующем запуске игры.",
+        "de": "Nur Vulkan (Turnip). Mit GMEM-Kacheln hat Turnip einen Adreno 650 auf einem Grundstück binnen 10–100 Sekunden aufgehängt oder abstürzen lassen; ohne sie war es zudem schneller. Gilt ab dem nächsten Spielstart.",
+        "pl": "Tylko Vulkan (Turnip). Z kafelkami GMEM Turnip zawieszał lub wywracał Adreno 650 po 10–100 sekundach na parceli; bez nich działał też szybciej. Zacznie działać po następnym uruchomieniu gry."
       }
     },
     {

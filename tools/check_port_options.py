@@ -15,6 +15,7 @@ STUBS = {
 public class Context {public java.io.File files;public Context(java.io.File dir){files=dir;}
 public java.io.File getFilesDir(){return files;}public String getString(int id){return "message:"+id;}}''',
     'android/os/Process.java': 'package android.os;public class Process {public static boolean bit64=true;public static boolean is64Bit(){return bit64;}}',
+    'android/os/Build.java': 'package android.os;public class Build {public static class VERSION {public static int SDK_INT=36;}}',
     'android/graphics/Color.java': 'package android.graphics;public class Color {public static final int BLACK=0xff000000;}',
     'android/view/View.java': '''package android.view;public class View {public interface Click {void onClick(View v);}
 public Click click;public void setOnClickListener(Click c){click=c;}public void performClick(){click.onClick(this);}

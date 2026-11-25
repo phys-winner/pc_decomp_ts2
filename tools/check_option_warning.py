@@ -7,6 +7,7 @@ STUBS={
 'android/content/Context.java':'package android.content;public class Context {public String getString(int id){return "label";}}',
 'android/graphics/Color.java':'package android.graphics;public class Color {public static final int BLACK=0xff000000;}',
 'android/os/Process.java':'package android.os;public class Process {public static boolean is64Bit(){return true;}}',
+'android/os/Build.java':'package android.os;public class Build {public static class VERSION {public static final int SDK_INT=37;}}',
 'android/view/View.java':'''package android.view;public class View {public interface Click {void click(View v);}public Click listener;public void setOnClickListener(Click c){listener=c;}public void setForceDarkAllowed(boolean b){}public void press(){listener.click(this);}}''',
 'android/widget/Button.java':'''package android.widget;public class Button extends android.view.View {public String text;public Button(android.content.Context c){}public void setAllCaps(boolean b){}public void setTextColor(int c){}public void setText(String s){text=s;}}''',
 'android/widget/CheckBox.java':'''package android.widget;public class CheckBox extends Button {boolean checked;public CheckBox(android.content.Context c){super(c);}public void setChecked(boolean b){checked=b;}public boolean isChecked(){return checked;}public void press(){checked=!checked;super.press();}}''',
@@ -26,13 +27,13 @@ STUBS={
 'org/sims2/port/launcher/Spec.java':'''package org.sims2.port.launcher;public class Spec {static Option fixture=new Option();public static Spec get(android.content.Context c){return new Spec();}public java.util.List<Option> options(String d){return java.util.Collections.singletonList(fixture);}public static class Option {boolean arm64Only,rendererSetting;String type="choice",key="adaptive_ui",title="Adaptive";java.util.List<String> choices=java.util.Arrays.asList("0","1"),choiceTitles=java.util.Arrays.asList("Off","On");}}''',
 'org/sims2/port/launcher/Launch.java':'package org.sims2.port.launcher;public class Launch {String distribution(){return "legacy";}static String option(android.content.Context c,Spec.Option o){return State.value;}}',
 'org/sims2/port/launcher/State.java':'package org.sims2.port.launcher;public class State {static final String CHOICES="choices";static int writes;static boolean fail;static String value="0";static String get(android.content.Context c,String file,String k,String fallback){return fallback;}static boolean put(android.content.Context c,String file,String k,String v){assert k.equals("option.adaptive_ui");if(fail)return false;writes++;value=v;return true;}}',
-'org/sims2/port/launcher/Texts.java':'package org.sims2.port.launcher;public class Texts {static final int OPTIONS=1,OK=2,CANCEL=3,CONTINUE=4;static String of(android.content.Context c,Object o){return o.toString();}static String t(android.content.Context c,int i){return "label";}}',
+'org/sims2/port/launcher/Texts.java':'package org.sims2.port.launcher;public class Texts {static final int OPTIONS=1,OK=2,CANCEL=3,CONTINUE=4,RENDERER=5,E_SAVE_OPTION=6;static String of(android.content.Context c,Object o){return o.toString();}static String t(android.content.Context c,int i){return "label";}}',
 'org/sims2/port/launcher/PortHooks.java':'''package org.sims2.port.launcher;public class PortHooks {static PortHooks fixture=new PortHooks();String problem;static PortHooks of(android.content.Context c){return fixture;}String optionProblem(android.content.Context c,String k,String v){return problem;}CharSequence optionWarning(android.content.Context c,String k,String v){return v.equals("1")?"RED WARNING":null;}}'''
 }
 CHECK=r'''
 public class WarningCheck extends android.content.Context {
  static class Ui {android.app.AlertDialog.Builder dialog(){return new android.app.AlertDialog.Builder(new android.content.Context());}void show(android.app.AlertDialog.Builder b){b.show();}}
- Ui ui=new Ui();PortHooks hooks=PortHooks.fixture;int refreshes;void refresh(int part){refreshes++;}
+ Ui ui=new Ui();PortHooks hooks=PortHooks.fixture;int refreshes;void refresh(int part){refreshes++;}void rescanFiles(){}void note(int part,String text,boolean error){}
  METHOD
  public static void main(String[] args){
   WarningCheck c=new WarningCheck();Spec.Option option=Spec.fixture;

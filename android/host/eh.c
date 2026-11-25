@@ -11,6 +11,7 @@
  * RECOMP_EH_ENTER landing pad (_longjmp). Only C++ frames are considered,
  * exactly as on Windows. */
 #include "host.h"
+#include "guest_jmp.h"
 
 #define EH_MAGIC_VC6 0x19930520u
 #define EH_MAGIC_VC7 0x19930521u
@@ -29,7 +30,7 @@ void recomp_eh_pop(recomp_ehframe_t *f)
         if (p == f) { g_eh_frames = f->prev; return; }
 }
 
-void void_eh_reset_thread(void) { g_eh_frames = NULL; g_eh_obj = g_eh_info = 0; }
+void void_eh_reset_thread(void) { g_eh_frames = NULL; g_eh_obj = g_eh_info = 0; void_guest_jmp_reset(); }
 
 /* The FuncInfo a C++ frame's handler stub names, or 0 if it is not one.
  * VC6-era stubs are `mov eax, FuncInfo; jmp __CxxFrameHandler`; with /GS
@@ -161,6 +162,7 @@ static int dispatch(uint32_t obj, uint32_t info)
                     g_esp = MEM32(ebp - 0x10);
                     g_eax = resume;
                     f->resume = resume;
+                    void_guest_jmp_unwind(f->entry_esp);
                     _longjmp(f->jb, 1);
                 }
                 void_log("[eh] frame %08X caught, but no lifted body owns it (resume %08X)", ebp, resume);

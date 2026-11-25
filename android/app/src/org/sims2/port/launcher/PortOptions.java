@@ -76,7 +76,7 @@ public final class PortOptions {
                             }
                         }).setNegativeButton(context.getString(org.sims2.port.R.string.cancel), null).create();
                 dialog.show();
-                dialog.getWindow().getDecorView().setForceDarkAllowed(false);
+                if(android.os.Build.VERSION.SDK_INT>=29)dialog.getWindow().getDecorView().setForceDarkAllowed(false);
             });
             content.addView(button);
         }

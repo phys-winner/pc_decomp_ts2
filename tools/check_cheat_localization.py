@@ -48,8 +48,9 @@ public class CheatLocalizationCheck {
   assert new CheatCommands.Command("UnknownModCommand\tmod syntax").title(true).equals("UnknownModCommand");
   assert new CheatCommands.Command("UnknownModCommand\tmod syntax").help(true).contains("mod syntax");
   java.util.List<CheatCommands.Command> unique=CheatCommands.parse(new String[]{null,"","terrainType\tsyntax","terrainType\tsyntax","terrainType\tother syntax","aging\ton/off"});
-  assert unique.size()==3&&unique.get(0).name.equals("aging");
+  assert unique.size()==4&&unique.get(0).name.equals("aging");
   assert unique.get(1).help.equals("syntax")&&unique.get(2).help.equals("other syntax");
+  assert unique.get(3).title(false).equals("Developer mode (testingcheatsenabled)");
   System.out.println("PASS original fixed-name getter coverage and "+names.length+" localized command/alias rows: exact syntax/help retained, missing help, case handling and future command fallback");
  }
 }'''.replace('NAME_ARRAY', '{' + ','.join(json.dumps(name) for name in names) + '}')

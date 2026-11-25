@@ -172,6 +172,32 @@ void void_android_game_exited(int code)
     if (attached) (*jvm)->DetachCurrentThread(jvm);
 }
 
+/* The selected renderer failed (android/render/s2r_core.c s2r_renderer_failed; `recorded`: the native record
+ * is written): GameActivity.nativeRendererFailed opens the launcher and ends the process. Returns only when
+ * Java could not be reached (the caller then exits). */
+void void_android_renderer_failed(const char *reason, int device_lost, int recorded)
+{
+    if (!jvm || !activity) return;
+    JNIEnv *env = NULL;
+    int attached = (*jvm)->GetEnv(jvm, (void **)&env, JNI_VERSION_1_6) != JNI_OK;
+    if (attached && (*jvm)->AttachCurrentThread(jvm, &env, NULL) != JNI_OK) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    if (cls) {
+        jmethodID method = (*env)->GetMethodID(env, cls, "nativeRendererFailed", "(Ljava/lang/String;ZZ)V");
+        /* the reason is ASCII from the renderers; NewStringUTF needs modified UTF-8 */
+        char text[512];
+        size_t n = 0;
+        for (; reason && reason[n] && n + 1 < sizeof text; ++n) text[n] = (unsigned char)reason[n] < 0x80 ? reason[n] : '?';
+        text[n] = 0;
+        jstring message = (*env)->NewStringUTF(env, text);
+        if (method && message)
+            (*env)->CallVoidMethod(env, activity, method, message, device_lost ? JNI_TRUE : JNI_FALSE, recorded ? JNI_TRUE : JNI_FALSE);
+        (*env)->DeleteLocalRef(env, cls);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (attached) (*jvm)->DetachCurrentThread(jvm);
+}
+
 void void_android_window_ack(uint32_t serial)
 {
     pthread_mutex_lock(&window_lock);

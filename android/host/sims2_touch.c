@@ -2548,6 +2548,10 @@ void s2_touch_pump(void)
         (last_world_context==S2_TOUCH_BUY||last_world_context==S2_TOUCH_BUILD))input|=last_world_context;
     else if(touch_town_navigation()) input |= S2_TOUCH_TOWN;
     s2_touch_input_context(input);
+#ifdef __ANDROID__
+    if (s2_touch_context() & (S2_TOUCH_TOWN | S2_TOUCH_LIVE | S2_TOUCH_BUY | S2_TOUCH_BUILD))
+        s2_cheats_sample_testing();
+#endif
     if (strncmp(type, ".?AVcTSUserTool", 15)) { touch_tool_clear(); return; }
     uint32_t vtable = MEM32(tool);
     if (tool != shown_pointer || vtable != shown_vtable) {

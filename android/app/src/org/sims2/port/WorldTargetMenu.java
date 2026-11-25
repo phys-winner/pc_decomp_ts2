@@ -122,7 +122,7 @@ final class WorldTargetMenu extends FrameLayout {
             GradientDrawable thumb = new GradientDrawable();
             thumb.setColor(0xffa6aaf2);
             thumb.setCornerRadius(dp(2));
-            column.setVerticalScrollbarThumbDrawable(thumb);
+            if(android.os.Build.VERSION.SDK_INT>=29)column.setVerticalScrollbarThumbDrawable(thumb);
             column.setScrollBarSize(dp(3));
             column.setScrollbarFadingEnabled(false);
         }
@@ -154,7 +154,7 @@ final class WorldTargetMenu extends FrameLayout {
         int[] colors = highlighted ? new int[]{0xffbadfba, 0xff526f6b, 0xff304d56, 0xff64898b}
                 : new int[]{0xffa6aaf2, 0xff5559a8, 0xff363678, 0xff6a6fc2};
         GradientDrawable fill = new GradientDrawable();
-        fill.setColors(colors, new float[]{0f, .19f, .72f, 1f});
+        if(android.os.Build.VERSION.SDK_INT>=29)fill.setColors(colors, new float[]{0f, .19f, .72f, 1f}); else fill.setColors(colors);
         fill.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
         fill.setCornerRadius(dp(16));
         fill.setStroke(dp(1), highlighted ? 0xffc5ebb1 : 0xff292756);

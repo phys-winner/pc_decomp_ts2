@@ -10,21 +10,105 @@
  *
  * The backend is the launcher's choice (GameActivity.nativeRenderer, before
  * the game starts): OpenGL ES or Vulkan. It starts with the first device
- * (s2r_init from run_gl_init); when it cannot, the old Direct3D 9 -> GLES
- * layer (d3d9_gl.c) renders the session, as debug.s2.renderer=legacy asks. */
+ * (s2r_init from run_gl_init). When it cannot start, or later loses its GPU
+ * device, the game stops and the launcher offers its next renderer (the
+ * launcher's renderer failure policy: s2r_renderer_failed below); no other
+ * renderer or driver takes over. The old Direct3D 9 -> GLES layer (d3d9_gl.c)
+ * runs only when debug.s2.renderer=legacy asks for it. */
 #include "s2r_internal.h"
 #include "../host/d3d9_texcache.h"
 #include "s2r.h"
 #include "../host/hud.h"
 #include "../host/sims2_settings.h"
+#include "../launcher/native/replacements/renderer_failure.h"
 #include <jni.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/system_properties.h>
 #include <time.h>
+#include <unistd.h>
 
 void void_android_frame_presented(void) __attribute__((weak));
 int void_android_game_started(void) __attribute__((weak));
+void void_android_renderer_failed(const char *reason, int device_lost, int recorded) __attribute__((weak));
+void void_readcache_flush_all(void);
+void void_registry_flush(void);
+
+/* ------------------------------------------------------- renderer failure */
+static char fail_reason[PORT_RENDERER_FAILURE_REASON_MAX];
+static int qa_failure;                    /* debug.s2.renderer_fail: 0 off, 1 start, 2 device lost at the first frame */
+static char qa_value[92];
+
+void s2r_fail_note(const char *format, ...)
+{
+    if (fail_reason[0]) return;          /* the first cause: later notes follow from it */
+    va_list args;
+    va_start(args, format);
+    vsnprintf(fail_reason, sizeof fail_reason, format, args);
+    va_end(args);
+}
+
+void s2r_renderer_failed(const char *reason, int device_lost)
+{
+    static int reporting;
+    if (__atomic_exchange_n(&reporting, 1, __ATOMIC_ACQ_REL)) for (;;) pause();   /* another thread reports and ends the process */
+    S2R_LOG("renderer failure (%s): %s", device_lost ? "GPU device lost" : "did not start", reason);
+    void_readcache_flush_all();
+    void_registry_flush();
+    void_log_flush();
+    /* The launcher's record first, with the time since the first frame this side presented (the Java side learns
+       of that frame up to a poll later, and a record without it would make a loss in the window look like an
+       ordinary crash next to the crash journal's first-frame mark); then GameActivity opens the launcher and ends
+       the process (Launch.rendererFailed writes the record itself only when this one could not be written). */
+    int recorded = port_renderer_failed(reason, device_lost) == 0;
+    if (void_android_renderer_failed) void_android_renderer_failed(reason, device_lost, recorded);
+    _exit(1);
+}
+
+void s2r_renderer_lost(const char *what) { s2r_renderer_failed(what, 1); }
+
+static int presented_frames;
+void s2r_renderer_presented(void)
+{
+    if (__atomic_fetch_add(&presented_frames, 1, __ATOMIC_RELAXED)) return;
+    port_renderer_presented();
+    if (qa_failure == 2) {
+        char reason[160];
+        snprintf(reason, sizeof reason, "QA switch debug.s2.renderer_fail=%s: GPU device loss simulated at the first frame", qa_value);
+        s2r_renderer_lost(reason);
+    }
+}
+
+int s2r_renderer_has_presented(void) { return __atomic_load_n(&presented_frames, __ATOMIC_RELAXED) != 0; }
+
+/* debug.s2.renderer_fail=<renderer>[:lost] (QA; unset by default): the launcher's renderer of that id (gles, vulkan,
+   vulkan-turnip, vulkan-panvk, the old turnip/panvk; "all" any) reports a start failure, with ":lost" a GPU device
+   loss at its first presented frame, through the same path as a real failure (the launcher's dialog follows). The
+   id is the launcher's choice (PORT_RENDERER), not a debug.s2.renderer override. */
+static void qa_failure_read(void)
+{
+    char v[92] = "";
+    __system_property_get("debug.s2.renderer_fail", v);
+    if (!v[0]) return;
+    snprintf(qa_value, sizeof qa_value, "%s", v);
+    char *colon = strchr(v, ':');
+    int lost = colon && !strcmp(colon + 1, "lost");
+    if (colon) *colon = 0;
+    const char *mode = getenv("PORT_RENDERER");
+    if (!mode) mode = "";
+    if (!strcmp(mode, "turnip")) mode = "vulkan-turnip";
+    if (!strcmp(mode, "panvk")) mode = "vulkan-panvk";
+    if (!strcmp(v, "turnip")) snprintf(v, sizeof v, "vulkan-turnip");
+    if (!strcmp(v, "panvk")) snprintf(v, sizeof v, "vulkan-panvk");
+    if (strcmp(v, "all") && strcmp(v, mode)) {
+        S2R_LOG("QA switch debug.s2.renderer_fail=%s: not this renderer (%s)", qa_value, mode[0] ? mode : "none");
+        return;
+    }
+    qa_failure = lost ? 2 : 1;
+    S2R_LOG("QA switch debug.s2.renderer_fail=%s: %s will report a %s", qa_value, mode[0] ? mode : "the renderer",
+        lost ? "GPU device loss at its first frame" : "start failure");
+}
 
 static int selected = S2R_BACKEND_NONE;   /* the launcher's choice */
 static int active;                        /* the backend runs (render thread decided) */
@@ -63,7 +147,7 @@ void s2r_gpu_stats(uint64_t *textures, uint64_t *texture_bytes, uint64_t *surfac
     *programs = runtime;
 }
 
-/* debug.s2.renderer=legacy|gles|vulkan|turnip|panvk overrides the launcher (development A/B runs;
+/* debug.s2.renderer=legacy|gles|vulkan|vulkan-turnip|vulkan-panvk (or the old turnip|panvk) overrides the launcher (development A/B runs;
    turnip and panvk: the native Vulkan renderer on that app-local driver). */
 static int property_override(int launcher)
 {
@@ -71,8 +155,10 @@ static int property_override(int launcher)
     __system_property_get("debug.s2.renderer", v);
     if (!strcmp(v, "legacy")) return S2R_BACKEND_NONE;
     if (!strcmp(v, "gles")) return S2R_BACKEND_GLES;
-    if (!strcmp(v, "vulkan") || !strcmp(v, "turnip") || !strcmp(v, "panvk")) {
-        s2r_set_vk_kind(!strcmp(v, "turnip") ? S2R_VK_TURNIP : !strcmp(v, "panvk") ? S2R_VK_PANVK : S2R_VK_SYSTEM);
+    int turnip = !strcmp(v, "vulkan-turnip") || !strcmp(v, "turnip");
+    int panvk = !strcmp(v, "vulkan-panvk") || !strcmp(v, "panvk");
+    if (!strcmp(v, "vulkan") || turnip || panvk) {
+        s2r_set_vk_kind(turnip ? S2R_VK_TURNIP : panvk ? S2R_VK_PANVK : S2R_VK_SYSTEM);
         return S2R_BACKEND_VULKAN;
     }
     return launcher;
@@ -99,15 +185,21 @@ int s2r_init(d3d_device *mirror)
         device.gamma_lut[4 * i + 3] = 255;
     }
     s2r_dev = &device;
+    qa_failure_read();
+    if (qa_failure == 1) {
+        char reason[160];
+        snprintf(reason, sizeof reason, "QA switch debug.s2.renderer_fail=%s: start failure simulated", qa_value);
+        s2r_renderer_failed(reason, 0);
+    }
     s2r_lib_load();
     uint64_t start = s2r_now_ns();
     if (!device.be->init(&device)) {
-        S2R_LOG("the native %s renderer could not start: the Direct3D 9 -> GLES layer renders this session",
-            s2r_backend_name(selected));
-        device.be->shutdown(&device);
-        s2r_dev = NULL;
-        selected = S2R_BACKEND_NONE;
-        return 0;
+        /* No other renderer takes over: the launcher offers its next one (renderer_failure.h). */
+        char reason[PORT_RENDERER_FAILURE_REASON_MAX];
+        snprintf(reason, sizeof reason, "%s", fail_reason[0] ? fail_reason : selected == S2R_BACKEND_VULKAN
+            ? "Vulkan: the renderer could not start (sims2.log says why)" : "OpenGL ES: the renderer could not start (sims2.log says why)");
+        S2R_LOG("the native %s renderer could not start: %s", s2r_backend_name(selected), reason);
+        s2r_renderer_failed(reason, 0);
     }
     /* Constant limits the front end reports in the device caps: the uniform blocks hold the whole register files. */
     d3d_gl_limits.max_vs_vectors = 256;
@@ -666,6 +758,7 @@ JNIEXPORT void JNICALL Java_org_sims2_port_GameActivity_nativeRenderer(JNIEnv *e
 {
     (void)type;
     if (mode < 0 || mode > 4 || (void_android_game_started && void_android_game_started())) return;
+    port_renderer_failure_init();   /* after Launch.attach: the record's path and PORT_RENDERER */
     selected = mode >= 2 ? S2R_BACKEND_VULKAN : mode == 1 ? S2R_BACKEND_GLES : S2R_BACKEND_NONE;
     const char *dir = library_dir ? (*env)->GetStringUTFChars(env, library_dir, NULL) : NULL;
     s2r_set_vk_driver(mode == 3 ? S2R_VK_TURNIP : mode == 4 ? S2R_VK_PANVK : S2R_VK_SYSTEM, dir);

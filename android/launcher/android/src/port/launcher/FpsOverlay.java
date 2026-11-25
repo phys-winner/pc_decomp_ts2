@@ -19,7 +19,7 @@ import android.view.WindowInsets;
 import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 
-/** The UT3 FPS and frame-time graph, drawn over the game's surface without taking touches. */
+/** The presented-frame FPS counter and graph, drawn over the game's surface without taking touches. */
 public final class FpsOverlay extends View {
     public interface Source {
         /**
@@ -47,7 +47,9 @@ public final class FpsOverlay extends View {
     public static FpsOverlay create(Context context, String mode, Source frames,
                                     Supplier<String> renderer, DoubleSupplier fpsLimit, Supplier<String> gpu) {
         if (!"1".equals(mode) && !"2".equals(mode)) return null;
-        return new FpsOverlay(context, frames, "2".equals(mode) ? new SystemInfo(context, renderer, fpsLimit, gpu) : null);
+        int mask = HudField.read(context, mode);
+        SystemInfo system = (mask & ~HudField.FRAMES) != 0 ? new SystemInfo(context, mask, renderer, fpsLimit, gpu) : null;
+        return new FpsOverlay(context, frames, mask, system);
     }
 
     private static final long REDRAW_MS = 50, SYSTEM_MS = 1000;
@@ -55,13 +57,15 @@ public final class FpsOverlay extends View {
     private static final float LINE = 15, VALUE_X = 91;
     private static final int GRAPH_HEIGHT = 40;
 
+    private int graphScale = 60;
     private final Source source;
     private final SystemInfo system;
+    private final int mask;
     private final float unit;
     private final int[] locationInWindow = new int[2];
     private final int[] intervals = new int[FpsCounter.POINTS];
-    private final int[] graphPixels = new int[FpsCounter.POINTS * GRAPH_HEIGHT];
-    private final Bitmap graph = Bitmap.createBitmap(FpsCounter.POINTS, GRAPH_HEIGHT, Bitmap.Config.ARGB_8888);
+    private final int[] graphPixels;
+    private final Bitmap graph;
     private final Rect graphSource = new Rect(0, 0, FpsCounter.POINTS, GRAPH_HEIGHT);
     private final RectF graphTarget = new RectF();
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), outline = new Paint(Paint.ANTI_ALIAS_FLAG), pixels = new Paint();
@@ -75,7 +79,7 @@ public final class FpsOverlay extends View {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             refresh();
-            if (running) handler.postDelayed(this, REDRAW_MS);
+            if (running) handler.postDelayed(this, (mask & HudField.FRAMES) != 0 ? REDRAW_MS : FpsCounter.UPDATE_US / 1000);
         }
     };
     private final Runnable sampleSystem = new Runnable() {
@@ -92,11 +96,14 @@ public final class FpsOverlay extends View {
         }
     };
 
-    private FpsOverlay(Context context, Source source, SystemInfo system) {
+    private FpsOverlay(Context context, Source source, int mask, SystemInfo system) {
         super(context);
         this.unit = FpsCounter.hudScale(getResources().getDisplayMetrics().density);
         this.source = source;
         this.system = system;
+        this.mask = mask;
+        graph = HudField.GRAPH.in(mask) ? Bitmap.createBitmap(FpsCounter.POINTS, GRAPH_HEIGHT, Bitmap.Config.ARGB_8888) : null;
+        graphPixels = graph != null ? new int[FpsCounter.POINTS * GRAPH_HEIGHT] : null;
         Typeface mono = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD);
         fill.setTypeface(mono);
         outline.setTypeface(mono);
@@ -149,7 +156,12 @@ public final class FpsOverlay extends View {
             sampleFrames = frames;
             sampleUs = now;
         }
-        /* HudFrameTimeItem::render: each frame a column of the 304 x 40 graph, filled from the bottom */
+        if (graph != null && getDisplay() != null) graphScale = Math.max(1, Math.round(getDisplay().getRefreshRate()));
+        if ((mask & HudField.FRAMES) != 0) refreshGraph();
+        invalidate();
+    }
+
+    private void refreshGraph() {
         long low = Long.MAX_VALUE, high = 0;
         for (int i = 0; i < FpsCounter.POINTS; ++i) {
             int us = intervals[i];
@@ -158,14 +170,14 @@ public final class FpsOverlay extends View {
                 low = Math.min(low, tenths);
                 high = Math.max(high, tenths);
             }
-            int top = us > 0 ? GRAPH_HEIGHT - Math.max(1, Math.round(GRAPH_HEIGHT * FpsCounter.height(us))) : GRAPH_HEIGHT;
+            if (graph == null) continue;
+            int top = us > 0 ? GRAPH_HEIGHT - Math.max(1, Math.round(GRAPH_HEIGHT * FpsCounter.fpsHeight(us, graphScale))) : GRAPH_HEIGHT;
             int color = FpsCounter.color(us);
             for (int y = 0; y < GRAPH_HEIGHT; ++y) graphPixels[y * FpsCounter.POINTS + i] = y >= top ? color : 0;
         }
-        graph.setPixels(graphPixels, 0, FpsCounter.POINTS, 0, 0, FpsCounter.POINTS, GRAPH_HEIGHT);
+        if (graph != null) graph.setPixels(graphPixels, 0, FpsCounter.POINTS, 0, 0, FpsCounter.POINTS, GRAPH_HEIGHT);
         min = low == Long.MAX_VALUE ? 0 : low;
         max = high;
-        invalidate();
     }
 
     private void moveIntoSafeArea(Canvas canvas) {
@@ -210,14 +222,19 @@ public final class FpsOverlay extends View {
         y += 16;
         text(canvas, "FPS:", x, y, 16, FpsCounter.LABEL);
         text(canvas, frameRate, x + 60, y, 16, FpsCounter.VALUE);
-        y += 8;
-        graphTarget.set(x * unit, y * unit, (x + FpsCounter.POINTS) * unit, (y + GRAPH_HEIGHT) * unit);
-        canvas.drawBitmap(graph, graphSource, graphTarget, pixels);
-        y += 58;
-        text(canvas, "min:", x, y, 12, FpsCounter.LABEL);
-        text(canvas, FpsCounter.milliseconds(min), x + 45, y, 12, FpsCounter.VALUE);
-        text(canvas, "max:", x + 150, y, 12, FpsCounter.LABEL);
-        text(canvas, FpsCounter.milliseconds(max), x + 195, y, 12, FpsCounter.VALUE);
+        if (graph != null) {
+            y += 8;
+            graphTarget.set(x * unit, y * unit, Math.min((x + FpsCounter.POINTS) * unit, getWidth() - x * unit), (y + GRAPH_HEIGHT) * unit);
+            canvas.drawBitmap(graph, graphSource, graphTarget, pixels);
+            y += GRAPH_HEIGHT;
+            text(canvas, "0–" + graphScale + " FPS", x + 2, y - 2, 9, FpsCounter.VALUE);
+        }
+        if (HudField.RANGE.in(mask)) {
+            y += LINE;
+            text(canvas, "min / max", x, y, 12, FpsCounter.LABEL);
+            text(canvas, FpsCounter.milliseconds(min) + " / " + FpsCounter.milliseconds(max) + " ms",
+                x + VALUE_X, y, 12, FpsCounter.VALUE);
+        }
         y += 4;
         /* The system lines, in the style of DXVK's other items */
         for (String[] line : lines) {

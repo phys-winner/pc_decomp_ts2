@@ -105,4 +105,7 @@
   <string name="mods_ui_title">Oberflächen-Mods</string>
   <string name="mods_ui_hint">Mods, die die Spieloberfläche ändern, wirken möglicherweise nicht: Bei dieser Oberflächenskalierung verwendet das Spiel seine kompakten 800×600-Layouts, die meisten Oberflächen-Mods ändern aber nur die regulären Layouts (ab 1024×768). Aktiviere „Standardlayouts für UI-Mods“ in den Port-Einstellungen und starte das Spiel neu.</string>
   <string name="unpacking_engine">Spielcode wird entpackt…</string>
+  <string name="testing_cheats_hint">Aktiviere testingcheats, um einen Sim oder Gegenstand per Tippen mit Umschalt zu klicken.</string>
+  <string name="profile_write_denied">Android blockiert Schreibzugriffe auf das Spielprofil unter %1$s. Erlaube den Dateizugriff und versuche es erneut.</string>
+  <string name="profile_open_failed">Der Profilordner %1$s konnte nicht vorbereitet werden (%2$s).</string>
 </resources>
